@@ -1,4 +1,4 @@
-# kiwoom-quant
+# kr-quant
 
 코스피·코스닥 종목의 **투자자별 수급(개인·외국인·기관 순매수)** 을 수집해 SQLite에 적재하고, 이를 바탕으로 **매집(accumulation) 후보 스크리닝**과 시각화를 수행하는 퀀트 분석 툴킷입니다.
 
@@ -15,7 +15,7 @@
 ## 아키텍처
 
 ```
-kiwoom_quant/
+kr_quant/
 ├── config.py          # 자격증명 로딩 + 인증 클라이언트 생성
 ├── storage.py         # SQLite 스키마 / 멱등 upsert
 ├── collectors/        # 데이터셋별 수집기 (확장 지점)
@@ -31,8 +31,8 @@ kiwoom_quant/
 ## 설치
 
 ```bash
-git clone https://github.com/younghwan91/kiwoom-quant
-cd kiwoom-quant
+git clone https://github.com/younghwan91/kr-quant
+cd kr-quant
 uv venv && uv pip install -e ".[viz,dev]"
 cp .env.example .env          # 발급받은 키움 앱키/시크릿 입력
 ```

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kiwoom-quant"
+name = "kr-quant"
 version = "0.1.0"
 description = "키움 수급·시세 데이터 수집 및 퀀트 분석 (kiwoom-client 기반)"
 readme = "README.md"
@@ -22,15 +22,15 @@ viz = ["matplotlib>=3.8"]
 dev = ["pytest>=8.0", "ruff>=0.6", "matplotlib>=3.8"]
 
 [project.scripts]
-kq-collect = "kiwoom_quant.collectors.supply_demand:main"
-kq-screen = "kiwoom_quant.strategies.accumulation:main"
-kq-chart = "kiwoom_quant.viz.supply_demand_chart:main"
+kq-collect = "kr_quant.collectors.supply_demand:main"
+kq-screen = "kr_quant.strategies.accumulation:main"
+kq-chart = "kr_quant.viz.supply_demand_chart:main"
 
 [project.urls]
-Repository = "https://github.com/younghwan91/kiwoom-quant"
+Repository = "https://github.com/younghwan91/kr-quant"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kiwoom_quant"]
+packages = ["src/kr_quant"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

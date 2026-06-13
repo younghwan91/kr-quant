@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from kiwoom_quant.strategies.accumulation import screen
+from kr_quant.strategies.accumulation import screen
 
 
 def _stock_frame(code, name, closes, foreign, inst, indiv, vol=1_000_000):
