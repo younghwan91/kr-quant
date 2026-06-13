@@ -7,8 +7,11 @@ import pandas as pd
 from kr_quant.strategies.accumulation import screen
 
 
-def _stock_frame(code, name, closes, foreign, inst, indiv, vol=1_000_000):
-    """Build a per-stock frame; lists are aligned by trading day."""
+def _stock_frame(code, name, closes, foreign, inst, indiv, vol=1_000_000, longterm=None):
+    """Build a per-stock frame; lists are aligned by trading day.
+
+    ``longterm`` seeds 연기금(penfnd_etc); invtrt is left at 0.
+    """
     n = len(closes)
     return pd.DataFrame(
         {
@@ -22,6 +25,8 @@ def _stock_frame(code, name, closes, foreign, inst, indiv, vol=1_000_000):
             "individual": indiv,
             "foreign_": foreign,
             "institution": inst,
+            "penfnd_etc": longterm if longterm is not None else [0] * n,
+            "invtrt": [0] * n,
         }
     )
 
@@ -64,6 +69,36 @@ def test_min_days_filter():
         closes=[100, 101, 100], foreign=[5000] * 3, inst=[3000] * 3, indiv=[-8000] * 3,
     )
     assert screen(short, min_days=10).empty
+
+
+def test_require_longterm_inst_filters_program_only_buying():
+    days = 12
+    closes = [100, 101, 99, 100, 102, 100, 101, 99, 100, 101, 100, 102]
+    # 기관 순매수지만 장기자금(연기금/투신)은 0 → 강화 조건에서 제외.
+    program_only = _stock_frame(
+        "000010", "프로그램주", closes=closes,
+        foreign=[5000] * days, inst=[3000] * days, indiv=[-8000] * days,
+        longterm=[0] * days,
+    )
+    # 연기금이 실제로 순매수 → 통과.
+    longterm_buy = _stock_frame(
+        "000011", "연기금주", closes=closes,
+        foreign=[5000] * days, inst=[3000] * days, indiv=[-8000] * days,
+        longterm=[2000] * days,
+    )
+    df = pd.concat([program_only, longterm_buy])
+    result = screen(df, min_days=10, require_longterm_inst=True)
+    assert list(result["code"]) == ["000011"]
+
+
+def test_min_avg_vol_filters_illiquid():
+    days = 12
+    closes = [100, 101, 99, 100, 102, 100, 101, 99, 100, 101, 100, 102]
+    illiquid = _stock_frame(
+        "000012", "저유동주", closes=closes,
+        foreign=[5000] * days, inst=[3000] * days, indiv=[-8000] * days, vol=1000,
+    )
+    assert screen(illiquid, min_days=10, min_avg_vol=100_000).empty
 
 
 def test_empty_input():

@@ -41,6 +41,8 @@ def screen(
     max_range_pct: float = 0.15,
     require_retail_selling: bool = True,
     exclude_spac: bool = True,
+    min_avg_vol: float = 0.0,
+    require_longterm_inst: bool = False,
 ) -> pd.DataFrame:
     """Rank accumulation candidates.
 
@@ -53,6 +55,11 @@ def screen(
         exclude_spac: Drop SPACs (name contains "스팩"). They trade flat near
             par value, so their near-zero range dominates a naive sideways
             screen without representing genuine accumulation.
+        min_avg_vol: Minimum average daily volume (shares) — drops illiquid
+            micro-caps where flows are noise.
+        require_longterm_inst: Require net buying by long-term institutions
+            (연기금 + 투신), not just the aggregate "institution" which is
+            dominated by 금융투자 (program/arbitrage) flows.
 
     Returns:
         One row per qualifying stock, sorted by ``score`` (descending). Columns:
@@ -80,6 +87,8 @@ def screen(
         foreign_cum = int(g["foreign_"].sum())
         inst_cum = int(g["institution"].sum())
         indiv_cum = int(g["individual"].sum())
+        # 연기금 + 투신 = 장기 성격 자금 (금융투자=프로그램/차익 노이즈 제외).
+        longterm_cum = int(g["penfnd_etc"].sum() + g["invtrt"].sum())
         avg_vol = float(g["acc_trde_qty"].mean()) or 1.0
 
         smart_net = foreign_cum + inst_cum
@@ -98,7 +107,9 @@ def screen(
                 "range_pct": round(range_pct, 4),
                 "foreign_cum": foreign_cum,
                 "inst_cum": inst_cum,
+                "longterm_cum": longterm_cum,
                 "indiv_cum": indiv_cum,
+                "avg_vol": int(avg_vol),
                 "smart_turnover": round(smart_turnover, 3),
                 "score": round(score, 3),
             }
@@ -112,16 +123,20 @@ def screen(
         (result["range_pct"] <= max_range_pct)
         & (result["foreign_cum"] > 0)
         & (result["inst_cum"] > 0)
+        & (result["avg_vol"] >= min_avg_vol)
     )
     if require_retail_selling:
         mask &= result["indiv_cum"] < 0
+    if require_longterm_inst:
+        mask &= result["longterm_cum"] > 0
     result = result[mask].sort_values("score", ascending=False).reset_index(drop=True)
     return result
 
 
 _RESULT_COLUMNS = [
     "code", "name", "market", "sector", "days", "range_pct",
-    "foreign_cum", "inst_cum", "indiv_cum", "smart_turnover", "score",
+    "foreign_cum", "inst_cum", "longterm_cum", "indiv_cum", "avg_vol",
+    "smart_turnover", "score",
 ]
 
 
@@ -140,6 +155,10 @@ def main() -> int:
                         help="개인 순매수 종목도 포함 (기본: 개인 순매도만)")
     parser.add_argument("--include-spac", action="store_true",
                         help="스팩 포함 (기본: 제외 — 액면가 횡보로 점수 왜곡)")
+    parser.add_argument("--min-avg-vol", type=float, default=0.0,
+                        help="최소 평균 거래량(주) — 저유동성 종목 제외")
+    parser.add_argument("--require-longterm", action="store_true",
+                        help="연기금+투신(장기자금) 순매수 종목만")
     parser.add_argument("--csv", default="", help="결과를 CSV 로 저장할 경로")
     args = parser.parse_args()
 
@@ -153,6 +172,8 @@ def main() -> int:
         max_range_pct=args.max_range,
         require_retail_selling=not args.allow_retail_buying,
         exclude_spac=not args.include_spac,
+        min_avg_vol=args.min_avg_vol,
+        require_longterm_inst=args.require_longterm,
     )
     if result.empty:
         print("후보 없음 — 데이터가 없거나(먼저 kq-collect) 조건이 너무 엄격합니다.")
