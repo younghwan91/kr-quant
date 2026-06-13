@@ -40,6 +40,7 @@ def screen(
     min_days: int = 10,
     max_range_pct: float = 0.15,
     require_retail_selling: bool = True,
+    exclude_spac: bool = True,
 ) -> pd.DataFrame:
     """Rank accumulation candidates.
 
@@ -49,6 +50,9 @@ def screen(
         min_days: Minimum trading days required per stock.
         max_range_pct: Max (high-low)/mean close to count as "sideways".
         require_retail_selling: Require net individual selling over the window.
+        exclude_spac: Drop SPACs (name contains "스팩"). They trade flat near
+            par value, so their near-zero range dominates a naive sideways
+            screen without representing genuine accumulation.
 
     Returns:
         One row per qualifying stock, sorted by ``score`` (descending). Columns:
@@ -57,6 +61,11 @@ def screen(
     """
     if df.empty:
         return _empty_result()
+
+    if exclude_spac:
+        df = df[~df["name"].str.contains("스팩", na=False)]
+        if df.empty:
+            return _empty_result()
 
     rows = []
     for code, g in df.sort_values("date").groupby("code"):
@@ -129,6 +138,8 @@ def main() -> int:
                         help="횡보 판정 최대 변동범위 비율 (기본 0.15=15%%)")
     parser.add_argument("--allow-retail-buying", action="store_true",
                         help="개인 순매수 종목도 포함 (기본: 개인 순매도만)")
+    parser.add_argument("--include-spac", action="store_true",
+                        help="스팩 포함 (기본: 제외 — 액면가 횡보로 점수 왜곡)")
     parser.add_argument("--csv", default="", help="결과를 CSV 로 저장할 경로")
     args = parser.parse_args()
 
@@ -141,6 +152,7 @@ def main() -> int:
         min_days=args.min_days,
         max_range_pct=args.max_range,
         require_retail_selling=not args.allow_retail_buying,
+        exclude_spac=not args.include_spac,
     )
     if result.empty:
         print("후보 없음 — 데이터가 없거나(먼저 kq-collect) 조건이 너무 엄격합니다.")
