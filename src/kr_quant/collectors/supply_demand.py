@@ -142,10 +142,17 @@ def main() -> int:
         "--all-kinds", action="store_true",
         help="ETF/ETN/리츠/우선주 등 모두 포함 (기본: 보통주만)",
     )
+    parser.add_argument(
+        "--rate", type=float, default=0.9,
+        help="TR당 요청 속도(req/s). 긴 전수 수집의 429 방지를 위해 기본 0.9",
+    )
     args = parser.parse_args()
 
     con = connect(args.db)
-    api = make_api(is_mock=not args.prod)
+    # 장시간 단일-TR 반복이라 보수적으로: 약간 느린 속도 + 넉넉한 재시도/백오프로 429 흡수.
+    api = make_api(
+        is_mock=not args.prod, rate_limit=args.rate, max_retries=5, retry_backoff=2.0
+    )
 
     markets = ["kospi", "kosdaq"] if args.market == "all" else [args.market]
     stocks = fetch_stock_list(api, markets)

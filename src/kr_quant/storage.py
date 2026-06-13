@@ -59,8 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_sd_date ON supply_demand(date);
 
 
 def default_db_path() -> Path:
-    """Default DB location: ``<repo>/data/kiwoom_quant.db`` (gitignored)."""
-    return Path(__file__).resolve().parents[2] / "data" / "kiwoom_quant.db"
+    """Default DB location: ``<repo>/data/kr_quant.db`` (gitignored)."""
+    return Path(__file__).resolve().parents[2] / "data" / "kr_quant.db"
 
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:

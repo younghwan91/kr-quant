@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from kiwoom_quant.storage import (
+from kr_quant.storage import (
     SUPPLY_DEMAND_COLUMNS,
     connect,
     to_float,

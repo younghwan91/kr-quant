@@ -1,4 +1,4 @@
-"""kiwoom-quant — Korean equity supply/demand collection and quant analysis.
+"""kr-quant — Korean equity supply/demand collection and quant analysis.
 
 Built on the `kiwoom-client` REST API library. Layers:
     collectors/  — fetch Kiwoom datasets into SQLite
