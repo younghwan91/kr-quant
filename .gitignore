@@ -1,0 +1,20 @@
+# 비밀키
+.env
+
+# 데이터 산출물 (SQLite DB, CSV, 차트)
+data/
+*.db
+*.csv
+*.png
+collect.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
