@@ -149,10 +149,8 @@ def main() -> int:
     args = parser.parse_args()
 
     con = connect(args.db)
-    # 장시간 단일-TR 반복이라 보수적으로: 약간 느린 속도 + 넉넉한 재시도/백오프로 429 흡수.
-    api = make_api(
-        is_mock=not args.prod, rate_limit=args.rate, max_retries=5, retry_backoff=2.0
-    )
+    # 장시간 단일-TR 반복이라 보수적으로: 약간 느린 속도 + 넉넉한 재시도로 429 흡수.
+    api = make_api(is_mock=not args.prod, rate_limit=args.rate, max_retries=5)
 
     markets = ["kospi", "kosdaq"] if args.market == "all" else [args.market]
     stocks = fetch_stock_list(api, markets)
