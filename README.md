@@ -6,6 +6,26 @@
 
 ---
 
+## 결과 미리보기
+
+**전 종목 스크리닝 → 매집 후보 랭킹**
+
+![매집 후보 상위 종목](docs/images/ranking.png)
+
+**신호 검증 — 매집 점수가 후속 수익률과 정렬되는가**
+
+형성구간(12거래일)에서 점수화한 후보를, 보유구간(이후 거래일)의 실제 수익률로 평가했습니다. 점수 상위 분위(Q1)일수록 평균 수익률이 높고 하위(Q5)는 음(–)으로, 점수가 단조적으로 수익률과 정렬됩니다.
+
+![매집 점수 vs 후속 수익률](docs/images/backtest.png)
+
+**종목 수급 차트 — 횡보 속 외국인·기관 누적 순매수**
+
+![종목별 투자자 수급](docs/images/candidate.png)
+
+> 위 그림은 2026-05-15~06-12 수집분(19거래일)으로 생성한 **in-sample 예시**입니다. 단일 짧은 윈도우라 롤링 아웃오브샘플·거래비용·생존편향을 통제한 정식 백테스트가 아니며, 스크리너가 신호를 담고 있음을 보이는 용도입니다. 재현은 [개발](#개발) 참고.
+
+---
+
 ## 핵심 기능
 
 - **전 종목 수급 수집** — 코스피·코스닥 보통주(~2,600개)의 최근 N일 투자주체별 순매수를 SQLite DB로 적재 (재실행 안전, 이어받기 지원)
@@ -53,7 +73,10 @@ kq-collect --limit 5                           # 동작 확인
 kq-screen --top 30
 kq-screen --max-range 0.10 --csv candidates.csv
 
-# 3) 종목 수급 차트
+# 3) 신호 검증 (형성구간 스크리닝 → 보유구간 수익률)
+kq-backtest --formation-days 12
+
+# 4) 종목 수급 차트
 kq-chart --code 005930
 ```
 
@@ -79,8 +102,11 @@ kq-chart --code 005930
 ## 개발
 
 ```bash
-uv run pytest        # 네트워크 없이 통과 (storage/screener 로직)
+uv run pytest        # 네트워크 없이 통과 (storage/screener/backtest 로직)
 uv run ruff check .
+
+# README 커버 이미지 재생성 (DB 수집 후)
+python scripts/make_figures.py   # → docs/images/{ranking,backtest,candidate}.png
 ```
 
 ## 라이선스
