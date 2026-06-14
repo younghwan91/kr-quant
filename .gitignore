@@ -7,6 +7,8 @@ data/
 *.csv
 *.png
 collect.log
+# README 커버 이미지는 추적 (재현: scripts/make_figures.py)
+!docs/images/*.png
 
 # Python
 __pycache__/
