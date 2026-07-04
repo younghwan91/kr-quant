@@ -1,5 +1,7 @@
 # kr-quant
 
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
+
 코스피·코스닥 종목의 **투자자별 수급(개인·외국인·기관 순매수)** 을 수집해 SQLite에 적재하고, 이를 바탕으로 **매집(accumulation) 후보 스크리닝**과 시각화를 수행하는 퀀트 분석 툴킷입니다.
 
 키움증권 REST API 클라이언트 [`kiwoom-client`](https://github.com/younghwan91/kiwoom-rest-api)를 기반으로 동작합니다.
