@@ -168,6 +168,14 @@ def main() -> int:
         f"fail={stats['failed']} | 일봉 {stats['daily_rows']:,}행 "
         f"수급 {stats['sd_rows']:,}행"
     )
+
+    # 개별 종목 실패는 collect()가 이미 격리해서 처리하지만, 실패율이 높으면
+    # (예: 스키마 드리프트처럼 전종목이 같은 이유로 실패) 파이프라인 전체가
+    # 실패했다고 봐야 함 — Airflow 등 호출자가 감지할 수 있도록 exit code로 신호.
+    attempted = stats["done"] + stats["failed"]
+    if attempted and stats["failed"] / attempted > 0.2:
+        print(f"❌ 실패율 {stats['failed']}/{attempted} > 20% — 비정상 종료")
+        return 1
     return 0
 
 
