@@ -69,6 +69,27 @@ def _has_recent_rows(con: sqlite3.Connection, code: str, cutoff: str) -> bool:
     return cur.fetchone() is not None
 
 
+def build_sd_records(code: str, resp: dict, cutoff: str) -> list[tuple]:
+    """Map a ka10059 response into supply_demand rows newer than ``cutoff``."""
+    records: list[tuple] = []
+    for row in resp.get("stk_invsr_orgn", []) or []:
+        date = row.get("dt", "")
+        if date < cutoff:
+            continue
+        records.append(
+            (
+                code,
+                date,
+                # cur_prc 의 부호는 전일대비 등락 방향이므로 절댓값(가격)으로 저장.
+                abs(to_int(row.get("cur_prc"))),
+                to_float(row.get("flu_rt")),
+                to_int(row.get("acc_trde_qty")),
+                *[to_int(row.get(src)) for src in INVESTOR_COLUMNS.values()],
+            )
+        )
+    return records
+
+
 def collect(
     api: KiwoomAPI,
     con: sqlite3.Connection,
@@ -93,22 +114,7 @@ def collect(
             resp = api.stock_info.investor_institution_by_stock(
                 dt=today, stk_cd=code, amt_qty_tp="2", trde_tp="0", unit_tp="1"
             )
-            records = []
-            for row in resp.get("stk_invsr_orgn", []) or []:
-                date = row.get("dt", "")
-                if date < cutoff:
-                    continue
-                records.append(
-                    (
-                        code,
-                        date,
-                        # cur_prc 의 부호는 전일대비 등락 방향이므로 절댓값(가격)으로 저장.
-                        abs(to_int(row.get("cur_prc"))),
-                        to_float(row.get("flu_rt")),
-                        to_int(row.get("acc_trde_qty")),
-                        *[to_int(row.get(src)) for src in INVESTOR_COLUMNS.values()],
-                    )
-                )
+            records = build_sd_records(code, resp, cutoff)
             stats["rows"] += upsert_supply_demand(con, records)
             stats["done"] += 1
         except KiwoomAPIError as e:

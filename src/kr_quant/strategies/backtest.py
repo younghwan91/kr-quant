@@ -112,6 +112,86 @@ def _quantile_summary(merged: pd.DataFrame, quantiles: int) -> pd.DataFrame:
     return out[cols]
 
 
+def rolling_backtest(
+    df: pd.DataFrame,
+    *,
+    horizons: tuple[int, ...] = (3, 5),
+    min_formation: int = 8,
+    quantiles: int = 5,
+    **screen_kwargs: object,
+) -> tuple[pd.DataFrame, dict]:
+    """Walk-forward validation: slide the formation cutoff across the window.
+
+    The single-split :func:`backtest` can be lucky. Here we expand the formation
+    window day by day (cutoff ``t`` from ``min_formation`` to the end minus the
+    holding horizon) and, for each forward ``horizon`` in days, re-screen and
+    measure the score↔return rank correlation. Pooling every candidate across
+    splits also yields an outlier-robust **median** return per score quantile.
+
+    Caveat: with a short single window the splits **overlap** (expanding window,
+    overlapping holding periods), so they are correlated — this measures
+    stability across as-of dates, not independent out-of-sample replication.
+    True OOS needs a longer history (collect more days).
+
+    Returns:
+        ``(splits, summary)``: ``splits`` has one row per (cutoff, horizon) with
+        ``base_date, eval_date, horizon, n, spearman``; ``summary`` holds
+        ``n_splits``, Spearman mean/min/max and ``frac_positive``, plus a pooled
+        ``buckets`` DataFrame (mean_fwd, **median_fwd**, hit_rate per quantile).
+    """
+    dates = sorted(df["date"].unique())
+    splits: list[dict] = []
+    pooled: list[pd.DataFrame] = []
+
+    for h in horizons:
+        for t in range(min_formation - 1, len(dates) - h):
+            form_dates = dates[: t + 1]
+            base_date, eval_date = dates[t], dates[t + h]
+            cands = screen(df[df["date"].isin(form_dates)], **screen_kwargs)  # type: ignore[arg-type]
+            if cands.empty:
+                continue
+            fwd = forward_returns(df, base_date, eval_date)
+            m = (
+                cands.merge(fwd, left_on="code", right_index=True, how="inner")
+                .dropna(subset=["fwd_ret"])
+            )
+            if len(m) < quantiles:
+                continue
+            splits.append({
+                "base_date": base_date, "eval_date": eval_date, "horizon": h,
+                "n": len(m), "spearman": spearman(m["score"], m["fwd_ret"]),
+            })
+            q = pd.qcut(m["score"].rank(method="first", ascending=False), quantiles, labels=False) + 1
+            pooled.append(m.assign(quantile=q)[["quantile", "fwd_ret"]])
+
+    splits_df = pd.DataFrame(splits)
+    pooled_df = (
+        pd.concat(pooled, ignore_index=True)
+        if pooled else pd.DataFrame(columns=["quantile", "fwd_ret"])
+    )
+    buckets = (
+        pooled_df.groupby("quantile")
+        .agg(
+            n=("fwd_ret", "size"),
+            mean_fwd=("fwd_ret", "mean"),
+            median_fwd=("fwd_ret", "median"),
+            hit_rate=("fwd_ret", lambda s: (s > 0).mean()),
+        )
+        .reset_index()
+    ) if not pooled_df.empty else pd.DataFrame(columns=["quantile", "n", "mean_fwd", "median_fwd", "hit_rate"])
+
+    sp = splits_df["spearman"] if not splits_df.empty else pd.Series(dtype=float)
+    summary = {
+        "n_splits": len(splits_df),
+        "spearman_mean": float(sp.mean()) if not sp.empty else float("nan"),
+        "spearman_min": float(sp.min()) if not sp.empty else float("nan"),
+        "spearman_max": float(sp.max()) if not sp.empty else float("nan"),
+        "frac_positive": float((sp > 0).mean()) if not sp.empty else float("nan"),
+        "buckets": buckets,
+    }
+    return splits_df, summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="매집 점수 vs 후속 수익률 검증 (형성구간 스크리닝 → 보유구간 수익률)"
@@ -122,11 +202,16 @@ def main() -> int:
     parser.add_argument("--max-range", type=float, default=0.15)
     parser.add_argument("--min-days", type=int, default=8)
     parser.add_argument("--quantiles", type=int, default=5)
+    parser.add_argument("--rolling", action="store_true",
+                        help="워크포워드 검증 (형성구간 확장 × 보유기간, 분할별 Spearman 집계)")
     args = parser.parse_args()
 
     con = connect(args.db)
     df = load_frame(con)
     con.close()
+
+    if args.rolling:
+        return _run_rolling(df, args)
 
     merged, summary = backtest(
         df,
@@ -144,6 +229,25 @@ def main() -> int:
         b["mean_fwd"] = b["mean_fwd"].map("{:+.2%}".format)
         b["hit_rate"] = b["hit_rate"].map("{:.0%}".format)
         print("\n점수 분위별 (Q1=최고점):")
+        print(b.to_string(index=False))
+    return 0
+
+
+def _run_rolling(df: pd.DataFrame, args: argparse.Namespace) -> int:
+    splits, roll = rolling_backtest(
+        df, min_formation=args.min_days, quantiles=args.quantiles,
+        min_days=args.min_days, max_range_pct=args.max_range,
+    )
+    print(f"워크포워드 분할 {roll['n_splits']}개 | "
+          f"Spearman 평균 {roll['spearman_mean']:+.3f} "
+          f"(min {roll['spearman_min']:+.3f}, max {roll['spearman_max']:+.3f}) | "
+          f"양(+) 비율 {roll['frac_positive']:.0%}")
+    if not roll["buckets"].empty:
+        b = roll["buckets"].copy()
+        for c in ("mean_fwd", "median_fwd"):
+            b[c] = b[c].map("{:+.2%}".format)
+        b["hit_rate"] = b["hit_rate"].map("{:.0%}".format)
+        print("\n분위별 (전 분할 풀링, Q1=최고점):")
         print(b.to_string(index=False))
     return 0
 

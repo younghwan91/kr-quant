@@ -6,7 +6,12 @@ import math
 
 import pandas as pd
 
-from kr_quant.strategies.backtest import backtest, forward_returns, spearman
+from kr_quant.strategies.backtest import (
+    backtest,
+    forward_returns,
+    rolling_backtest,
+    spearman,
+)
 
 
 def _stock_frame(code, closes, foreign, inst, indiv, vol=1_000_000):
@@ -62,6 +67,32 @@ def test_backtest_splits_formation_and_holdout():
     assert summary["n"] == 1
     # forward return from close 102 (day 12) to 120 (day 14).
     assert math.isclose(merged.iloc[0]["fwd_ret"], 120 / 102 - 1)
+
+
+def test_rolling_backtest_aggregates_splits():
+    # 4 sideways stocks (range ~4%, smart buying, retail selling), 14 days,
+    # phase-shifted so forward returns vary across stocks/splits.
+    days = 14
+    frames = []
+    for i, (code, phase, fmag) in enumerate(
+        [("A", 0, 5000), ("B", 1, 4000), ("C", 0, 3000), ("D", 1, 2000)]
+    ):
+        closes = [100 + (2 if (d + phase) % 2 == 0 else -2) for d in range(days)]
+        frames.append(_stock_frame(
+            code, closes,
+            foreign=[fmag] * days, inst=[fmag // 2] * days, indiv=[-fmag] * days,
+        ))
+    df = pd.concat(frames)
+
+    splits, summary = rolling_backtest(
+        df, horizons=(2,), min_formation=8, quantiles=2, min_days=6, max_range_pct=0.15
+    )
+    assert summary["n_splits"] > 0
+    assert len(splits) == summary["n_splits"]
+    assert not summary["buckets"].empty
+    assert "median_fwd" in summary["buckets"].columns
+    assert len(summary["buckets"]) == 2          # quantiles=2
+    assert 0.0 <= summary["frac_positive"] <= 1.0
 
 
 def test_backtest_raises_without_enough_days():

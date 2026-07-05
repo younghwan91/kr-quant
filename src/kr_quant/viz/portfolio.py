@@ -87,6 +87,51 @@ def plot_score_vs_return(merged: pd.DataFrame, summary: dict, out_path: str | Pa
     return _save(fig, out_path)
 
 
+def plot_rolling_validation(splits: pd.DataFrame, summary: dict, out_path: str | Path) -> Path:
+    """Walk-forward robustness: per-split Spearman + pooled quantile curve.
+
+    Left panel shows the score↔return rank correlation for every (cutoff,
+    horizon) split, so a single lucky number can't hide. Right panel pools all
+    candidates across splits and shows both mean and outlier-robust median
+    return per score quintile.
+    """
+    b = summary["buckets"]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5), gridspec_kw={"width_ratios": [1.3, 1]})
+
+    # Left: Spearman per split (green=positive, red=negative), with mean line.
+    sp = splits["spearman"].to_numpy()
+    colors = [_INST if v > 0 else _FOREIGN for v in sp]
+    ax1.bar(range(len(sp)), sp, color=colors)
+    ax1.axhline(0, color="gray", lw=0.8, ls="--")
+    ax1.axhline(summary["spearman_mean"], color="#1f77b4", lw=1.4, ls=":",
+                label=f"평균 {summary['spearman_mean']:+.2f}")
+    ax1.set_xlabel(f"워크포워드 분할 ({summary['n_splits']}개, 형성구간 확장 × 보유기간)")
+    ax1.set_ylabel("Spearman (점수~수익률)")
+    ax1.set_title(f"분할별 순위상관 — 양(+) 비율 {summary['frac_positive']:.0%}",
+                  fontsize=12, fontweight="bold")
+    ax1.grid(True, axis="y", alpha=0.3)
+    ax1.legend(loc="best")
+
+    # Right: pooled mean (bars) + median (markers) forward return per quintile.
+    qlabels = [f"Q{int(q)}" for q in b["quantile"]]
+    qcolors = ["#2ca02c" if v > 0 else "#d62728" for v in b["mean_fwd"]]
+    ax2.bar(qlabels, b["mean_fwd"] * 100, color=qcolors, alpha=0.85, label="평균")
+    ax2.scatter(qlabels, b["median_fwd"] * 100, color="black", marker="D", s=45, zorder=3, label="중앙값")
+    ax2.axhline(0, color="gray", lw=0.8, ls="--")
+    ax2.set_xlabel("점수 분위 (Q1=최고점)")
+    ax2.set_ylabel("보유구간 수익률 (%)")
+    ax2.set_title("분위별 수익률 (전 분할 풀링)", fontsize=12, fontweight="bold")
+    ax2.grid(True, axis="y", alpha=0.3)
+    for i, (m, hr) in enumerate(zip(b["mean_fwd"], b["hit_rate"])):
+        ax2.text(i, m * 100, f"{m:+.1%}\n적중 {hr:.0%}", ha="center",
+                 va="bottom" if m >= 0 else "top", fontsize=7)
+    ax2.legend(loc="best")
+
+    fig.suptitle("매집 점수 워크포워드 검증 (in-sample, 분할 중첩)", fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    return _save(fig, out_path)
+
+
 def _save(fig: plt.Figure, out_path: str | Path) -> Path:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

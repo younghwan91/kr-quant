@@ -19,8 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from kr_quant.storage import connect, default_db_path  # noqa: E402
 from kr_quant.strategies.accumulation import load_frame, screen  # noqa: E402
-from kr_quant.strategies.backtest import backtest  # noqa: E402
-from kr_quant.viz.portfolio import plot_ranking, plot_score_vs_return  # noqa: E402
+from kr_quant.strategies.backtest import backtest, rolling_backtest  # noqa: E402
+from kr_quant.viz.portfolio import (  # noqa: E402
+    plot_ranking,
+    plot_rolling_validation,
+    plot_score_vs_return,
+)
 from kr_quant.viz.supply_demand_chart import build_chart  # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parents[1] / "docs" / "images"
@@ -43,6 +47,13 @@ def main() -> int:
     plot_score_vs_return(merged, summary, OUT_DIR / "backtest.png")
     print(f"   Spearman={summary['spearman']:.3f}  n={summary['n']}  "
           f"전체평균={summary['universe_mean']:+.2%}")
+
+    print("→ rolling.png")
+    splits, roll = rolling_backtest(df, horizons=(3, 5), min_formation=8,
+                                    min_days=6, max_range_pct=0.15)
+    plot_rolling_validation(splits, roll, OUT_DIR / "rolling.png")
+    print(f"   분할 {roll['n_splits']}개  Spearman평균={roll['spearman_mean']:+.3f}  "
+          f"양(+)비율={roll['frac_positive']:.0%}")
 
     top_code = result.iloc[0]["code"]
     print(f"→ candidate.png ({top_code} {result.iloc[0]['name']})")

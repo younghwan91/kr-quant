@@ -20,3 +20,6 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# oh-my-claudecode local session/tool state
+.omc/
