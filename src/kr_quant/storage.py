@@ -105,6 +105,19 @@ CREATE TABLE IF NOT EXISTS credit_balance (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_cb_date ON credit_balance(date);
+CREATE TABLE IF NOT EXISTS sector_index (
+    code        TEXT NOT NULL,  -- 업종코드 (001=KOSPI 종합, 101=KOSDAQ 종합 등)
+    name        TEXT,
+    date        TEXT NOT NULL,
+    open        INTEGER,
+    high        INTEGER,
+    low         INTEGER,
+    close       INTEGER,
+    volume      INTEGER,
+    trade_value INTEGER,
+    PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_si_date ON sector_index(date);
 """
 
 
@@ -215,6 +228,24 @@ def upsert_credit_balance(con: sqlite3.Connection, records: list[tuple]) -> int:
     ph = ",".join("?" * len(_CREDIT_BALANCE_COLS))
     con.executemany(
         f"INSERT OR REPLACE INTO credit_balance({','.join(_CREDIT_BALANCE_COLS)}) VALUES({ph})",
+        records,
+    )
+    con.commit()
+    return len(records)
+
+
+_SECTOR_INDEX_COLS = [
+    "code", "name", "date", "open", "high", "low", "close", "volume", "trade_value",
+]
+
+
+def upsert_sector_index(con: sqlite3.Connection, records: list[tuple]) -> int:
+    """Insert/replace sector_index rows."""
+    if not records:
+        return 0
+    ph = ",".join("?" * len(_SECTOR_INDEX_COLS))
+    con.executemany(
+        f"INSERT OR REPLACE INTO sector_index({','.join(_SECTOR_INDEX_COLS)}) VALUES({ph})",
         records,
     )
     con.commit()
