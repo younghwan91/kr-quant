@@ -1,14 +1,20 @@
-"""SQLite storage layer for collected Kiwoom datasets.
+"""Storage layer for collected Kiwoom datasets — sqlite or Postgres/TimescaleDB.
 
-Defines the schema and small, dependency-free helpers used by collectors and
-strategies. Kept deliberately thin: collectors produce plain records, this
-module persists them idempotently (``INSERT OR REPLACE`` on natural keys).
+Defines the schema and small helpers used by collectors and strategies.
+Collectors produce plain records; this module persists them idempotently on
+natural keys. ``connect()`` dispatches on the connection string: a
+``postgresql://``/``postgres://`` DSN opens Postgres (psycopg2, imported
+lazily so sqlite-only use never needs it installed); anything else opens a
+local sqlite file exactly as before.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
+
+_PG_PREFIXES = ("postgresql://", "postgres://")
 
 # ka10059 (투자자기관별종목별) net-buy fields → DB columns.
 # Order matters: it defines the column order for ``supply_demand`` inserts.
@@ -126,8 +132,22 @@ def default_db_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "kr_quant.db"
 
 
-def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open (creating dirs/schema as needed) a connection with row access."""
+def connect(db_path: str | Path | None = None) -> Any:
+    """Open a connection with row access.
+
+    ``db_path`` starting with ``postgresql://``/``postgres://`` opens Postgres
+    (e.g. TimescaleDB) via psycopg2. Anything else is treated as a sqlite file
+    path (default: ``<repo>/data/kr_quant.db``, dirs created as needed).
+    """
+    if isinstance(db_path, str) and db_path.startswith(_PG_PREFIXES):
+        import psycopg2  # noqa: PLC0415 — optional dep, only needed for this path
+
+        con = psycopg2.connect(db_path)
+        # Schema (tables, hypertables, compression policy) is provisioned by
+        # kr-quant-airflow/sql/init_timescale.sql, not here — init_db() only
+        # applies to the sqlite path.
+        return con
+
     path = Path(db_path) if db_path else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
@@ -139,6 +159,43 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
 def init_db(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA)
     con.commit()
+
+
+def _is_pg(con: Any) -> bool:
+    return not isinstance(con, sqlite3.Connection)
+
+
+def _upsert(
+    con: Any,
+    table: str,
+    cols: list[str],
+    records: list[tuple],
+    *,
+    pk_cols: tuple[str, ...] = ("code", "date"),
+) -> int:
+    """Insert/replace ``records`` (tuples ordered by ``cols``) into ``table``.
+
+    sqlite: ``INSERT OR REPLACE``. Postgres: ``INSERT ... ON CONFLICT DO
+    UPDATE`` on ``pk_cols`` — same natural-key upsert semantics either way.
+    """
+    if not records:
+        return 0
+    if _is_pg(con):
+        placeholders = ",".join(["%s"] * len(cols))
+        update_cols = [c for c in cols if c not in pk_cols]
+        set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+        sql = (
+            f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders}) "
+            f"ON CONFLICT ({','.join(pk_cols)}) DO UPDATE SET {set_clause}"
+        )
+        with con.cursor() as cur:
+            cur.executemany(sql, records)
+    else:
+        placeholders = ",".join(["?"] * len(cols))
+        sql = f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({placeholders})"
+        con.executemany(sql, records)
+    con.commit()
+    return len(records)
 
 
 def to_int(s: object) -> int:
@@ -158,43 +215,23 @@ def to_float(s: object) -> float:
         return 0.0
 
 
-def upsert_stocks(con: sqlite3.Connection, stocks: list[dict]) -> int:
+_STOCKS_COLS = ["code", "name", "market", "sector", "kind"]
+
+
+def upsert_stocks(con: Any, stocks: list[dict]) -> int:
     """Insert/replace stock master rows. Returns the number written."""
-    con.executemany(
-        "INSERT OR REPLACE INTO stocks(code, name, market, sector, kind) "
-        "VALUES(:code, :name, :market, :sector, :kind)",
-        stocks,
-    )
-    con.commit()
-    return len(stocks)
+    records = [tuple(s.get(c) for c in _STOCKS_COLS) for s in stocks]
+    return _upsert(con, "stocks", _STOCKS_COLS, records, pk_cols=("code",))
 
 
-def upsert_supply_demand(con: sqlite3.Connection, records: list[tuple]) -> int:
+def upsert_supply_demand(con: Any, records: list[tuple]) -> int:
     """Insert/replace supply_demand rows (tuples ordered by SUPPLY_DEMAND_COLUMNS)."""
-    if not records:
-        return 0
-    placeholders = ",".join("?" * len(SUPPLY_DEMAND_COLUMNS))
-    con.executemany(
-        f"INSERT OR REPLACE INTO supply_demand({','.join(SUPPLY_DEMAND_COLUMNS)}) "
-        f"VALUES({placeholders})",
-        records,
-    )
-    con.commit()
-    return len(records)
+    return _upsert(con, "supply_demand", SUPPLY_DEMAND_COLUMNS, records)
 
 
-def upsert_daily_bars(con: sqlite3.Connection, records: list[tuple]) -> int:
+def upsert_daily_bars(con: Any, records: list[tuple]) -> int:
     """Insert/replace daily_bars rows (tuples ordered by DAILY_BAR_COLUMNS)."""
-    if not records:
-        return 0
-    placeholders = ",".join("?" * len(DAILY_BAR_COLUMNS))
-    con.executemany(
-        f"INSERT OR REPLACE INTO daily_bars({','.join(DAILY_BAR_COLUMNS)}) "
-        f"VALUES({placeholders})",
-        records,
-    )
-    con.commit()
-    return len(records)
+    return _upsert(con, "daily_bars", DAILY_BAR_COLUMNS, records)
 
 
 _SHORT_SELLING_COLS = [
@@ -208,30 +245,14 @@ _CREDIT_BALANCE_COLS = [
 ]
 
 
-def upsert_short_selling(con: sqlite3.Connection, records: list[tuple]) -> int:
+def upsert_short_selling(con: Any, records: list[tuple]) -> int:
     """Insert/replace short_selling rows."""
-    if not records:
-        return 0
-    ph = ",".join("?" * len(_SHORT_SELLING_COLS))
-    con.executemany(
-        f"INSERT OR REPLACE INTO short_selling({','.join(_SHORT_SELLING_COLS)}) VALUES({ph})",
-        records,
-    )
-    con.commit()
-    return len(records)
+    return _upsert(con, "short_selling", _SHORT_SELLING_COLS, records)
 
 
-def upsert_credit_balance(con: sqlite3.Connection, records: list[tuple]) -> int:
+def upsert_credit_balance(con: Any, records: list[tuple]) -> int:
     """Insert/replace credit_balance rows."""
-    if not records:
-        return 0
-    ph = ",".join("?" * len(_CREDIT_BALANCE_COLS))
-    con.executemany(
-        f"INSERT OR REPLACE INTO credit_balance({','.join(_CREDIT_BALANCE_COLS)}) VALUES({ph})",
-        records,
-    )
-    con.commit()
-    return len(records)
+    return _upsert(con, "credit_balance", _CREDIT_BALANCE_COLS, records)
 
 
 _SECTOR_INDEX_COLS = [
@@ -239,14 +260,6 @@ _SECTOR_INDEX_COLS = [
 ]
 
 
-def upsert_sector_index(con: sqlite3.Connection, records: list[tuple]) -> int:
+def upsert_sector_index(con: Any, records: list[tuple]) -> int:
     """Insert/replace sector_index rows."""
-    if not records:
-        return 0
-    ph = ",".join("?" * len(_SECTOR_INDEX_COLS))
-    con.executemany(
-        f"INSERT OR REPLACE INTO sector_index({','.join(_SECTOR_INDEX_COLS)}) VALUES({ph})",
-        records,
-    )
-    con.commit()
-    return len(records)
+    return _upsert(con, "sector_index", _SECTOR_INDEX_COLS, records)

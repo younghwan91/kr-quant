@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from kr_quant.storage import (
     SUPPLY_DEMAND_COLUMNS,
+    _upsert,
     connect,
     to_float,
     to_int,
@@ -45,3 +48,25 @@ def test_upsert_is_idempotent(tmp_path):
     row = con.execute("SELECT foreign_ FROM supply_demand").fetchone()
     assert row["foreign_"] == 971587
     con.close()
+
+
+def test_connect_dispatches_postgres_dsn_to_psycopg2():
+    """A postgresql:// path opens Postgres instead of sqlite — no real connection made."""
+    fake_module = MagicMock()
+    with patch.dict("sys.modules", {"psycopg2": fake_module}):
+        connect("postgresql://user:pw@localhost:5432/kr_quant")
+    fake_module.connect.assert_called_once_with("postgresql://user:pw@localhost:5432/kr_quant")
+
+
+def test_upsert_uses_on_conflict_for_postgres_connection():
+    """Non-sqlite connections get ON CONFLICT DO UPDATE, not INSERT OR REPLACE."""
+    fake_con = MagicMock()
+    fake_cursor = MagicMock()
+    fake_con.cursor.return_value.__enter__.return_value = fake_cursor
+
+    n = _upsert(fake_con, "daily_bars", ["code", "date", "close"], [("005930", "20260706", 100)])
+
+    assert n == 1
+    sql = fake_cursor.executemany.call_args[0][0]
+    assert "ON CONFLICT (code,date) DO UPDATE SET close=EXCLUDED.close" in sql
+    fake_con.commit.assert_called_once()
