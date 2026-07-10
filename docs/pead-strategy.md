@@ -137,8 +137,8 @@ uv run kq-collect-earnings --out earnings.csv --top-n 800 --from-year 2018
 # 2) 백테스트 + 손익비 리포트 (실전 형태 기본값)
 uv run kq-pead --db "$DSN" --earnings-csv earnings.csv \
     --horizon 60 --adv-floor 20000 --top-n 10 --staggered --no-value
-#   권장: 집중 top10(코스피 대비 +12.4%p/yr, Sharpe 1.15). --top-n 5: 최대수익(+16.3%p, 단일종목위험↑)
-#   ⚠️ top-n 20+ 분산은 코스피 못이김 — 집중 필수. (--market-neutral: 롱숏 비권장, 손익비 붕괴)
+#   권장: 중대형 집중 top10. 동종그룹(중대형) 대비 +14.9%p/6-8년, 코스피 대비 Sharpe 우위(1.29 vs 0.95).
+#   ⚠️ 시총가중 코스피의 raw 수익은 대형주 급등해엔 못이김 — 인덱스 대체 아닌 Sharpe-향상 위성으로. 실전은 50/50 코어(코스피)-위성 블렌드.
 ```
 
 ## 코드
