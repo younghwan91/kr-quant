@@ -198,8 +198,16 @@ def staggered_backtest(
     adv_window: int = 20,
     start_index: int = 130,
     min_names: int = 20,
+    cap_panel: pd.DataFrame | None = None,
+    cap_rank: tuple[int, int] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Long-only excess with **staggered entry** — the recommended real-money form.
+
+    Set ``cap_panel`` (long code/date/market_cap) + ``cap_rank=(20, 60)`` to trade
+    only the market-cap tier where the PEAD alpha actually lives (large-but-not-mega,
+    ~21st–60th by cap). PEAD is structurally absent in the top-20 mega-caps
+    (efficient/over-covered), so this is the honest recommended universe and the
+    correct benchmark is the same tier equal-weight (not cap-weighted KOSPI).
 
     Instead of putting all capital in on one rebalance date (timing luck), enter
     ``horizon // step`` equal tranches offset by ``step`` days, each an equal-weight
@@ -224,20 +232,35 @@ def staggered_backtest(
         adv[:, j] = np.nanmean(V[:, j - adv_window:j], axis=1)
     sig_m, _ = _resolve_signal(earnings_panel, signal_panel, codes, dates)
     n_tranches = max(1, horizon // step)
+    capm = (
+        cap_panel.pivot_table(index="code", columns="date", values="market_cap", aggfunc="first")
+        .reindex(index=codes, columns=dates).to_numpy(float)
+        if cap_panel is not None else None
+    )
+
+    def eligible(t: int) -> np.ndarray:
+        ok = np.isfinite(sig_m[:, t]) & (adv[:, t] >= adv_floor)
+        if capm is not None and cap_rank is not None:
+            liq = np.where(ok & np.isfinite(capm[:, t]))[0]
+            order = liq[np.argsort(-capm[liq, t])]  # descending market cap
+            tier = order[cap_rank[0]:cap_rank[1]]
+            mask = np.zeros(C.shape[0], bool)
+            mask[tier] = True
+            ok = ok & mask
+        return ok
 
     def book(t: int) -> np.ndarray | None:
-        s = sig_m[:, t]
-        ok = np.isfinite(s) & (adv[:, t] >= adv_floor)
+        ok = eligible(t)
         if ok.sum() < min_names:
             return None
         idx = np.where(ok)[0]
-        return idx[np.argsort(-s[ok])[:top_n]]
+        return idx[np.argsort(-sig_m[idx, t])[:top_n]]
 
     rows: list[dict] = []
     for t in range(start_index, nD - step - 1):
         if (t - start_index) % step != 0:
             continue
-        uni = np.where(np.isfinite(sig_m[:, t]) & (adv[:, t] >= adv_floor))[0]
+        uni = np.where(eligible(t))[0]
         if uni.size < min_names:
             continue
         ret = C[:, t + step] / C[:, t] - 1.0

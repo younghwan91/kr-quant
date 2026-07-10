@@ -116,6 +116,22 @@ def test_staggered_backtest_runs_and_reports_payoff():
     assert abs(periods["turnover"].iloc[0] - 1.0 / 3) < 1e-9
 
 
+def test_staggered_cap_tier_restricts_universe():
+    from kr_quant.features.fundamentals import earnings_yoy_panel
+    prices, earnings, dates = _synthetic(n_codes=60)
+    panel = earnings_yoy_panel(earnings, dates)
+    # Give each code a distinct, constant market cap (code index scales it).
+    cap = pd.DataFrame([
+        {"code": c, "date": d, "market_cap": (int(c) + 1) * 1e9}
+        for c in prices["code"].unique() for d in dates
+    ])
+    # Restrict to the 21st-40th largest by cap -> book is drawn only from that tier.
+    _, summary = staggered_backtest(prices, panel, horizon=60, step=20, top_n=5,
+                                    adv_floor=0, start_index=40,
+                                    cap_panel=cap, cap_rank=(20, 40), min_names=5)
+    assert summary["n"] > 3  # still trades within the restricted tier
+
+
 def test_top_n_concentrates_and_reports_payoff_ratio():
     from kr_quant.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
