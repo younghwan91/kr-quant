@@ -76,8 +76,12 @@ def parse_estimate(payload: dict) -> tuple[float | None, float | None, str | Non
     if not cons:
         return None, None, None
     est_year = cons[0]
-    eps_row = next((r for r in fi.get("rowList", [])
-                    if (r.get("title") or {}).get("name") == "EPS"), None)
+
+    def _row_name(r: dict) -> str:
+        t = r.get("title")
+        return t.get("name", "") if isinstance(t, dict) else str(t or "")
+
+    eps_row = next((r for r in fi.get("rowList", []) if _row_name(r) == "EPS"), None)
     if eps_row is None:
         return None, None, None
     cols = eps_row.get("columns") or {}
