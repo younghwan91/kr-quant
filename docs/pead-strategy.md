@@ -78,9 +78,9 @@ uv run kq-collect-earnings --out earnings.csv --top-n 800 --from-year 2018
 
 # 2) 백테스트 + 손익비 리포트 (실전 형태 기본값)
 uv run kq-pead --db "$DSN" --earnings-csv earnings.csv \
-    --horizon 60 --adv-floor 20000 --top-n 40 --value-weight 0.25 --staggered
-#   --staggered: 권장 실전형태(3트랜치 엇갈림 진입, IR~1.1 t~2.9 손익비1.26)
-#   --top-n 5: 최대공격(손익비2.05 누적+376%, 취약)  --market-neutral: 롱숏(손익비 붕괴, 비권장)
+    --horizon 60 --adv-floor 20000 --top-n 20 --staggered --no-value
+#   권장 최소형태: 순수 PEAD 스태거드 롱온리(IR~1.15 t~3.06, 실적+가격 2소스만)
+#   --top-n 5: 최대공격(손익비2.0+, 취약)  (--no-value 빼면 가치 결합, --market-neutral: 롱숏 비권장)
 ```
 
 ## 코드
