@@ -5,11 +5,15 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from kr_quant.storage import (
+    DAILY_BAR_COLUMNS,
     SUPPLY_DEMAND_COLUMNS,
     _upsert,
     connect,
+    market_cap_asof,
     to_float,
     to_int,
+    upsert_daily_bars,
+    upsert_shares_outstanding,
     upsert_stocks,
     upsert_supply_demand,
 )
@@ -70,3 +74,40 @@ def test_upsert_uses_on_conflict_for_postgres_connection():
     sql = fake_cursor.executemany.call_args[0][0]
     assert "ON CONFLICT (code,date) DO UPDATE SET close=EXCLUDED.close" in sql
     fake_con.commit.assert_called_once()
+
+
+def _bar(code, date, close):
+    values = {"code": code, "date": date, "open": close, "high": close,
+              "low": close, "close": close, "volume": 0, "trade_value": 0}
+    return tuple(values[c] for c in DAILY_BAR_COLUMNS)
+
+
+def test_market_cap_asof_normal_case(tmp_path):
+    con = connect(tmp_path / "t.db")
+    upsert_daily_bars(con, [_bar("005930", "2026-02-01", 70000)])
+    upsert_shares_outstanding(con, [("005930", "2026-02-01", 1000000)])
+
+    assert market_cap_asof(con, "005930", "2026-02-01") == 70000 * 1000000
+    con.close()
+
+
+def test_market_cap_asof_avoids_lookahead_bias(tmp_path):
+    con = connect(tmp_path / "t.db")
+    upsert_shares_outstanding(con, [
+        ("005930", "2026-01-01", 1000000),
+        ("005930", "2026-03-01", 2000000),  # simulates a later stock split
+    ])
+    upsert_daily_bars(con, [_bar("005930", "2026-02-01", 70000)])
+
+    # 2026-02-01 is between the two share counts — must use the earlier
+    # (on-or-before) 1,000,000 figure, never the later 2,000,000 one.
+    assert market_cap_asof(con, "005930", "2026-02-01") == 70000 * 1000000
+    con.close()
+
+
+def test_market_cap_asof_returns_none_without_shares_data(tmp_path):
+    con = connect(tmp_path / "t.db")
+    upsert_daily_bars(con, [_bar("005930", "2026-02-01", 70000)])
+
+    assert market_cap_asof(con, "005930", "2026-02-01") is None
+    con.close()

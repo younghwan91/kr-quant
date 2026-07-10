@@ -11,6 +11,7 @@ CLI:
     kq-collect-both --market all                  # mock, both datasets
     kq-collect-both --market all --prod           # real-server keys
     kq-collect-both --resume                       # skip stocks already done
+    kq-collect-both --update                       # skip daily-bar call if already current
     kq-collect-both --sd-days 60 --daily-days 0    # SD last 60d, daily full
 """
 
@@ -31,7 +32,7 @@ from ..storage import (
     upsert_stocks,
     upsert_supply_demand,
 )
-from .daily_bars import _CHART_KEY, _has_any_rows, _row_to_record
+from .daily_bars import _CHART_KEY, _has_any_rows, _latest_date, _market_latest_date, _row_to_record
 from .supply_demand import (
     _has_recent_rows,
     build_sd_records,
@@ -48,6 +49,7 @@ def collect(
     sd_days: int = 100,
     daily_days: int = 0,
     resume: bool = False,
+    update: bool = False,
     progress_every: int = 50,
 ) -> dict[str, int]:
     """Collect daily bars + supply/demand for ``stocks``. Returns a summary dict.
@@ -56,6 +58,13 @@ def collect(
         sd_days: Supply/demand window in days (ka10059 returns ~100 max).
         daily_days: Daily-bar window in days. 0 = everything the call returns.
         resume: Skip stocks that already have both a daily bar and recent SD.
+        update: Skip the daily-bar call for stocks already at the market's
+            latest trading day (self-heals prior-day gaps cheaply — a stock
+            still missing yesterday's bar looks not-current and gets a full
+            re-fetch, one already caught up costs zero API calls). Supply/
+            demand has no cheap "already current" check (ka10059 only
+            returns a rolling ~100-day window, not a single day) so it's
+            always re-fetched regardless of this flag.
     """
     base_dt = time.strftime("%Y%m%d")
     sd_cutoff = time.strftime("%Y%m%d", time.localtime(time.time() - sd_days * 86400))
@@ -64,6 +73,9 @@ def collect(
         if daily_days > 0
         else ""
     )
+    market_latest = _market_latest_date(api, base_dt) if update else base_dt
+    if update:
+        print(f"📅 시장 최신 거래일: {market_latest}")
     stats = {"done": 0, "skipped": 0, "failed": 0, "daily_rows": 0, "sd_rows": 0}
     started = time.monotonic()
 
@@ -72,17 +84,19 @@ def collect(
         if resume and _has_any_rows(con, code) and _has_recent_rows(con, code, sd_cutoff):
             stats["skipped"] += 1
             continue
+        daily_current = update and (_latest_date(con, code) or "") >= market_latest
         try:
-            # 일봉 (ka10081) — own rate-limit bucket.
-            d_resp = api.chart.stock_daily_chart(
-                stk_cd=code, base_dt=base_dt, upd_stkpc_tp="1"
-            )
-            bars = [
-                _row_to_record(code, r)
-                for r in d_resp.get(_CHART_KEY, []) or []
-                if not daily_cutoff or r.get("dt", "") >= daily_cutoff
-            ]
-            stats["daily_rows"] += upsert_daily_bars(con, bars)
+            if not daily_current:
+                # 일봉 (ka10081) — own rate-limit bucket.
+                d_resp = api.chart.stock_daily_chart(
+                    stk_cd=code, base_dt=base_dt, upd_stkpc_tp="1"
+                )
+                bars = [
+                    _row_to_record(code, r)
+                    for r in d_resp.get(_CHART_KEY, []) or []
+                    if r.get("dt") and (not daily_cutoff or r["dt"] >= daily_cutoff)
+                ]
+                stats["daily_rows"] += upsert_daily_bars(con, bars)
 
             # 수급 (ka10059) — separate TR, separate bucket (no extra throttle).
             s_resp = api.stock_info.investor_institution_by_stock(
@@ -128,6 +142,10 @@ def main() -> int:
         "--resume", action="store_true", help="일봉+최근수급 둘 다 있는 종목 건너뜀"
     )
     parser.add_argument(
+        "--update", action="store_true",
+        help="일봉: 이미 시장 최신 거래일이면 API 호출 스킵 (수급은 매번 재수집)",
+    )
+    parser.add_argument(
         "--all-kinds", action="store_true",
         help="ETF/ETN/리츠/우선주 등 모두 포함 (기본: 보통주만)",
     )
@@ -158,7 +176,8 @@ def main() -> int:
 
     stats = collect(
         api, con, stocks,
-        sd_days=args.sd_days, daily_days=args.daily_days, resume=args.resume,
+        sd_days=args.sd_days, daily_days=args.daily_days,
+        resume=args.resume, update=args.update,
     )
 
     api.close()

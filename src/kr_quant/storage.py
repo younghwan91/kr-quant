@@ -124,6 +124,13 @@ CREATE TABLE IF NOT EXISTS sector_index (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_si_date ON sector_index(date);
+CREATE TABLE IF NOT EXISTS shares_outstanding_history (
+    code               TEXT NOT NULL,
+    date               TEXT NOT NULL,
+    shares_outstanding INTEGER,  -- sqlite INTEGER is dynamically 64-bit already;
+    PRIMARY KEY (code, date)     -- Postgres side (init_timescale.sql) must use BIGINT, not INTEGER(32bit) — 삼성전자(58억주) overflows it
+);
+CREATE INDEX IF NOT EXISTS idx_sh_date ON shares_outstanding_history(date);
 """
 
 
@@ -188,8 +195,16 @@ def _upsert(
             f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders}) "
             f"ON CONFLICT ({','.join(pk_cols)}) DO UPDATE SET {set_clause}"
         )
-        with con.cursor() as cur:
-            cur.executemany(sql, records)
+        try:
+            with con.cursor() as cur:
+                cur.executemany(sql, records)
+        except Exception:
+            # A failed statement leaves the whole Postgres transaction aborted
+            # until rolled back — without this, every later upsert on this
+            # connection fails with InFailedSqlTransaction even for unrelated,
+            # valid records (cascading one bad row into the entire run).
+            con.rollback()
+            raise
     else:
         placeholders = ",".join(["?"] * len(cols))
         sql = f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({placeholders})"
@@ -263,3 +278,118 @@ _SECTOR_INDEX_COLS = [
 def upsert_sector_index(con: Any, records: list[tuple]) -> int:
     """Insert/replace sector_index rows."""
     return _upsert(con, "sector_index", _SECTOR_INDEX_COLS, records)
+
+
+_SHARES_OUTSTANDING_COLS = ["code", "date", "shares_outstanding"]
+
+
+def upsert_shares_outstanding(con: Any, records: list[tuple]) -> int:
+    """Insert/replace shares_outstanding_history rows."""
+    return _upsert(con, "shares_outstanding_history", _SHARES_OUTSTANDING_COLS, records)
+
+
+def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
+    """Market cap for ``code`` on exactly ``date``: close * shares outstanding.
+
+    ``close`` must exist for that exact date (no guessing). Shares outstanding
+    is looked up as the most recent row with ``date <= date`` — never a row
+    dated after the given date — to avoid lookahead bias (e.g. a stock split
+    recorded later must not be applied retroactively to an earlier market cap).
+    Returns ``None`` if either lookup is empty.
+    """
+    ph = "%s" if _is_pg(con) else "?"
+    cur = con.cursor()
+    cur.execute(
+        f"SELECT close FROM daily_bars WHERE code={ph} AND date={ph}",
+        (code, date),
+    )
+    bar_row = cur.fetchone()
+    if bar_row is None:
+        return None
+    close = bar_row[0]
+
+    cur.execute(
+        f"SELECT shares_outstanding FROM shares_outstanding_history "
+        f"WHERE code={ph} AND date<={ph} ORDER BY date DESC LIMIT 1",
+        (code, date),
+    )
+    shares_row = cur.fetchone()
+    if shares_row is None:
+        return None
+    shares = shares_row[0]
+
+    if close is None or shares is None:
+        return None
+    return close * shares
+
+
+def market_cap_asof_bulk(con: Any, df: Any) -> Any:
+    """Vectorized :func:`market_cap_asof` for many ``(code, date)`` rows at once.
+
+    Byte-identical semantics to the per-row function — close comes from
+    ``daily_bars`` on the exact date (NOT any close column the caller's
+    frame may already carry, e.g. ``supply_demand.close``: that is a
+    different, not-necessarily-equal price series in this DB — verified by
+    spot-checking real rows, e.g. code 118000 on 2026-03-25 has
+    ``daily_bars.close=2410`` vs ``supply_demand.close=241``). Shares
+    outstanding is the most recent row with ``date <= date`` (lookahead-safe,
+    same rule as the per-row SQL ``date<=? ORDER BY date DESC LIMIT 1``).
+
+    This issues 2 bulk queries total instead of 2 queries per row —
+    ``market_cap_asof`` called in a per-row Python loop over a multi-year
+    dataset means millions of round trips to Postgres.
+
+    Args:
+        df: Must have ``code`` and ``date`` columns.
+
+    Returns:
+        A ``pandas.Series`` aligned with ``df.index``: ``market_cap`` per
+        row, ``NaN`` where close or shares-outstanding is unavailable
+        (mirrors ``market_cap_asof`` returning ``None``).
+    """
+    import pandas as pd  # noqa: PLC0415 — pandas is a strategy-layer dep, not storage's
+
+    if df.empty:
+        return pd.Series([], dtype=float, index=df.index)
+
+    codes = df["code"].unique().tolist()
+    ph = "%s" if _is_pg(con) else "?"
+    placeholders = ",".join([ph] * len(codes))
+    bars = pd.read_sql_query(
+        f"SELECT code, date, close FROM daily_bars WHERE code IN ({placeholders})",
+        con,
+        params=codes,
+    )
+    bars["date"] = bars["date"].astype(str)
+
+    shares = pd.read_sql_query(
+        f"SELECT code, date, shares_outstanding FROM shares_outstanding_history "
+        f"WHERE code IN ({placeholders})",
+        con,
+        params=codes,
+    )
+    if bars.empty or shares.empty:
+        return pd.Series([float("nan")] * len(df), index=df.index)
+
+    shares["date"] = pd.to_datetime(shares["date"].astype(str))
+    # merge_asof with `by=` still requires the `on` column sorted globally
+    # (not just within each `by` group) — sort by date first, code second.
+    shares = shares.sort_values(["date", "code"])
+
+    d = df[["code"]].reset_index(drop=True).copy()
+    d["date_str"] = df["date"].astype(str).to_numpy()
+    d["_row"] = d.index
+    d = d.merge(bars, left_on=["code", "date_str"], right_on=["code", "date"], how="left")
+    d["date"] = pd.to_datetime(d["date_str"])
+    d_sorted = d.sort_values(["date", "code"])
+
+    merged = pd.merge_asof(
+        d_sorted,
+        shares[["code", "date", "shares_outstanding"]],
+        on="date",
+        by="code",
+        direction="backward",
+    )
+    merged = merged.sort_values("_row")
+    market_cap = (merged["close"] * merged["shares_outstanding"]).to_numpy()
+    return pd.Series(market_cap, index=df.index)

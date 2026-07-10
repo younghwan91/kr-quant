@@ -150,6 +150,8 @@ def collect(
                 stop = False
                 for row in resp.get(_CHART_KEY, []) or []:
                     dt = row.get("dt", "")
+                    if not dt:  # malformed row — skip, don't poison the batch insert
+                        continue
                     if lower and dt <= lower:  # already stored — stop (newest-first)
                         stop = True
                         break

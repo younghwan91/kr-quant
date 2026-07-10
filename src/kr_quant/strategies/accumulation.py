@@ -24,7 +24,7 @@ _RANGE_FLOOR = 0.02
 
 def load_frame(con: sqlite3.Connection) -> pd.DataFrame:
     """Load supply_demand joined with the stock master into a DataFrame."""
-    return pd.read_sql_query(
+    df = pd.read_sql_query(
         """
         SELECT sd.*, s.name, s.market, s.sector
         FROM supply_demand sd
@@ -32,6 +32,12 @@ def load_frame(con: sqlite3.Connection) -> pd.DataFrame:
         """,
         con,
     )
+    # sqlite stores date as TEXT already; Postgres/TimescaleDB returns a real
+    # DATE type, which pandas turns into datetime.date objects — normalize to
+    # the repo-wide string convention so downstream string-keyed lookups
+    # (pivot columns, dict keys, etc.) work the same regardless of backend.
+    df["date"] = df["date"].astype(str)
+    return df
 
 
 def screen(
