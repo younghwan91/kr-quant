@@ -84,6 +84,26 @@ is a genuine regime feature, not a parameter artifact. Combined with the 8-way
 investor robustness and the random/breakout-only nulls, the signal is
 well-generalized.
 
+## Machine learning (does flow add value? — yes, modestly)
+
+`ml/feat_build.py` builds a 20-feature point-in-time matrix (8 investors' 20d &
+60d accumulation, momentum, breakout proximity, ATR, volume surge, size; label =
+forward 60d return) over 254k samples. `ml/train_ml.py` trains LightGBM with an
+anchored walk-forward (train past years, test each future year).
+
+- **Flow features add value over price-only**: mean OOS rank-IC **+0.062** (full)
+  vs **+0.046** (price-only). Feature importance is topped by `atr_pct`, `ret60`,
+  and the **60-day accumulation** features (`acc60_etc_corp/institution/foreign`) —
+  a fully independent method confirming the flow thesis, and telling us
+  accumulation is a **multi-month** phenomenon (60d > 20d).
+- As a **breakout quality filter** (`ml/train_ml_breakout_filter.py`): the top-30%
+  ML-scored breakouts return +7.3% vs +5.4% for all breakouts (fwd60) = **+1.9%p**
+  out-of-sample, helping 2023–2026 but not the 2022 bear.
+- Honest ceiling: OOS predictive power is weak and regime-dependent (strong
+  2020/2025/2026, ~0 in 2022–2024). ML adds a modest edge; it does not create an
+  all-weather alpha. Naive rank-average ensembles *dilute* the signal (+1.1% vs
+  +2.6% single-investor); ML combines them without diluting.
+
 ## Caveats (honest)
 
 - Per-**trade** statistics; not yet a portfolio (position sizing, concurrent-hold

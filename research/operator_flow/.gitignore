@@ -6,3 +6,9 @@ btm/
 bt/
 *.f64
 *.i32
+
+# ML env / data dumps
+ml/mlenv/
+ml/*.f32
+ml/*.i32
+ml/*.i8
