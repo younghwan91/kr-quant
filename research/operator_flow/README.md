@@ -95,6 +95,21 @@ well-generalized.
 - "Stealth accumulation" ≠ literal 세력; it is net investor buying decoupled from
   price. `etc_corp` may include buybacks / corporate strategic stakes.
 
+## Live scanner
+
+`scanner.py` applies the validated signal to the latest trading day and prints
+today's entry candidates with ATR-based stop / half-profit / runner levels:
+
+```bash
+python scanner.py --db <DSN> [--investor etc_corp] [--asof YYYY-MM-DD]
+# code  stealth   close   entry    stop  half_tgt  run_tgt  adv_억
+# 100090  0.228  21450   21450   17383    33651    70256    157
+```
+
+By design it is **selective and low-frequency** — most days yield 0–1 names
+(few stocks break a 20-day high *and* are quietly accumulated), more in trend
+regimes, fewer in weak ones (e.g. mid-2026). Stops/targets are `close ± k·ATR`.
+
 ## Reproduce
 
 ```bash
