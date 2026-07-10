@@ -116,6 +116,23 @@ def test_staggered_backtest_runs_and_reports_payoff():
     assert abs(periods["turnover"].iloc[0] - 1.0 / 3) < 1e-9
 
 
+def test_recommend_holdings_returns_top_mid_large_names():
+    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from kr_quant.strategies.pead import recommend_holdings
+    prices, earnings, dates = _synthetic(n_codes=60)
+    panel = earnings_yoy_panel(earnings, dates)
+    shares = pd.DataFrame([
+        {"code": c, "date": dates[0], "shares_outstanding": (int(c) + 1) * 1000}
+        for c in prices["code"].unique()
+    ])
+    book = recommend_holdings(prices, panel, shares, top_n=5, adv_floor=0,
+                              cap_rank=(10, 40))
+    assert len(book) == 5
+    assert list(book.columns) == ["code", "yoy", "cap_rank", "adv"]
+    assert book["yoy"].is_monotonic_decreasing  # best signal first
+    assert ((book["cap_rank"] > 10) & (book["cap_rank"] <= 40)).all()  # mid-large tier only
+
+
 def test_staggered_cap_tier_restricts_universe():
     from kr_quant.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic(n_codes=60)

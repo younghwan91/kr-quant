@@ -427,6 +427,56 @@ def market_cap_panel(prices: pd.DataFrame, shares: pd.DataFrame) -> pd.DataFrame
     return mc[["code", "date", "market_cap"]]
 
 
+def recommend_holdings(
+    prices: pd.DataFrame,
+    earnings_panel: pd.DataFrame,
+    shares: pd.DataFrame,
+    *,
+    top_n: int = 10,
+    adv_floor: float = 20000.0,
+    adv_window: int = 20,
+    cap_rank: tuple[int, int] = (20, 100),
+    asof: str | None = None,
+) -> pd.DataFrame:
+    """Current recommended book: top-``top_n`` mid-large names by latest YoY.
+
+    Turns the backtest into an operable tool — computes, as of ``asof`` (default:
+    the latest price date), the eligible mid-large tier (``cap_rank`` by market
+    cap among names clearing ``adv_floor`` trailing ADV) and returns the ``top_n``
+    with the highest lookahead-safe earnings-YoY signal.
+
+    Args:
+        prices: Long ``code``/``date``/``close``/``trade_value``.
+        earnings_panel: Output of ``earnings_yoy_panel`` (``code``/``date``/``yoy``).
+        shares: ``code``/``date``/shares-outstanding (for the cap tier).
+        top_n, adv_floor, adv_window, cap_rank: As in the backtest.
+        asof: Date (``YYYY-MM-DD``) to build the book for; default = latest.
+
+    Returns:
+        DataFrame (``code``, ``yoy``, ``cap_rank``, ``adv``) of the recommended
+        equal-weight book, best signal first.
+    """
+    close = _panel(prices, "close")
+    tval = _panel(prices, "trade_value")
+    dates = list(close.columns)
+    t = dates.index(asof) if asof else len(dates) - 1
+    codes = list(close.index)
+    adv = tval.reindex(index=codes, columns=dates).to_numpy(float)[:, max(0, t - adv_window):t].mean(axis=1)
+    price_t = close.to_numpy(float)[:, t]
+    sh = shares.rename(columns={shares.columns[-1]: "sh"}).sort_values("date").groupby("code")["sh"].last()
+    cap = pd.Series(price_t, index=codes) * sh.reindex(codes)
+    yoy = (
+        earnings_panel.pivot_table(index="code", columns="date", values="yoy", aggfunc="first")
+        .reindex(index=codes, columns=dates).to_numpy(float)[:, t]
+    )
+    df = pd.DataFrame({"code": codes, "yoy": yoy, "cap": cap.to_numpy(), "adv": adv}).dropna()
+    df = df[df["adv"] >= adv_floor]
+    df["cap_rank"] = df["cap"].rank(ascending=False)
+    df = df[(df["cap_rank"] > cap_rank[0]) & (df["cap_rank"] <= cap_rank[1])]
+    df = df.sort_values("yoy", ascending=False).head(top_n)
+    return df[["code", "yoy", "cap_rank", "adv"]].reset_index(drop=True)
+
+
 def main() -> int:
     """CLI (``kq-pead``): run the validated tradeable PEAD⊕value backtest.
 
