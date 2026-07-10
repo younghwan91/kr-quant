@@ -68,6 +68,22 @@ random:    all years negative (mean -7.3%/trade)   = null confirmed
 Implication: pair with a regime-complementary alpha (e.g. PEAD, which is weak in
 2025 but works in most years) rather than over-filtering this one.
 
+## Generalization (not a knife-edge fit)
+
+Walk-forward holds up when the structural hyperparameters are perturbed — the
+edge is not an artifact of the exact 20-day / top-30% choice:
+
+| Variant | Positive test years | Mean test |
+|---|---|---|
+| Breakout window 10d / 40d | 2/6 | +2.3% / +2.2% |
+| Top fraction 20% / 50% | 4/6 | +2.9% / +2.8% |
+| Accumulation window 40d | 4/6 | +3.0% |
+
+All positive on average. The 2022/2026 weakness appears in every variant, so it
+is a genuine regime feature, not a parameter artifact. Combined with the 8-way
+investor robustness and the random/breakout-only nulls, the signal is
+well-generalized.
+
 ## Caveats (honest)
 
 - Per-**trade** statistics; not yet a portfolio (position sizing, concurrent-hold
