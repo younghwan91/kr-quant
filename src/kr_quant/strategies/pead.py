@@ -428,6 +428,8 @@ def main() -> int:
     ap.add_argument("--staggered", action="store_true",
                     help="스태거드 진입(권장 실전형태): 3트랜치 엇갈림으로 IR 개선")
     ap.add_argument("--step", type=int, default=20, help="스태거드 트랜치 간격(일)")
+    ap.add_argument("--no-value", action="store_true",
+                    help="가치(E/P) 결합 없이 순수 PEAD만 — 주식수/시총 데이터 불요, 롱온리 실전 권장")
     args = ap.parse_args()
 
     ea = _pd.read_csv(args.earnings_csv, dtype={"code": str, "avail_date": str, "period": str})
@@ -436,15 +438,17 @@ def main() -> int:
     prices = _pd.read_sql_query(
         "SELECT code,date,close,trade_value FROM daily_bars WHERE code = ANY(%(c)s)",
         con, params={"c": codes})
-    shares = _pd.read_sql_query(
+    shares = None if args.no_value else _pd.read_sql_query(
         "SELECT code,date,shares_outstanding FROM shares_outstanding_history WHERE code = ANY(%(c)s)",
         con, params={"c": codes})
     con.close()
     prices["date"] = prices["date"].astype(str)
     dates = sorted(prices["date"].unique())
-    mc = market_cap_panel(prices, shares)
-    sig = combined_signal(ea, mc, dates, value_weight=args.value_weight)
     yoy = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates)
+    # Pure PEAD (--no-value) needs only earnings + prices; the value blend adds a
+    # market-cap (shares) dependency for marginal benefit on the long-only form.
+    sig = None if args.no_value else combined_signal(
+        ea, market_cap_panel(prices, shares), dates, value_weight=args.value_weight)
     if args.staggered and not args.market_neutral:
         _, s = staggered_backtest(
             prices, yoy, signal_panel=sig, horizon=args.horizon, step=args.step,
@@ -456,7 +460,8 @@ def main() -> int:
             cost_one_way=0.0018, long_only=not args.market_neutral, top_n=args.top_n,
             borrow_cost_annual=0.02 if args.market_neutral else 0.0)
         form = "롱숏(중립)" if args.market_neutral else (f"롱온리 집중 top{args.top_n}" if args.top_n else "롱온리 분산")
-    print(f"PEAD⊕가치 | {form} | H={args.horizon} | 유동성>={args.adv_floor:.0f}백만 | 리밸런스 {s['n']}회")
+    strat = "순수 PEAD" if args.no_value else "PEAD⊕가치"
+    print(f"{strat} | {form} | H={args.horizon} | 유동성>={args.adv_floor:.0f}백만 | 리밸런스 {s['n']}회")
     print(f"  누적수익 {s['cum_net']*100:+.0f}%  연Sharpe/IR {s['sharpe']:+.2f}  t {s['t_stat']:+.2f}")
     print(f"  기대값/기간 {s['mean_net']*100:+.2f}%  승률 {s['hit_rate']*100:.0f}%  "
           f"손익비 {s['payoff_ratio']:.2f} (평균이익 {s['avg_win']*100:+.1f}% / 평균손실 {s['avg_loss']*100:+.1f}%)")
