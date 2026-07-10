@@ -12,3 +12,6 @@ ml/mlenv/
 ml/*.f32
 ml/*.i32
 ml/*.i8
+*.parquet
+ml_cache/
+cache/

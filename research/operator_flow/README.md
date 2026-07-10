@@ -104,6 +104,41 @@ anchored walk-forward (train past years, test each future year).
   all-weather alpha. Naive rank-average ensembles *dilute* the signal (+1.1% vs
   +2.6% single-investor); ML combines them without diluting.
 
+## Minervini-style ML classifier (2R / 5% stop / 4 weeks)
+
+For a fast-swing style (tight fixed stop, defined 1:2 reward, ≤4-week hold), the
+fat-tail hold-forever exit does not apply — instead a LightGBM **classifier**
+predicts, per breakout, *"does it hit +10% (2R) before −5% within 20 days?"*
+
+`ml/feat_minervini.py` builds 30 point-in-time features per breakout event —
+8-investor accumulation (20d/60d), momentum (5–120d), **Minervini trend template**
+(close vs MA50/150/200, alignment, distance from 52w high/low), volume
+contraction/surge, ATR/vol, **EPS-YoY fundamentals** (DART, as-of), size.
+`ml/train_minervini.py` trains anchored walk-forward and reports whether the
+ML-selected top-20% breakouts clear the 33.3% win-rate breakeven (`E[R]=3·wr−1`).
+
+Result (walk-forward 2020–2026):
+
+| | base win-rate | ML top-20% | E[R] |
+|---|---|---|---|
+| mean | 32% | **37%** | **+0.11R**, 5/7 years positive |
+
+- ML lifts the win-rate past the 2R breakeven → **first positive version in the
+  fast-swing spec**. Edge is modest (AUC ~0.54) and still weak in 2022/2024.
+- **`eps_yoy` is the #1 feature** — fundamentals genuinely help (E[R] +0.11 with
+  vs +0.09 without). Top features span every family (EPS, 60d accumulation, r120
+  momentum, volume contraction, distance-from-52w-low) — a real multi-factor combo.
+- Next levers: tighter selection (top 5–10%), pyramiding into confirmed winners,
+  more features.
+
+### Feature store (structured cache)
+
+`ml/feature_store.py` computes all 30 features for every (code, date) once and
+writes `features.parquet` (~2.08M rows, 224 MB, zstd, point-in-time, 252-day
+warmup). Every downstream experiment loads the cache instead of recomputing the
+rolling panels — faster iteration and no recompute bugs. Labels stay cheap to
+derive from `daily_bars` on demand.
+
 ## Caveats (honest)
 
 - Per-**trade** statistics; not yet a portfolio (position sizing, concurrent-hold
