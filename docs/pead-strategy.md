@@ -153,6 +153,10 @@ uv run kq-pead --db "$DSN" --earnings-csv earnings.csv \
 - `collectors/dart_earnings.py`: `parse_net_income`, `yoy_growth`, `load_corp_map`, `fetch_net_income`, `main`
 - 테스트: `test_fundamentals.py`, `test_pead.py`, `test_dart_earnings.py` (90 통과, ruff 클린)
 
+## 코스피 멜트업 문제 (비-과최적화 검증)
+
+고정 50/50(중대형 PEAD + 초대형 momentum, 가중치 튜닝 없음)로 초대형 멜트업 대응 시도: 코스피 대비 Sharpe 우위(1.25 vs 1.14), 2026 손실 −43→−22 개선. **그러나 여전히 4/7년·2026 짐** — 초대형 momentum조차 2026 재평가를 완전히 못 잡음(가격이 실적·모멘텀 다 앞섬). **결론: 커브피팅 없이는 극단 대형주 멜트업에서 시총가중 코스피를 못 이긴다 = 초집중 인덱스 이기기의 본질적 난이도.** 진짜 해법은 forward-looking(컨센서스 개정 등 재평가 선반영) 신호 = 신규 데이터 필요.
+
 ## 다음 상승 레버
 
 1. **컨센서스 SUE** (YoY 대리 대신 실제 서프라이즈) — 별도 소스 필요.
