@@ -55,16 +55,58 @@ def parse_consensus(payload: dict) -> tuple[float | None, float | None, str | No
     )
 
 
-def fetch_consensus(code: str, *, retries: int = 3) -> tuple[float | None, float | None, str | None]:
-    """Fetch consensus for one code from Naver (throttle/retry on rate limits)."""
-    req = urllib.request.Request(f"{BASE}/{code}/integration", headers={"User-Agent": UA})
+def parse_estimate(payload: dict) -> tuple[float | None, float | None, str | None]:
+    """Extract forward EPS consensus from a ``finance/annual`` response.
+
+    Naver marks future periods with ``isConsensus == "Y"`` and fills in analyst
+    estimates. This returns next year's **estimated EPS** and the most recent
+    **actual EPS** (prior year), so the caller can form an *expected growth*
+    signal — the forward-looking analogue of PEAD that (unlike backward earnings)
+    can work in mega-caps, where the market prices future expectations.
+
+    Returns:
+        ``(fwd_eps, prev_eps, est_year)`` — estimated EPS for the consensus year,
+        the latest actual EPS, and the estimate year key (e.g. "202612"); or
+        ``(None, None, None)`` if no consensus year / EPS row is present.
+    """
+    fi = payload.get("financeInfo") or {}
+    titles = fi.get("trTitleList") or []
+    cons = [t.get("key") for t in titles if t.get("isConsensus") == "Y"]
+    actuals = [t.get("key") for t in titles if t.get("isConsensus") != "Y"]
+    if not cons:
+        return None, None, None
+    est_year = cons[0]
+    eps_row = next((r for r in fi.get("rowList", [])
+                    if (r.get("title") or {}).get("name") == "EPS"), None)
+    if eps_row is None:
+        return None, None, None
+    cols = eps_row.get("columns") or {}
+    fwd = _to_float((cols.get(est_year) or {}).get("value"))
+    prev = _to_float((cols.get(actuals[-1]) or {}).get("value")) if actuals else None
+    return fwd, prev, est_year
+
+
+def _get_json(url: str, *, retries: int = 3) -> dict | None:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
     for _ in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
-                return parse_consensus(json.loads(r.read().decode()))
+                return json.loads(r.read().decode())
         except Exception:
             time.sleep(1.0)
-    return None, None, None
+    return None
+
+
+def fetch_consensus(code: str) -> tuple[float | None, float | None, str | None]:
+    """Fetch (target_mean, recomm_mean, base_date) for one code from Naver."""
+    d = _get_json(f"{BASE}/{code}/integration")
+    return parse_consensus(d) if d else (None, None, None)
+
+
+def fetch_estimate(code: str) -> tuple[float | None, float | None, str | None]:
+    """Fetch (fwd_eps, prev_eps, est_year) forward consensus for one code."""
+    d = _get_json(f"{BASE}/{code}/finance/annual")
+    return parse_estimate(d) if d else (None, None, None)
 
 
 def main() -> int:
@@ -99,10 +141,14 @@ def main() -> int:
             continue
         tm, rm, bd = fetch_consensus(code)
         time.sleep(args.sleep)
-        if tm is None and rm is None:
+        fe, pe, ey = fetch_estimate(code)
+        time.sleep(args.sleep)
+        if tm is None and rm is None and fe is None:
             continue
-        w.writerow([today, code, tm if tm is not None else "",
-                    rm if rm is not None else "", bd or ""])
+
+        def _s(x: object) -> object:
+            return x if x is not None else ""
+        w.writerow([today, code, _s(tm), _s(rm), bd or "", _s(fe), _s(pe), ey or ""])
         n += 1
         if i % 50 == 0:
             f.flush()
