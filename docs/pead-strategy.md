@@ -111,9 +111,9 @@ uv run kq-pead --db "$DSN" --earnings-csv earnings.csv \
 ## 코드
 
 - `features/fundamentals.py`: `earnings_yoy_panel`, `earnings_yield_panel`, `blend_rank`, `combined_signal`
-- `strategies/pead.py`: `pead_backtest` (long_only·top_n·borrow·signal_panel·fresh_days), `pead_rank_ic`, `market_cap_panel`, `main`
+- `strategies/pead.py`: `pead_backtest` (long_only·top_n·borrow·signal_panel·fresh_days), `staggered_backtest` (권장 실전형), `pead_rank_ic`, `market_cap_panel`, `main`
 - `collectors/dart_earnings.py`: `parse_net_income`, `yoy_growth`, `load_corp_map`, `fetch_net_income`, `main`
-- 테스트: `test_fundamentals.py`, `test_pead.py`, `test_dart_earnings.py` (88 통과)
+- 테스트: `test_fundamentals.py`, `test_pead.py`, `test_dart_earnings.py` (89 통과, ruff 클린)
 
 ## 다음 상승 레버
 
