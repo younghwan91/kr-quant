@@ -1,0 +1,8 @@
+# build artifacts / data dumps
+sim
+sim2_oos
+*.o
+btm/
+bt/
+*.f64
+*.i32
