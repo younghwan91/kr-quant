@@ -76,6 +76,40 @@ def test_sepa_trades_sell_half_and_breakeven():
     assert whole["ret"] < half["ret"]                  # rode it down instead of banking half
 
 
+def test_sepa_trades_staggered_stops():
+    from kr_quant.strategies.minervini_sepa import sepa_trades
+    # Close stays flat (no violations), lows wick down to hit each tranche (96/94/92)
+    # on successive bars → staggered loss = mean(−4,−6,−8) = −6% vs single −5%.
+    lows = {12: 96.0, 13: 94.0, 14: 92.0}
+    n = 18
+    dates = pd.bdate_range("2020-01-01", periods=n).strftime("%Y-%m-%d")
+    prices = pd.DataFrame([{"code": "X", "date": dates[k], "open": 100.0, "high": 100.0,
+                            "low": lows.get(k, 100.0), "close": 100.0, "volume": 1000.0}
+                           for k in range(n)])
+    entries = pd.DataFrame([{"code": "X", "date": dates[9], "pivot": 100.0}])
+    stag = sepa_trades(prices, entries, time_cap=30, staggered=True, tennis=False, sell_half=False).iloc[0]
+    single = sepa_trades(prices, entries, time_cap=30, staggered=False, tennis=False, sell_half=False).iloc[0]
+    assert stag["reason"] == "staggered"
+    assert abs(stag["ret"] - (-0.06)) < 1e-6       # mean of −4/−6/−8
+    assert abs(single["ret"] - (-0.05)) < 1e-6     # single 5% stop
+    assert single["ret"] > stag["ret"]
+
+
+def test_sepa_trades_tennis_ball_cull():
+    from kr_quant.strategies.minervini_sepa import sepa_trades
+    # Enters at 100 then drifts at 99 (above the stop, but never a new high) — a
+    # broken egg → tennis-ball cull after tennis_window; without tennis it rides on.
+    close = [100.0] * 11 + [99.0] * 15
+    dates = pd.bdate_range("2020-01-01", periods=len(close)).strftime("%Y-%m-%d")
+    prices = pd.DataFrame([{"code": "X", "date": d, "open": c, "high": c, "low": c,
+                            "close": c, "volume": 1000.0} for d, c in zip(dates, close)])
+    entries = pd.DataFrame([{"code": "X", "date": dates[9], "pivot": 100.0}])
+    culled = sepa_trades(prices, entries, time_cap=30, tennis=True, tennis_window=10).iloc[0]
+    assert culled["reason"] == "tennis"
+    held = sepa_trades(prices, entries, time_cap=30, tennis=False).iloc[0]
+    assert held["reason"] == "time_cap"
+
+
 def test_sepa_trades_pe_expansion_exit():
     from kr_quant.strategies.minervini_sepa import sepa_trades
     # Gentle rise (no stop/half/climax), but P/E triples from entry → valuation sell.

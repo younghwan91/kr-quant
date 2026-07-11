@@ -92,6 +92,21 @@ def test_book_returns_concentration_tilts_to_high_score_winner():
     assert sized["2020-03"] > sized["2020-02"]
 
 
+def test_book_returns_pyramid_scales_winners():
+    months = [f"2020-{i:02d}" for i in range(1, 9)]        # 8 months
+    prices = _monthly_prices(
+        {"WIN": [100 * 1.1 ** k for k in range(8)],        # big winner (+10%/mo)
+         "FLAT": [100.0] * 8}, months)
+    trades = pd.DataFrame([
+        {"code": "WIN", "entry_date": "2020-01-15", "exit_date": "2020-08-15", "ret": 0.9, "score": 100.0},
+        {"code": "FLAT", "entry_date": "2020-01-15", "exit_date": "2020-08-15", "ret": 0.0, "score": 10.0},
+    ])
+    pyr = book_returns(prices, trades, n_slots=6, pyramid=True)
+    nopyr = book_returns(prices, trades, n_slots=6, pyramid=False)
+    assert pyr["2020-05"] > nopyr["2020-05"]   # winner amplified in later months
+    assert pyr.mean() > nopyr.mean()
+
+
 def test_book_returns_n_slots_caps_active_positions():
     months = [f"2020-{i:02d}" for i in range(1, 5)]
     prices = _monthly_prices(

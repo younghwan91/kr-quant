@@ -26,6 +26,8 @@ from .minervini_exits import (
     violations,
 )
 
+STAGGERED_STOPS = (0.04, 0.06, 0.08)  # −4/−6/−8% tranche stops (frozen)
+
 
 def pivot_fill(open_next: float, high_next: float, pivot: float) -> float | None:
     """Buy-stop fill price for the day after the signal, or ``None`` if unfilled.
@@ -205,6 +207,9 @@ def sepa_trades(
     breakeven: bool = True,
     sell_half_r: float = 2.0,
     pe_panel: pd.DataFrame | None = None,
+    tennis: bool = True,
+    tennis_window: int = 10,
+    staggered: bool = False,
 ) -> pd.DataFrame:
     """Per-trade forward walk from each filled entry, applying Minervini exits.
 
@@ -240,25 +245,30 @@ def sepa_trades(
     cix = {c: k for k, c in enumerate(codes)}
     nD = len(dates)
 
-    out: list[dict] = []
-    for _, f in fills[fills["filled"]].iterrows():
-        i = cix[f["code"]]
-        f0 = didx[str(f["fill_date"])]
-        entry = float(f["fill_price"])
-        stop = hard_stop(entry, pct=stop_pct)
-        half_target = sell_half_level(entry, stop, r=sell_half_r)  # +2R price
-        half_ret = None                                            # banked half return
-        pe_entry = PE[i, f0] if PE is not None else float("nan")   # P/E at entry base
+    def _walk(i: int, f0: int, entry: float, stop0: float) -> tuple[float, float, str, str]:
+        """One sub-position's forward walk under stop ``stop0`` → (ret, price, date, reason)."""
+        stop = stop0
+        half_target = sell_half_level(entry, stop, r=sell_half_r)  # +2R (relative to this stop)
+        half_ret = None
+        pe_entry = PE[i, f0] if PE is not None else float("nan")
+        made_new_high = False
         exit_price = exit_date = reason = None
         for t in range(f0 + 1, min(f0 + time_cap + 1, nD)):
             if not np.isfinite(C[i, t]):
                 continue
+            if H[i, t] > entry:
+                made_new_high = True
             if L[i, t] <= stop:  # stop hit — gap-through fills at the open
                 exit_price = float(min(OPN[i, t], stop) if OPN[i, t] < stop else stop)
                 exit_date, reason = dates[t], "stop"
                 break
             if PE is not None and pe_expansion(PE[i, t], pe_entry):  # valuation overheated
                 exit_price, exit_date, reason = float(C[i, t]), dates[t], "pe_expansion"
+                break
+            # Tennis-ball cull: a healthy leader bounces to a new high within a few days;
+            # a "broken egg" that hasn't by tennis_window is dumped early.
+            if tennis and (t - f0) >= tennis_window and not made_new_high:
+                exit_price, exit_date, reason = float(C[i, t]), dates[t], "tennis"
                 break
             # Sell half at +2R and raise the stop to break-even-or-better (max entry, MA50).
             if sell_half and half_ret is None and H[i, t] >= half_target:
@@ -277,9 +287,20 @@ def sepa_trades(
             exit_price, exit_date, reason = float(C[i, t]), dates[t], "time_cap"
         rem_ret = exit_price / entry - 1.0
         if half_ret is not None:                       # blend: half at 2R, half at final exit
-            ret, reason = 0.5 * half_ret + 0.5 * rem_ret, f"{reason}+half"
+            return 0.5 * half_ret + 0.5 * rem_ret, exit_price, exit_date, f"{reason}+half"
+        return rem_ret, exit_price, exit_date, reason
+
+    out: list[dict] = []
+    for _, f in fills[fills["filled"]].iterrows():
+        i = cix[f["code"]]
+        f0 = didx[str(f["fill_date"])]
+        entry = float(f["fill_price"])
+        if staggered:  # 3 equal tranches at −4/−6/−8% → average their outcomes
+            legs = [_walk(i, f0, entry, hard_stop(entry, pct=p)) for p in STAGGERED_STOPS]
+            ret = float(np.mean([leg[0] for leg in legs]))
+            exit_price, exit_date, reason = legs[-1][1], legs[-1][2], "staggered"
         else:
-            ret = rem_ret
+            ret, exit_price, exit_date, reason = _walk(i, f0, entry, hard_stop(entry, pct=stop_pct))
         out.append({
             "code": f["code"], "entry_date": f["fill_date"], "entry_price": entry,
             "exit_date": exit_date, "exit_price": exit_price, "ret": ret, "reason": reason,

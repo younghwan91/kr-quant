@@ -85,17 +85,21 @@ def book_returns(
     pilot_frac: float = PILOT_FRAC,
     r_threshold: float = STOP_PCT,
     sized: bool = True,
+    pyramid: bool = True,
+    pyramid_max_adds: int = 2,
+    pyramid_step: float = 1.0,
 ) -> pd.Series:
     """Monthly return series of a concurrent ≤ ``n_slots`` book, marked to market.
 
     ``n_slots`` is the concentration lever (frozen 6 for arm A vs large for the
     diversified / shell arms). When ``sized`` and ``trades`` carry a ``score``
-    column, the frozen Minervini sizing is applied: active positions are ranked by
-    score and weighted ``top_w`` (best) / ``rest_w`` (others), and each position is
-    scaled by ``pilot_frac`` until it is ``r_threshold`` in profit (the pilot→full
-    progression). Without a ``score`` column it stays equal-weight (backward-compat).
-    Weights are renormalized each month, so the book is always fully invested across
-    its active names. More-than-``n_slots`` opens keep the earliest-entered.
+    column, the frozen Minervini exposure curve is applied per position along one
+    proof axis: ``pilot_frac`` before +1R (pilot), full at +1R, then **pyramid** —
+    ``+pyramid_step`` exposure at each +2R milestone up to ``pyramid_max_adds`` (add
+    to winners). Positions are ranked by score and weighted ``top_w`` (best) /
+    ``rest_w`` (others). Without a ``score`` column it stays equal-weight
+    (backward-compat). Weights are renormalized each month; more-than-``n_slots``
+    opens keep the earliest-entered.
     """
     mret = _monthly_returns(prices)
     months = list(mret.columns)
@@ -127,7 +131,13 @@ def book_returns(
             r = mret.at[code, m] if code in mret.index else np.nan
             if not np.isfinite(r):
                 continue
-            scale = 1.0 if (not apply_sizing or cum[k] >= r_threshold) else pilot_frac
+            if not apply_sizing or cum[k] >= r_threshold:
+                # full at +1R, then +pyramid_step exposure per +2R milestone (winners scale up).
+                adds = min(int((cum[k] + 1e-9) // (2.0 * r_threshold)), pyramid_max_adds) \
+                    if (apply_sizing and pyramid) else 0
+                scale = 1.0 + adds * pyramid_step
+            else:
+                scale = pilot_frac                            # pilot: half until proven (+1R)
             w = base_w[k] * scale
             num += w * r
             den += w
