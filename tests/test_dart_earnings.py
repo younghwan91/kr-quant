@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+from datetime import datetime
 
+from kr_quant import storage
 from kr_quant.collectors import dart_earnings
 from kr_quant.collectors.dart_earnings import (
+    _recent_quarters,
+    _universe_query,
     collect_keys,
     parse_financials,
     parse_net_income,
@@ -121,3 +126,92 @@ def test_fetch_no_rotation_when_single_key_limited(monkeypatch):
     ki = [0]
     assert dart_earnings._fetch_with_rotation(["only"], ki, "c", 2023, 1) == (None,) * 6
     assert ki[0] == 0
+
+
+def test_write_row_db_upserts_correct_tuple_shape(monkeypatch):
+    # --db-table 모드는 CSV 대신 storage.upsert_earnings를 호출해야 하고,
+    # 튜플 순서는 _EARNINGS_COLS(code,period,avail_date,netinc,netinc_prior,
+    # revenue,revenue_prior,op_income,op_income_prior)와 정확히 일치해야 한다.
+    calls = []
+    monkeypatch.setattr(
+        "kr_quant.storage.upsert_earnings",
+        lambda con, records: calls.append((con, records)),
+    )
+    dart_earnings._write_row_db(
+        "fake_con", "005930", "2023Q1", "20230515",
+        200.0, 100.0, 1000.0, 900.0, 300.0, 250.0,
+    )
+    assert len(calls) == 1
+    con, records = calls[0]
+    assert con == "fake_con"
+    assert records == [("005930", "2023Q1", "20230515", 200.0, 100.0, 1000.0, 900.0, 300.0, 250.0)]
+
+
+def test_write_row_db_passes_none_through_without_coercion(monkeypatch):
+    # DB 경로는 CSV 경로(_c)와 달리 빈 값을 ""로 바꾸지 않고 None 그대로 넘겨야 한다
+    # (psycopg2/sqlite가 NULL을 네이티브로 처리하므로).
+    calls = []
+    monkeypatch.setattr(
+        "kr_quant.storage.upsert_earnings",
+        lambda con, records: calls.append(records),
+    )
+    dart_earnings._write_row_db(
+        "fake_con", "005930", "2023Q1", "20230515",
+        -50.0, None, None, None, None, None,
+    )
+    assert calls == [[("005930", "2023Q1", "20230515", -50.0, None, None, None, None, None)]]
+
+
+def test_recent_quarters_within_year():
+    assert _recent_quarters(2, today=datetime(2026, 7, 11)) == [(2026, 3), (2026, 2)]
+
+
+def test_recent_quarters_crosses_year_boundary():
+    assert _recent_quarters(5, today=datetime(2026, 7, 11)) == [
+        (2026, 3), (2026, 2), (2026, 1), (2025, 4), (2025, 3),
+    ]
+
+
+def test_universe_query_all_codes_has_no_limit():
+    args = argparse.Namespace(all_codes=True, top_n=800)
+    sql, params = _universe_query(args)
+    assert "LIMIT" not in sql
+    assert "DISTINCT" in sql
+    assert params == {}
+
+
+def test_universe_query_default_uses_top_n_limit():
+    args = argparse.Namespace(all_codes=False, top_n=800)
+    sql, params = _universe_query(args)
+    assert "LIMIT %(n)s" in sql
+    assert params == {"n": 800}
+
+
+def test_db_table_resume_skips_existing_code_period_but_fetches_new_period(monkeypatch):
+    con = storage.connect(":memory:")
+    storage.upsert_earnings(con, [
+        ("005930", "2023Q1", "20230515", 200.0, 100.0, 1000.0, 900.0, 300.0, 250.0),
+    ])
+
+    import pandas as pd
+    existing = pd.read_sql_query("SELECT code, period FROM earnings", con)
+    done_periods = set(zip(existing["code"], existing["period"]))
+    assert ("005930", "2023Q1") in done_periods
+
+    calls = []
+
+    def fake_fetch_with_rotation(keys, ki, corp_code, year, q):
+        calls.append((corp_code, year, q))
+        return (10.0, 5.0, None, None, None, None)
+
+    monkeypatch.setattr(dart_earnings, "_fetch_with_rotation", fake_fetch_with_rotation)
+
+    code, corp_code = "005930", "00126380"
+    periods = [(2023, 1), (2023, 2)]
+    for year, q in periods:
+        period = f"{year}Q{q}"
+        if (code, period) in done_periods:
+            continue
+        dart_earnings._fetch_with_rotation([], [0], corp_code, year, q)
+
+    assert calls == [(corp_code, 2023, 2)]

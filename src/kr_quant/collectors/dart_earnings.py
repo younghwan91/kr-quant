@@ -26,6 +26,7 @@ import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from typing import Any
 
 from ..features.fundamentals import available_date
 
@@ -210,15 +211,65 @@ def _fetch_with_rotation(
     return parse_financials(payload)
 
 
+def _write_row_csv(w: "csv.writer", code: str, period: str, avail: str,
+                    ni: float | None, nip: float | None, rev: float | None,
+                    revp: float | None, oi: float | None, oip: float | None) -> None:
+    """첫 6컬럼(code,period,avail,netinc,prior,yoy)은 기존 스키마 불변 —
+    매출·영업이익 4컬럼을 뒤에 append (하위호환: 기존 리더는 앞 6개만 읽음)."""
+    def _c(x):
+        return x if x is not None else ""
+    w.writerow([code, period, avail, ni, _c(nip),
+                _c(yoy_growth(ni, nip)), _c(rev), _c(revp), _c(oi), _c(oip)])
+
+
+def _write_row_db(con: Any, code: str, period: str, avail: str,
+                   ni: float | None, nip: float | None, rev: float | None,
+                   revp: float | None, oi: float | None, oip: float | None) -> None:
+    from ..storage import upsert_earnings
+    upsert_earnings(con, [(code, period, avail, ni, nip, rev, revp, oi, oip)])
+
+
+def _recent_quarters(n: int, today: datetime | None = None) -> list[tuple[int, int]]:
+    """The N most recent (year, quarter) pairs counting back from the current quarter."""
+    today = today or datetime.now()
+    year = today.year
+    q = (today.month - 1) // 3 + 1
+    out: list[tuple[int, int]] = []
+    for _ in range(n):
+        out.append((year, q))
+        q -= 1
+        if q == 0:
+            q = 4
+            year -= 1
+    return out
+
+
+def _universe_query(args: argparse.Namespace) -> tuple[str, dict]:
+    """SQL (+ params) selecting the code universe: all ``daily_bars`` codes or top-N liquid."""
+    if args.all_codes:
+        return "SELECT DISTINCT code FROM daily_bars ORDER BY code", {}
+    return (
+        "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
+        "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
+        {"n": args.top_n},
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="DART 분기 순이익 YoY 수집 (PEAD 입력)")
-    ap.add_argument("--out", required=True, help="출력 CSV 경로")
+    ap.add_argument("--out", required=False, default=None, help="출력 CSV 경로")
     ap.add_argument("--top-n", type=int, default=800, help="유동성 상위 N종목")
     ap.add_argument("--from-year", type=int, default=2018)
     ap.add_argument("--to-year", type=int, default=datetime.now().year)
     ap.add_argument("--db", default=None)
     ap.add_argument("--sleep", type=float, default=0.25)
+    ap.add_argument("--db-table", action="store_true", help="CSV 대신 earnings 테이블에 직접 upsert")
+    ap.add_argument("--all-codes", action="store_true", help="유동성 상위 N 대신 daily_bars 전종목 사용")
+    ap.add_argument("--recent-quarters", type=int, default=None,
+                    help="전체 이력 대신 최근 N개 분기만 수집 (현재+직전, 일일 증분용)")
     args = ap.parse_args()
+    if not args.db_table and not args.out:
+        ap.error("--out is required unless --db-table is set")
 
     keys = collect_keys()
     if not keys:
@@ -228,15 +279,18 @@ def main() -> int:
     import pandas as pd
     from ..storage import connect, default_db_path
     con = connect(args.db or str(default_db_path()))
-    top = pd.read_sql_query(
-        "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
-        "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
-        con, params={"n": args.top_n})
-    con.close()
+    q_sql, q_params = _universe_query(args)
+    top = pd.read_sql_query(q_sql, con, params=q_params)
+    done_periods: set[tuple[str, str]] = set()
+    if args.db_table:
+        existing = pd.read_sql_query("SELECT code, period FROM earnings", con)
+        done_periods = set(zip(existing["code"], existing["period"]))
+    else:
+        con.close()
     codes = top["code"].tolist()
 
     done: set[str] = set()
-    if os.path.exists(args.out):
+    if args.out and os.path.exists(args.out):
         for r in csv.reader(open(args.out)):
             if r:
                 done.add(r[0])
@@ -244,33 +298,44 @@ def main() -> int:
     print(f"corp_map {len(corp)} | universe {len(codes)} | keys {len(keys)} | already done {len(done)}", flush=True)
 
     today = datetime.now().strftime("%Y%m%d")
-    f = open(args.out, "a", newline="")
-    w = csv.writer(f)
+    f = open(args.out, "a", newline="") if args.out else None
+    w = csv.writer(f) if f else None
     n = 0
+    if args.recent_quarters is not None:
+        periods = _recent_quarters(args.recent_quarters)
+    else:
+        periods = [(year, q) for year in range(args.from_year, args.to_year + 1) for q in (1, 2, 3, 4)]
+
     for i, code in enumerate(codes, 1):
-        if code in done or code not in corp:
+        if not args.db_table and (code in done or code not in corp):
             continue
-        for year in range(args.from_year, args.to_year + 1):
-            for q in (1, 2, 3, 4):
-                avail = available_date(f"{year}-{QUARTER_END[q][:2]}-{QUARTER_END[q][2:]}",
-                                       is_annual=(q == 4)).strftime("%Y%m%d")
-                if avail > today:
-                    continue
-                ni, nip, rev, revp, oi, oip = _fetch_with_rotation(keys, ki, corp[code], year, q)
-                time.sleep(args.sleep)
-                if ni is None:
-                    continue
-                # 첫 6컬럼(code,period,avail,netinc,prior,yoy)은 기존 스키마 불변 —
-                # 매출·영업이익 4컬럼을 뒤에 append (하위호환: 기존 리더는 앞 6개만 읽음).
-                def _c(x):  # noqa: E306 — 빈값은 CSV 공란
-                    return x if x is not None else ""
-                w.writerow([code, f"{year}Q{q}", avail, ni, _c(nip),
-                            _c(yoy_growth(ni, nip)), _c(rev), _c(revp), _c(oi), _c(oip)])
-                n += 1
-        f.flush()
+        if args.db_table and code not in corp:
+            continue
+        for year, q in periods:
+            avail = available_date(f"{year}-{QUARTER_END[q][:2]}-{QUARTER_END[q][2:]}",
+                                   is_annual=(q == 4)).strftime("%Y%m%d")
+            if avail > today:
+                continue
+            period = f"{year}Q{q}"
+            if args.db_table and (code, period) in done_periods:
+                continue
+            ni, nip, rev, revp, oi, oip = _fetch_with_rotation(keys, ki, corp[code], year, q)
+            time.sleep(args.sleep)
+            if ni is None:
+                continue
+            if args.db_table:
+                _write_row_db(con, code, period, avail, ni, nip, rev, revp, oi, oip)
+            else:
+                _write_row_csv(w, code, period, avail, ni, nip, rev, revp, oi, oip)
+            n += 1
+        if f:
+            f.flush()
         if i % 25 == 0:
             print(f"[{i}/{len(codes)}] rows={n}", flush=True)
-    f.close()
+    if f:
+        f.close()
+    if args.db_table:
+        con.close()
     print(f"DONE rows={n}", flush=True)
     return 0
 

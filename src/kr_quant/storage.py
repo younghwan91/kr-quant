@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS shares_outstanding_history (
     PRIMARY KEY (code, date)     -- Postgres side (init_timescale.sql) must use BIGINT, not INTEGER(32bit) — 삼성전자(58억주) overflows it
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON shares_outstanding_history(date);
+CREATE TABLE IF NOT EXISTS earnings (
+    code            TEXT NOT NULL,
+    period          TEXT NOT NULL,   -- e.g. '2020Q1'
+    avail_date      TEXT,            -- lookahead-safe availability date (period-end + filing lag)
+    netinc          REAL,
+    netinc_prior    REAL,
+    revenue         REAL,
+    revenue_prior   REAL,
+    op_income       REAL,
+    op_income_prior REAL,
+    PRIMARY KEY (code, period)
+);
+CREATE INDEX IF NOT EXISTS idx_earnings_avail_date ON earnings(avail_date);
 """
 
 
@@ -286,6 +299,17 @@ _SHARES_OUTSTANDING_COLS = ["code", "date", "shares_outstanding"]
 def upsert_shares_outstanding(con: Any, records: list[tuple]) -> int:
     """Insert/replace shares_outstanding_history rows."""
     return _upsert(con, "shares_outstanding_history", _SHARES_OUTSTANDING_COLS, records)
+
+
+_EARNINGS_COLS = [
+    "code", "period", "avail_date",
+    "netinc", "netinc_prior", "revenue", "revenue_prior", "op_income", "op_income_prior",
+]
+
+
+def upsert_earnings(con: Any, records: list[tuple]) -> int:
+    """Insert/replace earnings rows (tuples ordered by _EARNINGS_COLS)."""
+    return _upsert(con, "earnings", _EARNINGS_COLS, records, pk_cols=("code", "period"))
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
