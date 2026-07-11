@@ -256,6 +256,11 @@ def code33_panel(
     f["yoy_margin"] = margin - margin_prior  # margin expansion vs prior year (pp)
     f["_avail"] = pd.to_datetime(f[avail_col].astype(str).str.replace("-", ""), format="%Y%m%d")
     f = f.dropna(subset=["_avail"]).sort_values(["code", "_avail"])
+    # Defensive de-dup: a duplicated quarter injects a 0-diff into the acceleration
+    # walk and permanently breaks the strict-increase test (Code 33 goes all-False).
+    # Keep one row per (code, quarter) — by ``period`` when present, else by avail date.
+    dedup_key = ["code", "period"] if "period" in f.columns else ["code", "_avail"]
+    f = f.drop_duplicates(subset=dedup_key, keep="first")
 
     quarter_rows: list[pd.DataFrame] = []
     for code, g in f.groupby("code", sort=False):
