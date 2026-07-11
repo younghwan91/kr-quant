@@ -104,10 +104,12 @@ def run_experiment(
     ent_b = sepa_entries(px, p["largecap"], rs, c33, use_vcp=False, use_code33=False, rs_min=0.0)
 
     arms = {
-        "A": book_returns(px, trades_a, n_slots=N_CONCENTRATED),
-        "A-diversified": book_returns(px, trades_a, n_slots=N_DIVERSIFIED),
-        "A-noVCP": book_returns(px, sepa_trades(px, ent_avcp), n_slots=N_CONCENTRATED),
-        "B-shell": book_returns(px, sepa_trades(px, ent_b), n_slots=N_DIVERSIFIED),
+        # A / A-noVCP: frozen concentration sizing (6 names, 25/15, pilot).
+        "A": book_returns(px, trades_a, n_slots=N_CONCENTRATED, sized=True),
+        # A-diversified / B-shell: deployed-style diversified equal-weight (isolates concentration).
+        "A-diversified": book_returns(px, trades_a, n_slots=N_DIVERSIFIED, sized=False),
+        "A-noVCP": book_returns(px, sepa_trades(px, ent_avcp), n_slots=N_CONCENTRATED, sized=True),
+        "B-shell": book_returns(px, sepa_trades(px, ent_b), n_slots=N_DIVERSIFIED, sized=False),
         "C-bench": benchmark_returns(px, p["cap"]),
     }
     # Align every arm on the union of months so the paired bootstrap is well-defined.
@@ -115,6 +117,136 @@ def run_experiment(
     idx = pd.Index(months, name="month")
     arms = {k: r.reindex(idx).fillna(0.0) for k, r in arms.items()}
     return compare_arms(arms, deployed="B-shell", benchmark="C-bench", **boot_kwargs)
+
+
+def robustness_sweep(
+    prices: pd.DataFrame,
+    earnings: pd.DataFrame,
+    shares: pd.DataFrame,
+    *,
+    adjust: bool = True,
+    concentrations: tuple[int, ...] = (4, 6, 8),
+    stops: tuple[float, ...] = (0.04, 0.05, 0.08),
+    use_vcp: bool = True,
+) -> pd.DataFrame:
+    """Curve-fit check: arm A's Sharpe/CAGR across frozen-neighbour hyperparameters.
+
+    The verdict uses the frozen (6 names, 5% stop); this sweeps the *alternates*
+    (``SEPA_FAITHFUL_DESIGN.md`` §견고성 부록 — **for robustness only, not selection**)
+    to show the frozen point is not a knife-edge. Concentration varies the book slots,
+    stop varies the hard stop in :func:`sepa_trades`.
+
+    Returns:
+        Long DataFrame ``concentration``/``stop``/``sharpe``/``cagr``/``n_trades`` —
+        one row per (concentration, stop). NaN Sharpe means the gate produced no
+        trades at that setting (not a failure — the faithful gates are very selective).
+    """
+    from .sepa_compare import _ann_sharpe, _cagr, book_returns
+
+    p = build_panels(prices, earnings, shares, adjust=adjust)
+    ent = sepa_entries(p["prices"], p["smallmid"], p["rs"], p["code33"],
+                       use_vcp=use_vcp, use_code33=True)
+    rows: list[dict] = []
+    for stop in stops:
+        trades = sepa_trades(p["prices"], ent, stop_pct=stop)
+        for n in concentrations:
+            r = book_returns(p["prices"], trades, n_slots=n, sized=True)
+            rows.append({"concentration": n, "stop": stop,
+                         "sharpe": _ann_sharpe(r.to_numpy(float)),
+                         "cagr": _cagr(r.to_numpy(float)), "n_trades": len(trades)})
+    return pd.DataFrame(rows)
+
+
+def _md_table(df: pd.DataFrame) -> str:
+    """Render a DataFrame (indexed by arm) as a GitHub-flavoured markdown table."""
+    cols = list(df.columns)
+    head = "| arm | " + " | ".join(cols) + " |"
+    sep = "|" + "---|" * (len(cols) + 1)
+    lines = [head, sep]
+    for idx, row in df.iterrows():
+        cells = []
+        for c in cols:
+            val = row[c]
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                cells.append("—" if pd.isna(val) else f"{val:+.3f}")
+            else:
+                cells.append(str(val))
+        lines.append(f"| {idx} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def write_verdict(
+    table: pd.DataFrame,
+    verdicts: dict,
+    *,
+    out_path: str | None = None,
+    focus: str = "A",
+    diversified: str = "A-diversified",
+) -> str:
+    """Apply the pre-registered pass/fail criteria and render the verdict markdown.
+
+    Criteria (``SEPA_FAITHFUL_DESIGN.md`` §판정 기준): (i) paired A−B ΔSharpe CI
+    excludes 0, (ii) A−C ΔSharpe CI excludes 0, (iii) regime signs 3+/4, (v) A beats
+    A-diversified (concentration justified — point comparison of the table Sharpes).
+    A ``focus`` arm that produced no trades (NaN Sharpe) is reported as 평가불가.
+
+    Args:
+        table: ``compare_arms`` table (arm × sharpe/cagr/max_dd/pos_regimes).
+        verdicts: ``compare_arms`` verdicts dict (paired bootstrap per arm).
+        out_path: If given, also write the markdown there.
+        focus, diversified: The deploy-candidate arm and its diversified sibling.
+
+    Returns:
+        The verdict markdown string.
+    """
+    lines = ["# 미너비니 SEPA 충실 재현 — 판정", "",
+             "## 다-arm 비교 (분할조정·PIT·페어드 부트스트랩)", "", _md_table(table), "",
+             f"## 사전등록 판정 — focus arm: `{focus}`", ""]
+    sh = table.loc[focus, "sharpe"] if focus in table.index else float("nan")
+    if not (isinstance(sh, (int, float)) and pd.notna(sh)):
+        lines.append(f"- **평가불가 (무거래)** — `{focus}`가 거래를 내지 못함(게이트 과선별). 판정 보류.")
+        md = "\n".join(lines) + "\n"
+        if out_path:
+            from pathlib import Path
+            Path(out_path).write_text(md)
+        return md
+
+    v = verdicts.get(focus, {})
+    ci_b = v.get("vs_deployed", {}).get("d_sharpe_ci", (float("nan"), float("nan")))
+    ci_c = v.get("vs_benchmark", {}).get("d_sharpe_ci", (float("nan"), float("nan")))
+    crit_i = bool(v.get("beats_b_ci", False))
+    crit_ii = bool(v.get("beats_c_ci", False))
+    pos, tot = _parse_regimes(table.loc[focus, "pos_regimes"])
+    crit_iii = tot > 0 and pos * 4 >= 3 * tot          # ≥ 3/4 of the buckets positive
+    sh_div = table.loc[diversified, "sharpe"] if diversified in table.index else float("nan")
+    crit_v = bool(pd.notna(sh_div) and sh > sh_div)
+
+    def _mark(ok: bool) -> str:
+        return "✅ 승" if ok else "❌ 무"
+
+    lines += [
+        f"- (i) A−B ΔSharpe CI [{ci_b[0]:+.2f}, {ci_b[1]:+.2f}] (0 배제) → {_mark(crit_i)} — 배포판 초과",
+        f"- (ii) A−C ΔSharpe CI [{ci_c[0]:+.2f}, {ci_c[1]:+.2f}] (0 배제) → {_mark(crit_ii)} — 벤치 초과",
+        f"- (iii) 레짐 부호 {pos}/{tot} (3+/4 필요) → {_mark(crit_iii)}",
+        f"- (v) A Sharpe {sh:+.2f} vs A-diversified {sh_div:+.2f} → {_mark(crit_v)} — 집중 정당",
+        "",
+    ]
+    overall = crit_i and crit_ii and crit_iii and crit_v
+    lines.append(f"## 종합: {'✅ 배포후보 갱신 (A 승)' if overall else '❌ 기존 배포판 유지 (A 미달)'}")
+    md = "\n".join(lines) + "\n"
+    if out_path:
+        from pathlib import Path
+        Path(out_path).write_text(md)
+    return md
+
+
+def _parse_regimes(s: object) -> tuple[int, int]:
+    """Parse a ``"3/4"`` regime string → ``(3, 4)``; ``(0, 0)`` if unparseable."""
+    try:
+        a, b = str(s).split("/")
+        return int(a), int(b)
+    except (ValueError, AttributeError):
+        return 0, 0
 
 
 def main() -> int:
@@ -131,6 +263,7 @@ def main() -> int:
                     help="DART 실적 CSV: code,period,avail_date,netinc,netinc_prior,"
                          "revenue,revenue_prior,op_income,op_income_prior")
     ap.add_argument("--no-adjust", action="store_true", help="분할조정 생략(디버그용)")
+    ap.add_argument("--verdict-out", default=None, help="사전등록 판정 markdown 저장 경로")
     args = ap.parse_args()
 
     # dart_earnings.main() CSV 스키마 (10칸, 헤더 없음): yoy가 6번째 — code33_panel엔
@@ -157,6 +290,9 @@ def main() -> int:
         b, c = v["vs_deployed"]["d_sharpe_ci"], v["vs_benchmark"]["d_sharpe_ci"]
         print(f"{arm}: vs B-shell ΔSharpe CI [{b[0]:+.2f},{b[1]:+.2f}] {'승' if v['beats_b_ci'] else '무'} | "
               f"vs C-bench CI [{c[0]:+.2f},{c[1]:+.2f}] {'승' if v['beats_c_ci'] else '무'}")
+    if args.verdict_out:
+        write_verdict(table, verdicts, out_path=args.verdict_out)
+        print(f"\n판정 문서 저장 → {args.verdict_out}")
     return 0
 
 

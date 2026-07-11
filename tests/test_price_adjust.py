@@ -1,6 +1,5 @@
 """price_adjust: 기업행동 백조정 유틸 테스트."""
 
-import numpy as np
 import pandas as pd
 
 from kr_quant.price_adjust import adjust_prices, diagnose

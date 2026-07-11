@@ -60,6 +60,7 @@ def pivot_fills(entries: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict] = []
     for _, e in entries.iterrows():
         code, sig_date, pivot = e["code"], str(e["date"]), float(e["pivot"])
+        score = float(e["score"]) if "score" in entries.columns and pd.notna(e.get("score")) else float("nan")
         i = didx.get(sig_date)
         fill_date = fill_price = None
         if i is not None and i + 1 < len(dates) and code in op.index:
@@ -68,13 +69,13 @@ def pivot_fills(entries: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
             if fp is not None:
                 fill_date, fill_price = nd, fp
         rows.append({
-            "code": code, "date": sig_date, "pivot": pivot,
+            "code": code, "date": sig_date, "pivot": pivot, "score": score,
             "fill_date": fill_date,
             "fill_price": fill_price if fill_price is not None else float("nan"),
             "filled": fill_price is not None,
         })
     return pd.DataFrame(
-        rows, columns=["code", "date", "pivot", "fill_date", "fill_price", "filled"])
+        rows, columns=["code", "date", "pivot", "score", "fill_date", "fill_price", "filled"])
 
 
 def _lookup(panel: pd.DataFrame, value: str, codes, dates) -> np.ndarray:
@@ -174,8 +175,10 @@ def sepa_entries(
                 if not vcp["is_vcp"]:
                     continue
                 pivot = vcp["pivot"]
-            rows.append({"code": code, "date": dates[t], "pivot": float(pivot)})
-    return pd.DataFrame(rows, columns=["code", "date", "pivot"])
+            # score = RS at signal, carried through for concentration sizing downstream.
+            rows.append({"code": code, "date": dates[t], "pivot": float(pivot),
+                         "score": float(rs[i, t])})
+    return pd.DataFrame(rows, columns=["code", "date", "pivot", "score"])
 
 
 def sepa_trades(
@@ -237,6 +240,7 @@ def sepa_trades(
             "code": f["code"], "entry_date": f["fill_date"], "entry_price": entry,
             "exit_date": exit_date, "exit_price": exit_price,
             "ret": exit_price / entry - 1.0, "reason": reason,
+            "score": f.get("score", float("nan")),  # RS score for concentration sizing
         })
     return pd.DataFrame(out)
 

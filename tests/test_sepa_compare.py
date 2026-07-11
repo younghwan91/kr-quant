@@ -9,6 +9,7 @@ from kr_quant.strategies.sepa_compare import (
     _ann_sharpe,
     _cagr,
     _max_drawdown,
+    book_returns,
     compare_arms,
     monthly_book_returns,
     paired_bootstrap,
@@ -63,6 +64,57 @@ def test_paired_bootstrap_ties_include_zero():
     res = paired_bootstrap(a, b, n_boot=500, seed=0)
     lo, hi = res["d_sharpe_ci"]
     assert lo < 0 < hi                          # CI spans 0 → not a win
+
+
+def _monthly_prices(paths: dict[str, list[float]], months: list[str]) -> pd.DataFrame:
+    rows = []
+    for code, closes in paths.items():
+        for m, c in zip(months, closes):
+            rows.append({"code": code, "date": f"{m}-15", "close": c})
+    return pd.DataFrame(rows)
+
+
+def test_book_returns_concentration_tilts_to_high_score_winner():
+    months = [f"2020-{i:02d}" for i in range(1, 8)]        # 7 months → 6 monthly returns
+    prices = _monthly_prices(
+        {"WIN": [100 * 1.1 ** k for k in range(7)],        # +10%/mo
+         "LOSE": [100 * 0.9 ** k for k in range(7)]}, months)  # −10%/mo
+    trades = pd.DataFrame([
+        {"code": "WIN", "entry_date": "2020-01-15", "exit_date": "2020-07-15", "ret": 0.77, "score": 100.0},
+        {"code": "LOSE", "entry_date": "2020-01-15", "exit_date": "2020-07-15", "ret": -0.47, "score": 10.0},
+    ])
+    sized = book_returns(prices, trades, n_slots=6, sized=True)
+    equal = book_returns(prices, trades, n_slots=6, sized=False)
+    assert not np.allclose(sized.to_numpy(), equal.to_numpy())
+    assert equal.mean() == 0.0 or abs(equal.mean()) < 1e-9   # +10/−10 equal-weight ≈ flat
+    assert sized.mean() > equal.mean()                        # concentration tilts to the winner
+    # pilot: tilt grows once WIN is proven (+1R) and LOSE stays in pilot half.
+    assert sized["2020-03"] > sized["2020-02"]
+
+
+def test_book_returns_n_slots_caps_active_positions():
+    months = [f"2020-{i:02d}" for i in range(1, 5)]
+    prices = _monthly_prices(
+        {"WIN": [100 * 1.1 ** k for k in range(4)],
+         "LOSE": [100 * 0.9 ** k for k in range(4)]}, months)
+    trades = pd.DataFrame([   # WIN listed first → earliest-entered kept when slots are scarce
+        {"code": "WIN", "entry_date": "2020-01-15", "exit_date": "2020-04-15", "ret": 0.3, "score": 50.0},
+        {"code": "LOSE", "entry_date": "2020-01-15", "exit_date": "2020-04-15", "ret": -0.3, "score": 50.0},
+    ])
+    book1 = book_returns(prices, trades, n_slots=1, sized=False)
+    assert book1["2020-02"] > 0.09   # only WIN held (≈ +10%), not averaged with LOSE to 0
+
+
+def test_book_returns_backward_compatible_without_score():
+    # No score column → equal-weight, no sizing (old behavior).
+    months = [f"2020-{i:02d}" for i in range(1, 5)]
+    prices = _monthly_prices({"A": [100, 110, 121, 133], "B": [100, 90, 81, 73]}, months)
+    trades = pd.DataFrame([
+        {"code": "A", "entry_date": "2020-01-15", "exit_date": "2020-04-15", "ret": 0.33},
+        {"code": "B", "entry_date": "2020-01-15", "exit_date": "2020-04-15", "ret": -0.27},
+    ])
+    b = book_returns(prices, trades, n_slots=6)   # sized default True but no score → equal
+    assert abs(b["2020-02"]) < 1e-9               # +10/−10 equal-weight = 0
 
 
 def test_compare_arms_table_and_verdicts():

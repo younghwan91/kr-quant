@@ -43,7 +43,7 @@ def test_sepa_entries_gates_uptrend_only():
         code33=pd.DataFrame(columns=["code", "date", "is_code33"]),
         use_vcp=False, use_code33=False,   # A₋VCP-style relaxation for a constructible smoke
     )
-    assert list(ent.columns) == ["code", "date", "pivot"]
+    assert list(ent.columns) == ["code", "date", "pivot", "score"]   # score = RS at signal
     assert not ent.empty
     assert set(ent["code"]) == {"UP"}          # only the trend-template + high-RS name
     assert (ent["pivot"] > 0).all()

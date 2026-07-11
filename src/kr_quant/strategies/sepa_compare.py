@@ -17,6 +17,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .minervini_sizing import PILOT_FRAC, REST_WEIGHT, STOP_PCT, TOP_WEIGHT
+
 PPY = 12  # periods per year (monthly return series)
 
 
@@ -73,26 +75,64 @@ def _monthly_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return last.pct_change(axis=1)
 
 
-def book_returns(prices: pd.DataFrame, trades: pd.DataFrame, *, n_slots: int = 6) -> pd.Series:
-    """Monthly return series of a concurrent equal-weight book (≤ ``n_slots`` names).
+def book_returns(
+    prices: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    n_slots: int = 6,
+    top_w: float = TOP_WEIGHT,
+    rest_w: float = REST_WEIGHT,
+    pilot_frac: float = PILOT_FRAC,
+    r_threshold: float = STOP_PCT,
+    sized: bool = True,
+) -> pd.Series:
+    """Monthly return series of a concurrent ≤ ``n_slots`` book, marked to market.
 
-    Marks positions to market monthly (from :func:`_monthly_returns`) over each
-    trade's hold window — a proper portfolio return, unlike the realized-at-exit
-    :func:`monthly_book_returns`. ``n_slots`` is the concentration lever: the frozen
-    6 for arm A vs a large number for the diversified A₋집중 / deployed-shell arms.
-    When more than ``n_slots`` positions are open, the earliest-entered are held.
+    ``n_slots`` is the concentration lever (frozen 6 for arm A vs large for the
+    diversified / shell arms). When ``sized`` and ``trades`` carry a ``score``
+    column, the frozen Minervini sizing is applied: active positions are ranked by
+    score and weighted ``top_w`` (best) / ``rest_w`` (others), and each position is
+    scaled by ``pilot_frac`` until it is ``r_threshold`` in profit (the pilot→full
+    progression). Without a ``score`` column it stays equal-weight (backward-compat).
+    Weights are renormalized each month, so the book is always fully invested across
+    its active names. More-than-``n_slots`` opens keep the earliest-entered.
     """
     mret = _monthly_returns(prices)
     months = list(mret.columns)
+    idx = pd.Index(months, name="month")
     if trades.empty or not months:
-        return pd.Series(0.0, index=pd.Index(months, name="month"), name="ret")
-    held = [(t["code"], str(t["entry_date"])[:7], str(t["exit_date"])[:7])
-            for _, t in trades.sort_values("entry_date").iterrows()]
+        return pd.Series(0.0, index=idx, name="ret")
+    tr = trades.sort_values("entry_date").reset_index(drop=True)
+    apply_sizing = sized and "score" in tr.columns
+    pos = [{"code": t["code"], "f": str(t["entry_date"])[:7], "x": str(t["exit_date"])[:7],
+            "score": float(t["score"]) if apply_sizing and pd.notna(t.get("score")) else np.nan}
+           for _, t in tr.iterrows()]
+    cum = [0.0] * len(pos)  # cumulative return since entry, per position (for pilot)
+
     out = {}
     for m in months:
-        active = [c for c, f, x in held if f <= m <= x][:n_slots]
-        vals = [mret.at[c, m] for c in active if c in mret.index and np.isfinite(mret.at[c, m])]
-        out[m] = float(np.mean(vals)) if vals else 0.0
+        active = [k for k, p in enumerate(pos) if p["f"] <= m <= p["x"]][:n_slots]
+        if not active:
+            out[m] = 0.0
+            continue
+        if apply_sizing:
+            order = sorted(active, key=lambda k: pos[k]["score"] if np.isfinite(pos[k]["score"]) else -1e18,
+                           reverse=True)
+            base_w = {order[0]: top_w, **{k: rest_w for k in order[1:]}}
+        else:
+            base_w = {k: 1.0 for k in active}
+        num = den = 0.0
+        for k in active:
+            code = pos[k]["code"]
+            r = mret.at[code, m] if code in mret.index else np.nan
+            if not np.isfinite(r):
+                continue
+            scale = 1.0 if (not apply_sizing or cum[k] >= r_threshold) else pilot_frac
+            w = base_w[k] * scale
+            num += w * r
+            den += w
+            cum[k] = (1.0 + cum[k]) * (1.0 + r) - 1.0  # update after using prior cum
+        out[m] = num / den if den > 0 else 0.0
     return pd.Series(out, name="ret").rename_axis("month")
 
 
