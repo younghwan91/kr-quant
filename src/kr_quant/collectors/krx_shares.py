@@ -146,7 +146,10 @@ def _trading_dates(con: object, start: str | None, end: str | None) -> list[str]
         f"ORDER BY date",
         (ph_start, ph_end),
     )
-    return [r[0] for r in cur.fetchall()]
+    # Postgres returns native `date` objects (not str) for a DATE column —
+    # str() gives the same 'YYYY-MM-DD' either way, so downstream `.replace("-", "")`
+    # always hits the str method instead of accidentally calling date.replace().
+    return [str(r[0]) for r in cur.fetchall()]
 
 
 def main() -> int:
