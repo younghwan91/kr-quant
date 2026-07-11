@@ -117,6 +117,8 @@ def main() -> int:
         print("오늘 조건을 만족하는 후보 없음")
         return 0
     print(f"세력 매집+돌파 후보 ({args.investor}, {len(res)}종목) — 진입/손절/반절/러너:")
+    print("※ 진입은 신호 확정(종가) 다음 거래일 '시가'. 아래 close/entry는 참고가이며,")
+    print("  실제 손절·목표는 체결(익일 시가) 기준으로 재계산할 것. (종가진입은 룩어헤드)")
     print(res.to_string(index=False))
     return 0
 
