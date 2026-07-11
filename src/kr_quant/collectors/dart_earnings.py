@@ -34,6 +34,10 @@ BASE = "https://opendart.fss.or.kr/api"
 QUARTER_REPORT = {1: "11013", 2: "11012", 3: "11014", 4: "11011"}
 QUARTER_END = {1: "0331", 2: "0630", 3: "0930", 4: "1231"}
 NET_INCOME_ACCOUNTS = ("당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익")
+# 매출·영업이익 계정명 (krx-fundamentals-api ACCOUNT_MAP 준용) — Code33(EPS·매출·마진
+# 3분기 연속 가속) 재현의 매출·마진 소스. 동일 ``fnlttSinglAcnt`` 응답에서 함께 온다.
+REVENUE_ACCOUNTS = ("매출액", "수익(매출액)", "영업수익")
+OP_INCOME_ACCOUNTS = ("영업이익", "영업이익(손실)")
 
 
 def _to_float(s: object) -> float | None:
@@ -42,6 +46,27 @@ def _to_float(s: object) -> float | None:
         return float(txt)
     except ValueError:
         return None
+
+
+def _pick(rows: list[dict], names: tuple[str, ...]) -> tuple[float | None, float | None]:
+    """First (current, prior-year) amounts whose ``account_nm`` is in ``names``.
+
+    Shared by :func:`parse_net_income` and :func:`parse_financials`. Mirrors the
+    original net-income scan: fill prior even before current is found, and stop
+    at the first row that yields a current amount.
+    """
+    cur = prior = None
+    for row in rows:
+        if row.get("account_nm", "").strip() in names:
+            v = _to_float(row.get("thstrm_amount"))
+            vp = _to_float(row.get("frmtrm_amount"))
+            if v is not None:
+                cur = v
+            if vp is not None:
+                prior = vp
+            if cur is not None:
+                break
+    return cur, prior
 
 
 def parse_net_income(payload: dict) -> tuple[float | None, float | None]:
@@ -59,18 +84,35 @@ def parse_net_income(payload: dict) -> tuple[float | None, float | None]:
     """
     if payload.get("status") != "000":
         return None, None
-    ni = nip = None
-    for row in payload.get("list", []):
-        if row.get("account_nm", "").strip() in NET_INCOME_ACCOUNTS:
-            v = _to_float(row.get("thstrm_amount"))
-            vp = _to_float(row.get("frmtrm_amount"))
-            if v is not None:
-                ni = v
-            if vp is not None:
-                nip = vp
-            if ni is not None:
-                break
-    return ni, nip
+    return _pick(payload.get("list", []), NET_INCOME_ACCOUNTS)
+
+
+def parse_financials(
+    payload: dict,
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
+    """Extract net income + revenue + operating income (current & prior) at once.
+
+    The Code33 SEPA filter needs EPS **and** revenue **and** margin acceleration;
+    revenue and operating income ride along in the same ``fnlttSinglAcnt`` payload
+    as net income, so one parse yields all three. Margin = op_income / revenue is
+    derived downstream (Phase 1), keeping this a pure extractor.
+
+    Args:
+        payload: Parsed DART JSON (same shape as :func:`parse_net_income`).
+
+    Returns:
+        ``(netinc, netinc_prior, revenue, revenue_prior, op_income, op_income_prior)``.
+        Any leg absent from the report is ``None`` — a net-income-only response
+        yields the net-income pair with the revenue/op-income legs ``None`` (no
+        crash), and ``status != "000"`` yields all six ``None``.
+    """
+    if payload.get("status") != "000":
+        return None, None, None, None, None, None
+    rows = payload.get("list", [])
+    ni, nip = _pick(rows, NET_INCOME_ACCOUNTS)
+    rev, revp = _pick(rows, REVENUE_ACCOUNTS)
+    oi, oip = _pick(rows, OP_INCOME_ACCOUNTS)
+    return ni, nip, rev, revp, oi, oip
 
 
 def yoy_growth(netinc: float | None, prior: float | None) -> float | None:
@@ -121,11 +163,21 @@ def load_corp_map(api_key: str) -> dict[str, str]:
 
 def fetch_net_income(api_key: str, corp_code: str, year: int, quarter: int) -> tuple[float | None, float | None]:
     """Fetch (current, prior) net income for one corp/year/quarter from DART."""
-    payload = _get_json(f"{BASE}/fnlttSinglAcnt.json", {
+    return parse_net_income(_fetch_payload(api_key, corp_code, year, quarter))
+
+
+def _fetch_payload(api_key: str, corp_code: str, year: int, quarter: int) -> dict:
+    return _get_json(f"{BASE}/fnlttSinglAcnt.json", {
         "crtfc_key": api_key, "corp_code": corp_code,
         "bsns_year": str(year), "reprt_code": QUARTER_REPORT[quarter],
     })
-    return parse_net_income(payload)
+
+
+def fetch_financials(
+    api_key: str, corp_code: str, year: int, quarter: int,
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
+    """Fetch net income + revenue + operating income (current & prior) in one call."""
+    return parse_financials(_fetch_payload(api_key, corp_code, year, quarter))
 
 
 def main() -> int:
@@ -173,12 +225,16 @@ def main() -> int:
                                        is_annual=(q == 4)).strftime("%Y%m%d")
                 if avail > today:
                     continue
-                ni, nip = fetch_net_income(api_key, corp[code], year, q)
+                ni, nip, rev, revp, oi, oip = fetch_financials(api_key, corp[code], year, q)
                 time.sleep(args.sleep)
                 if ni is None:
                     continue
-                w.writerow([code, f"{year}Q{q}", avail, ni, nip if nip is not None else "",
-                            yoy_growth(ni, nip) if yoy_growth(ni, nip) is not None else ""])
+                # 첫 6컬럼(code,period,avail,netinc,prior,yoy)은 기존 스키마 불변 —
+                # 매출·영업이익 4컬럼을 뒤에 append (하위호환: 기존 리더는 앞 6개만 읽음).
+                def _c(x):  # noqa: E306 — 빈값은 CSV 공란
+                    return x if x is not None else ""
+                w.writerow([code, f"{year}Q{q}", avail, ni, _c(nip),
+                            _c(yoy_growth(ni, nip)), _c(rev), _c(revp), _c(oi), _c(oip)])
                 n += 1
         f.flush()
         if i % 25 == 0:
