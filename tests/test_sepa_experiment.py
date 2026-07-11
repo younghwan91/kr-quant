@@ -114,6 +114,36 @@ def test_write_verdict_writes_file(tmp_path):
     assert out.exists() and "배포후보 갱신" in out.read_text()
 
 
+def test_write_verdict_preserves_curated_history_on_rerun(tmp_path):
+    # Regression guard for the 2026-07-12 incident: a rerun of write_verdict must
+    # not wipe hand-written interpretation notes appended below the history marker.
+    from kr_quant.strategies.sepa_experiment import HISTORY_MARKER
+
+    out = tmp_path / "VERDICT.md"
+    write_verdict(_verdict_table(1.2), _verdicts(True, True), out_path=str(out))
+    curated = f"\n{HISTORY_MARKER}\n\n## 손으로 쓴 해석\n중요한 발견입니다.\n"
+    out.write_text(out.read_text().split(HISTORY_MARKER)[0] + curated)
+
+    write_verdict(_verdict_table(0.9), _verdicts(False, False), out_path=str(out))
+    text = out.read_text()
+    assert "중요한 발견입니다" in text          # curated note survived the rerun
+    assert "❌ 기존 배포판 유지" in text         # table/verdict above the marker did update
+
+
+def test_write_verdict_no_trade_path_also_preserves_history(tmp_path):
+    from kr_quant.strategies.sepa_experiment import HISTORY_MARKER
+
+    out = tmp_path / "VERDICT.md"
+    write_verdict(_verdict_table(1.2), _verdicts(True, True), out_path=str(out))
+    curated = f"\n{HISTORY_MARKER}\n\n## 보존되어야 함\n"
+    out.write_text(out.read_text().split(HISTORY_MARKER)[0] + curated)
+
+    write_verdict(_verdict_table(float("nan")), _verdicts(False, False), out_path=str(out))
+    text = out.read_text()
+    assert "보존되어야 함" in text
+    assert "평가불가 (무거래)" in text
+
+
 def test_benchmark_arm_is_nonflat():
     # C-bench (cap-weighted) should move with the synthetic market (not all zeros).
     prices, earnings, shares = _synth()

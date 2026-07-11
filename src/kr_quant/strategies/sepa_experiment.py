@@ -183,6 +183,26 @@ def _md_table(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+HISTORY_MARKER = "<!-- SEPA_VERDICT_HISTORY: content below this line is preserved across write_verdict reruns -->"
+
+
+def _write_preserving_history(md: str, out_path: str) -> None:
+    """Write ``md`` to ``out_path``, keeping any hand-written content that follows
+    :data:`HISTORY_MARKER` in the existing file (interpretation notes, judgment-call
+    logs, etc. that ``write_verdict`` itself never generates — see the 2026-07-12
+    incident where a rerun silently wiped several rounds of curated analysis)."""
+    from pathlib import Path
+
+    p = Path(out_path)
+    history = ""
+    if p.exists():
+        old = p.read_text()
+        idx = old.find(HISTORY_MARKER)
+        if idx != -1:
+            history = old[idx:]
+    p.write_text(md + (("\n" + history) if history else f"\n{HISTORY_MARKER}\n"))
+
+
 def write_verdict(
     table: pd.DataFrame,
     verdicts: dict,
@@ -198,14 +218,19 @@ def write_verdict(
     A-diversified (concentration justified — point comparison of the table Sharpes).
     A ``focus`` arm that produced no trades (NaN Sharpe) is reported as 평가불가.
 
+    ``out_path`` writes are **history-preserving**: any existing content in the file
+    at or after :data:`HISTORY_MARKER` survives a rerun untouched — only the
+    auto-generated table/verdict above the marker is replaced. Append curated
+    interpretation notes below the marker and they will not be lost on the next run.
+
     Args:
         table: ``compare_arms`` table (arm × sharpe/cagr/max_dd/pos_regimes).
         verdicts: ``compare_arms`` verdicts dict (paired bootstrap per arm).
-        out_path: If given, also write the markdown there.
+        out_path: If given, also write the markdown there (history-preserving).
         focus, diversified: The deploy-candidate arm and its diversified sibling.
 
     Returns:
-        The verdict markdown string.
+        The verdict markdown string (auto-generated portion only, not the history).
     """
     lines = ["# 미너비니 SEPA 충실 재현 — 판정", "",
              "## 다-arm 비교 (분할조정·PIT·페어드 부트스트랩)", "", _md_table(table), "",
@@ -215,8 +240,7 @@ def write_verdict(
         lines.append(f"- **평가불가 (무거래)** — `{focus}`가 거래를 내지 못함(게이트 과선별). 판정 보류.")
         md = "\n".join(lines) + "\n"
         if out_path:
-            from pathlib import Path
-            Path(out_path).write_text(md)
+            _write_preserving_history(md, out_path)
         return md
 
     v = verdicts.get(focus, {})
@@ -243,8 +267,7 @@ def write_verdict(
     lines.append(f"## 종합: {'✅ 배포후보 갱신 (A 승)' if overall else '❌ 기존 배포판 유지 (A 미달)'}")
     md = "\n".join(lines) + "\n"
     if out_path:
-        from pathlib import Path
-        Path(out_path).write_text(md)
+        _write_preserving_history(md, out_path)
     return md
 
 
