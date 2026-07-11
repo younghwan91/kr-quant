@@ -17,7 +17,13 @@ import pandas as pd
 
 from ..features.base_count import base_count
 from ..features.vcp import detect_vcp
-from .minervini_exits import climax_run, hard_stop, violations
+from .minervini_exits import (
+    breakeven_plus_stop,
+    climax_run,
+    hard_stop,
+    sell_half_level,
+    violations,
+)
 
 
 def pivot_fill(open_next: float, high_next: float, pivot: float) -> float | None:
@@ -194,18 +200,24 @@ def sepa_trades(
     stop_pct: float = 0.05,
     ma_exit_window: int = 50,
     time_cap: int = 200,
+    sell_half: bool = True,
+    breakeven: bool = True,
+    sell_half_r: float = 2.0,
 ) -> pd.DataFrame:
     """Per-trade forward walk from each filled entry, applying Minervini exits.
 
     Fills each signal via :func:`pivot_fills` (t+1 buy-stop), then walks forward and
     exits on the first of: hard stop (gap-through fills at the open), a violation
     (MA break on volume / lower lows), a climax run (sell into strength), or the
-    ``time_cap``. Returns one row per filled trade — a per-trade skeleton for the
-    arm comparison (portfolio concurrency/sizing layers on top later).
+    ``time_cap``. When ``sell_half`` the position sells **half at +``sell_half_r``R**
+    (the returned ``ret`` blends the half taken at the 2R target with the remainder
+    at final exit); when ``breakeven`` the stop is raised to ``max(entry, MA50)``
+    once 2R is reached (never let a real gain become a loss).
 
     Returns:
         Long DataFrame ``code``/``entry_date``/``entry_price``/``exit_date``/
-        ``exit_price``/``ret``/``reason``.
+        ``exit_price``/``ret``/``reason`` (``reason`` ``+half`` suffix when a half
+        was banked at 2R).
     """
     fills = pivot_fills(entries, prices)
     close = _panel(prices, "close")
@@ -213,9 +225,11 @@ def sepa_trades(
     didx = {d: k for k, d in enumerate(dates)}
     C = close.to_numpy(float)
     OPN = _panel(prices, "open").reindex(index=codes, columns=dates).to_numpy(float)
+    H = _panel(prices, "high").reindex(index=codes, columns=dates).to_numpy(float)
     L = _panel(prices, "low").reindex(index=codes, columns=dates).to_numpy(float)
     V = prices.pivot_table(index="code", columns="date", values="volume", aggfunc="first").reindex(
         index=codes, columns=dates).to_numpy(float)
+    ma50 = pd.DataFrame(C.T).rolling(ma_exit_window, min_periods=1).mean().to_numpy()  # for breakeven
     cix = {c: k for k, c in enumerate(codes)}
     nD = len(dates)
 
@@ -225,6 +239,8 @@ def sepa_trades(
         f0 = didx[str(f["fill_date"])]
         entry = float(f["fill_price"])
         stop = hard_stop(entry, pct=stop_pct)
+        half_target = sell_half_level(entry, stop, r=sell_half_r)  # +2R price
+        half_ret = None                                            # banked half return
         exit_price = exit_date = reason = None
         for t in range(f0 + 1, min(f0 + time_cap + 1, nD)):
             if not np.isfinite(C[i, t]):
@@ -233,6 +249,12 @@ def sepa_trades(
                 exit_price = float(min(OPN[i, t], stop) if OPN[i, t] < stop else stop)
                 exit_date, reason = dates[t], "stop"
                 break
+            # Sell half at +2R and raise the stop to break-even-or-better (max entry, MA50).
+            if sell_half and half_ret is None and H[i, t] >= half_target:
+                half_ret = half_target / entry - 1.0
+                if breakeven:
+                    raised = breakeven_plus_stop(entry, float(ma50[t, i]), r_reached=True)
+                    stop = max(stop, raised)
             window = C[i, max(0, t - ma_exit_window):t + 1]
             vol_w = V[i, max(0, t - ma_exit_window):t + 1]
             if violations(window, vol_w, ma_window=ma_exit_window) or climax_run(C[i, :t + 1]):
@@ -242,10 +264,14 @@ def sepa_trades(
         if exit_price is None:  # timed out — mark to last available bar
             t = min(f0 + time_cap, nD - 1)
             exit_price, exit_date, reason = float(C[i, t]), dates[t], "time_cap"
+        rem_ret = exit_price / entry - 1.0
+        if half_ret is not None:                       # blend: half at 2R, half at final exit
+            ret, reason = 0.5 * half_ret + 0.5 * rem_ret, f"{reason}+half"
+        else:
+            ret = rem_ret
         out.append({
             "code": f["code"], "entry_date": f["fill_date"], "entry_price": entry,
-            "exit_date": exit_date, "exit_price": exit_price,
-            "ret": exit_price / entry - 1.0, "reason": reason,
+            "exit_date": exit_date, "exit_price": exit_price, "ret": ret, "reason": reason,
             "score": f.get("score", float("nan")),  # RS score for concentration sizing
         })
     return pd.DataFrame(out)

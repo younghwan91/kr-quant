@@ -57,6 +57,25 @@ def test_sepa_entries_base_count_filters_late_bases():
     assert len(on) < len(off)         # late bases actually filtered
 
 
+def test_sepa_trades_sell_half_and_breakeven():
+    from kr_quant.strategies.minervini_sepa import sepa_trades
+    # entry 100, stop 95, +2R target = 110. Price hits 111 (sells half at 110, raises
+    # stop to break-even), then falls back through it → remainder ≈ break-even.
+    close = [100.0] * 11 + [106.0, 111.0, 102.0, 99.0, 99.0, 99.0, 99.0, 99.0, 99.0]
+    dates = pd.bdate_range("2020-01-01", periods=len(close)).strftime("%Y-%m-%d")
+    prices = pd.DataFrame([{"code": "X", "date": d, "open": c, "high": c, "low": c,
+                            "close": c, "volume": 1000.0} for d, c in zip(dates, close)])
+    entries = pd.DataFrame([{"code": "X", "date": dates[9], "pivot": 100.0}])
+
+    half = sepa_trades(prices, entries, time_cap=20, sell_half=True, breakeven=True).iloc[0]
+    assert half["reason"].endswith("+half")            # a half was banked at 2R
+    assert abs(half["ret"] - 0.045) < 0.01             # ½·(+10%) + ½·(≈break-even)
+
+    whole = sepa_trades(prices, entries, time_cap=20, sell_half=False).iloc[0]
+    assert "+half" not in whole["reason"]              # no partial exit
+    assert whole["ret"] < half["ret"]                  # rode it down instead of banking half
+
+
 def test_sepa_entries_gates_uptrend_only():
     # Strong uptrend passes the trend template + RS; a flat name fails both.
     n = 300
