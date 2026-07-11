@@ -164,6 +164,18 @@ CREATE TABLE IF NOT EXISTS minervini_scan (
     codes       TEXT,   -- 콤마구분 진입후보 코드 (없으면 빈 문자열)
     PRIMARY KEY (date)
 );
+CREATE TABLE IF NOT EXISTS daily_bars_adjusted (
+    code        TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    open        REAL,   -- price_adjust.adjust_prices()의 back-adjust 배수 적용 후이므로
+    high        REAL,   -- daily_bars(원자료, INTEGER)와 달리 REAL — 분할비율이 실수라 정수로
+    low         REAL,   -- 안 떨어짐(예: 1주→4주 분할이면 종가가 1/4배가 됨)
+    close       REAL,
+    volume      INTEGER,      -- 기본은 미조정 원본 거래량 그대로(adjust_volume=False)
+    trade_value INTEGER,      -- 거래대금은 가격조정과 무관(가격×수량이 아니라 원 보고값)
+    PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_dba_date ON daily_bars_adjusted(date);
 """
 
 
@@ -348,6 +360,11 @@ _MINERVINI_SCAN_COLS = ["date", "breadth", "regime", "n_candidates", "codes"]
 def upsert_minervini_scan(con: Any, records: list[tuple]) -> int:
     """Insert/replace minervini_scan rows (tuples ordered by _MINERVINI_SCAN_COLS)."""
     return _upsert(con, "minervini_scan", _MINERVINI_SCAN_COLS, records, pk_cols=("date",))
+
+
+def upsert_daily_bars_adjusted(con: Any, records: list[tuple]) -> int:
+    """Insert/replace daily_bars_adjusted rows (tuples ordered by DAILY_BAR_COLUMNS)."""
+    return _upsert(con, "daily_bars_adjusted", DAILY_BAR_COLUMNS, records)
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:

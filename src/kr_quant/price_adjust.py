@@ -29,6 +29,8 @@ CLI: `python -m kr_quant.price_adjust --db <DSN>` 로 진단 리포트 출력.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -113,13 +115,48 @@ def diagnose(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
+    """Recompute back-adjusted OHLC for ALL of ``daily_bars`` and upsert into
+    ``daily_bars_adjusted``.
+
+    Back-adjustment must see a code's *entire* history to place each split
+    factor correctly (a split detected today changes the adjustment applied to
+    every earlier date for that code) — so this always recomputes from scratch
+    over the full table rather than incrementally, and re-upserts every row
+    (existing (code,date) rows are overwritten via the natural-key upsert, so a
+    later-discovered split correctly revises previously-adjusted historical
+    values). Cheap enough to run periodically (weekly) since daily_bars is a
+    few million rows, not billions.
+    """
+    from .storage import upsert_daily_bars_adjusted
+
+    df = pd.read_sql(
+        "SELECT code,date,open,high,low,close,volume,trade_value FROM daily_bars", con)
+    df["date"] = df["date"].astype(str)
+    adjusted = adjust_prices(df, adjust_volume=adjust_volume)
+    records = list(
+        adjusted[["code", "date", "open", "high", "low", "close", "volume", "trade_value"]]
+        .itertuples(index=False, name=None)
+    )
+    return upsert_daily_bars_adjusted(con, records)
+
+
 def main() -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="기업행동 미조정 진단 리포트")
+    ap = argparse.ArgumentParser(description="기업행동 미조정 진단 리포트 / DB 조정가 테이블 재생성")
     ap.add_argument("--db", default=None)
+    ap.add_argument("--rebuild-db", action="store_true",
+                    help="진단만 하지 않고 daily_bars_adjusted 테이블을 전체 재계산해 upsert")
     args = ap.parse_args()
     from kr_quant.storage import connect, default_db_path
     con = connect(args.db or str(default_db_path()))
+
+    if args.rebuild_db:
+        n = rebuild_adjusted_table(con)
+        print(f"daily_bars_adjusted 재생성 완료: {n}행 upsert")
+        con.close()
+        return 0
+
     df = pd.read_sql("SELECT code,date,close FROM daily_bars", con)
     con.close()
     df["date"] = df["date"].astype(str)

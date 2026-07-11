@@ -2,7 +2,8 @@
 
 import pandas as pd
 
-from kr_quant.price_adjust import adjust_prices, diagnose
+from kr_quant import storage
+from kr_quant.price_adjust import adjust_prices, diagnose, rebuild_adjusted_table
 
 
 def _series(closes, code="A"):
@@ -63,3 +64,31 @@ def test_ohlc_scaled_together():
     # 분할 이전 high/low 도 동일 배수(0.25)로 조정
     assert abs(adj.iloc[2]["high"] - 25.5) < 1e-6
     assert abs(adj.iloc[2]["low"] - 24.5) < 1e-6
+
+
+def test_rebuild_adjusted_table_writes_back_adjusted_rows_to_db():
+    con = storage.connect(":memory:")
+    storage.upsert_daily_bars(con, [
+        ("005930", "2021-01-01", 80, 82, 78, 80, 1000, 80000),
+        ("005930", "2021-01-02", 90, 92, 88, 90, 1000, 90000),
+        ("005930", "2021-01-03", 100, 102, 98, 100, 1000, 100000),
+        ("005930", "2021-01-04", 25, 26, 24, 25, 4000, 100000),  # 4:1 split day
+        ("005930", "2021-01-05", 26, 27, 25, 26, 4000, 104000),
+        ("005930", "2021-01-06", 27, 28, 26, 27, 4000, 108000),
+        ("005930", "2021-01-07", 28, 29, 27, 28, 4000, 112000),
+    ])
+
+    n = rebuild_adjusted_table(con)
+    assert n == 7
+
+    import pandas as pd
+    adj = pd.read_sql_query(
+        "SELECT * FROM daily_bars_adjusted ORDER BY date", con)
+    # pre-split day is back-adjusted to the post-split scale (~25), not the raw 100
+    assert abs(adj.iloc[2]["close"] - 25.0) < 0.5
+    # post-split rows are unchanged
+    assert abs(adj.iloc[3]["close"] - 25.0) < 1e-6
+    # volume/trade_value are untouched (adjust_volume defaults to False)
+    assert adj.iloc[0]["volume"] == 1000
+    assert adj.iloc[0]["trade_value"] == 80000
+    con.close()
