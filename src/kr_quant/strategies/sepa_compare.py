@@ -64,6 +64,69 @@ def monthly_book_returns(trades: pd.DataFrame, months: list[str]) -> pd.Series:
     return by_month.reindex(idx).fillna(0.0).rename("ret")
 
 
+def _monthly_returns(prices: pd.DataFrame) -> pd.DataFrame:
+    """Per-code monthly returns (code × ``YYYY-MM``) from the last close each month."""
+    p = prices[["code", "date", "close"]].copy()
+    p["close"] = p["close"].abs()
+    p["month"] = p["date"].astype(str).str.slice(0, 7)
+    last = p.sort_values("date").groupby(["code", "month"])["close"].last().unstack("month")
+    return last.pct_change(axis=1)
+
+
+def book_returns(prices: pd.DataFrame, trades: pd.DataFrame, *, n_slots: int = 6) -> pd.Series:
+    """Monthly return series of a concurrent equal-weight book (≤ ``n_slots`` names).
+
+    Marks positions to market monthly (from :func:`_monthly_returns`) over each
+    trade's hold window — a proper portfolio return, unlike the realized-at-exit
+    :func:`monthly_book_returns`. ``n_slots`` is the concentration lever: the frozen
+    6 for arm A vs a large number for the diversified A₋집중 / deployed-shell arms.
+    When more than ``n_slots`` positions are open, the earliest-entered are held.
+    """
+    mret = _monthly_returns(prices)
+    months = list(mret.columns)
+    if trades.empty or not months:
+        return pd.Series(0.0, index=pd.Index(months, name="month"), name="ret")
+    held = [(t["code"], str(t["entry_date"])[:7], str(t["exit_date"])[:7])
+            for _, t in trades.sort_values("entry_date").iterrows()]
+    out = {}
+    for m in months:
+        active = [c for c, f, x in held if f <= m <= x][:n_slots]
+        vals = [mret.at[c, m] for c in active if c in mret.index and np.isfinite(mret.at[c, m])]
+        out[m] = float(np.mean(vals)) if vals else 0.0
+    return pd.Series(out, name="ret").rename_axis("month")
+
+
+def benchmark_returns(prices: pd.DataFrame, cap_panel: pd.DataFrame) -> pd.Series:
+    """Cap-weighted monthly index-proxy return (arm C) — the honest benchmark.
+
+    Each month weights every name's monthly return by its market cap at the prior
+    month-end (as-of, no look-ahead), mirroring a cap-weighted KOSPI proxy.
+    """
+    mret = _monthly_returns(prices)
+    months = list(mret.columns)
+    cap = cap_panel[["code", "date", "market_cap"]].copy()
+    cap["month"] = cap["date"].astype(str).str.slice(0, 7)
+    mcap = cap.sort_values("date").groupby(["code", "month"])["market_cap"].last().unstack("month")
+    out = {}
+    for k, m in enumerate(months):
+        if k == 0:
+            out[m] = 0.0
+            continue
+        prev = months[k - 1]
+        w = mcap[prev] if prev in mcap.columns else None
+        r = mret[m] if m in mret.columns else None
+        if w is None or r is None:
+            out[m] = 0.0
+            continue
+        common = w.dropna().index.intersection(r.dropna().index)
+        if len(common) == 0 or w.reindex(common).sum() <= 0:
+            out[m] = 0.0
+            continue
+        wt = w.reindex(common) / w.reindex(common).sum()
+        out[m] = float((wt * r.reindex(common)).sum())
+    return pd.Series(out, name="ret").rename_axis("month")
+
+
 def regime_buckets(returns: pd.Series, *, n: int = 4) -> list[dict]:
     """Split the return series into ``n`` equal chronological buckets; report each
     bucket's mean and sign — the design's regime-persistence check (want 3+/4 +)."""
@@ -118,10 +181,11 @@ def paired_bootstrap(
         d_cagr[i] = _cagr(a[idx], ppy) - _cagr(b[idx], ppy)
     ds = d_sharpe[np.isfinite(d_sharpe)]
     dc = d_cagr[np.isfinite(d_cagr)]
+    nan2 = (float("nan"), float("nan"))
     return {
-        "d_sharpe_ci": (float(np.percentile(ds, 2.5)), float(np.percentile(ds, 97.5))),
-        "d_cagr_ci": (float(np.percentile(dc, 2.5)), float(np.percentile(dc, 97.5))),
-        "prob_a_better_sharpe": float((ds > 0).mean()),
+        "d_sharpe_ci": (float(np.percentile(ds, 2.5)), float(np.percentile(ds, 97.5))) if ds.size else nan2,
+        "d_cagr_ci": (float(np.percentile(dc, 2.5)), float(np.percentile(dc, 97.5))) if dc.size else nan2,
+        "prob_a_better_sharpe": float((ds > 0).mean()) if ds.size else float("nan"),
         "n": n,
     }
 

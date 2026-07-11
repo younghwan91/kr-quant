@@ -73,7 +73,8 @@ def pivot_fills(entries: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
             "fill_price": fill_price if fill_price is not None else float("nan"),
             "filled": fill_price is not None,
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows, columns=["code", "date", "pivot", "fill_date", "fill_price", "filled"])
 
 
 def _lookup(panel: pd.DataFrame, value: str, codes, dates) -> np.ndarray:
