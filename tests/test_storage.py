@@ -13,6 +13,7 @@ from kr_quant.storage import (
     to_float,
     to_int,
     upsert_daily_bars,
+    upsert_minervini_scan,
     upsert_shares_outstanding,
     upsert_stocks,
     upsert_supply_demand,
@@ -110,4 +111,18 @@ def test_market_cap_asof_returns_none_without_shares_data(tmp_path):
     upsert_daily_bars(con, [_bar("005930", "2026-02-01", 70000)])
 
     assert market_cap_asof(con, "005930", "2026-02-01") is None
+    con.close()
+
+
+def test_upsert_minervini_scan_round_trips_and_upserts_on_date(tmp_path):
+    con = connect(tmp_path / "t.db")
+    upsert_minervini_scan(con, [("2026-07-11", 0.62, "risk_on", 2, "005930,000660")])
+    upsert_minervini_scan(con, [("2026-07-11", 0.71, "risk_on", 3, "005930,000660,035420")])
+
+    cur = con.cursor()
+    cur.execute("SELECT date, breadth, regime, n_candidates, codes FROM minervini_scan")
+    rows = cur.fetchall()
+    assert len(rows) == 1  # same date -> replaced, not duplicated
+    assert rows[0]["breadth"] == 0.71
+    assert rows[0]["n_candidates"] == 3
     con.close()

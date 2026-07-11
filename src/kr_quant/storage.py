@@ -156,6 +156,14 @@ CREATE TABLE IF NOT EXISTS consensus (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_consensus_date ON consensus(date);
+CREATE TABLE IF NOT EXISTS minervini_scan (
+    date        TEXT NOT NULL,
+    breadth     REAL,   -- 유동주 close>MA50 비율
+    regime      TEXT,   -- 'risk_on' / 'risk_off'
+    n_candidates INTEGER,
+    codes       TEXT,   -- 콤마구분 진입후보 코드 (없으면 빈 문자열)
+    PRIMARY KEY (date)
+);
 """
 
 
@@ -332,6 +340,14 @@ _CONSENSUS_COLS = [
 def upsert_consensus(con: Any, records: list[tuple]) -> int:
     """Insert/replace consensus rows (tuples ordered by _CONSENSUS_COLS)."""
     return _upsert(con, "consensus", _CONSENSUS_COLS, records)
+
+
+_MINERVINI_SCAN_COLS = ["date", "breadth", "regime", "n_candidates", "codes"]
+
+
+def upsert_minervini_scan(con: Any, records: list[tuple]) -> int:
+    """Insert/replace minervini_scan rows (tuples ordered by _MINERVINI_SCAN_COLS)."""
+    return _upsert(con, "minervini_scan", _MINERVINI_SCAN_COLS, records, pk_cols=("date",))
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
