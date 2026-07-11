@@ -42,13 +42,25 @@ def evaluate(con, picks_by_date: dict[str, list[str]], already: set) -> list[lis
             fwd = g[g["date"] > pick_date].head(HMAX + 1)
             if len(fwd) < HMAX:  # 아직 결과 미확정 → 스킵(다음 실행에)
                 continue
-            entry = fwd.iloc[0]["open"]  # 다음날 시가 진입
+            o = fwd["open"].to_numpy(float); hi_a = fwd["high"].to_numpy(float)
+            lo_a = fwd["low"].to_numpy(float); cl_a = fwd["close"].to_numpy(float)
+            raw_c = fwd["close"].to_numpy(float)  # 분할 탐지용 원본(수정 안 함)
+            # 보유창 내 액면분할 전방조정 — 한국 ±30% 제한 넘는 종가변동은 분할이므로
+            # 분할일 이후 가격을 entry 기준으로 되돌려(1/비율) 가짜 손절/익절을 막는다.
+            fac = 1.0
+            for k in range(1, len(raw_c)):
+                if np.isfinite(raw_c[k]) and np.isfinite(raw_c[k - 1]) and raw_c[k - 1] > 0:
+                    r = raw_c[k] / raw_c[k - 1]
+                    if r < 0.70 or r > 1.4286:
+                        fac *= r  # 이후 raw가격은 r배 축소 → 1/r로 복원
+                o[k] /= fac; hi_a[k] /= fac; lo_a[k] /= fac; cl_a[k] /= fac
+            entry = o[0]  # 다음날 시가 진입
             if not np.isfinite(entry) or entry <= 0:
                 continue
             stop = entry * (1 - HARD); tgt = entry * (1 + TARGET)
-            outcome = "open"; exit_px = fwd.iloc[-1]["close"]; days = HMAX
+            outcome = "open"; exit_px = cl_a[-1]; days = HMAX
             for k in range(1, len(fwd)):
-                lo, hi = fwd.iloc[k]["low"], fwd.iloc[k]["high"]
+                lo, hi = lo_a[k], hi_a[k]
                 if np.isfinite(lo) and lo <= stop:
                     outcome = "stop"; exit_px = stop; days = k; break
                 if np.isfinite(hi) and hi >= tgt:
