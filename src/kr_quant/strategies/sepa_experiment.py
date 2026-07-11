@@ -61,6 +61,12 @@ def build_panels(
         shares: ``code``/``date``/shares-outstanding for market cap.
         adjust: Apply corporate-action back-adjustment (both strategy and bench).
     """
+    # Normalize date to string so every downstream to_datetime yields the same
+    # resolution — DB columns arrive at mixed datetime64 units and break merge_asof.
+    prices = prices.copy()
+    prices["date"] = prices["date"].astype(str)
+    shares = shares.copy()
+    shares["date"] = shares["date"].astype(str)
     if adjust:
         prices = adjust_prices(prices)
     dates = sorted(prices["date"].astype(str).unique())
