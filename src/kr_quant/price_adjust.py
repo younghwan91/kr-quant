@@ -42,32 +42,30 @@ PERSIST_TOL = 0.25
 def _split_factors(close: np.ndarray) -> np.ndarray:
     """각 인덱스에 곱할 백조정 배수. close는 시간순 1D 배열(NaN 허용)."""
     n = len(close)
-    splits: list[tuple[int, float]] = []
-    for t in range(1, n - PERSIST_DAYS):
-        c0, c1 = close[t - 1], close[t]
-        if not (np.isfinite(c0) and np.isfinite(c1) and c0 > 0):
-            continue
-        r = c1 / c0
-        if r < DOWN or r > UP:
-            # 새 레벨(c1)이 이후에 유지되고 AND 이전 레벨(c0)이 그 앞 며칠과 일관되어야
-            # 진짜 분할. 하루만 튀는 스파이크는 그 되돌림 지점에서 c0(스파이크 바)이
-            # 직전 추세와 어긋나므로 걸러진다.
-            fwd = [close[t + k] for k in range(1, PERSIST_DAYS + 1) if np.isfinite(close[t + k])]
-            bwd = [close[t - 1 - k] for k in range(1, PERSIST_DAYS + 1) if np.isfinite(close[t - 1 - k])]
-            fwd_ok = bool(fwd) and abs(np.median(fwd) / c1 - 1) < PERSIST_TOL
-            bwd_ok = (not bwd) or abs(np.median(bwd) / c0 - 1) < PERSIST_TOL
-            if fwd_ok and bwd_ok:
-                splits.append((t, r))
     factors = np.ones(n)
+    if n <= PERSIST_DAYS + 1:
+        return factors
+    # ±30% 초과 종가비율만 벡터로 추려 후보로 (전체 일자 파이썬 루프 회피).
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = close[1:] / close[:-1]
+    cand = np.where(np.isfinite(ratio) & ((ratio < DOWN) | (ratio > UP)))[0] + 1
+    splits: list[tuple[int, float]] = []
+    for t in cand:
+        if t >= n - PERSIST_DAYS or not (close[t - 1] > 0):
+            continue
+        # 새 레벨(c1)이 이후에 유지되고 AND 이전 레벨(c0)이 그 앞 며칠과 일관되어야
+        # 진짜 분할. 하루만 튀는 스파이크는 되돌림 지점에서 c0(스파이크)이 직전과 어긋나 걸러짐.
+        fwd = close[t + 1:t + 1 + PERSIST_DAYS]; fwd = fwd[np.isfinite(fwd)]
+        bwd = close[max(0, t - 1 - PERSIST_DAYS):t - 1]; bwd = bwd[np.isfinite(bwd)]
+        fwd_ok = fwd.size > 0 and abs(np.median(fwd) / close[t] - 1) < PERSIST_TOL
+        bwd_ok = bwd.size == 0 or abs(np.median(bwd) / close[t - 1] - 1) < PERSIST_TOL
+        if fwd_ok and bwd_ok:
+            splits.append((int(t), float(ratio[t - 1])))
     if not splits:
         return factors
-    # index i 에는, i 보다 뒤에서 일어난 모든 분할 비율의 곱을 적용(표준 back-adjust)
-    for i in range(n):
-        f = 1.0
-        for t, r in splits:
-            if t > i:
-                f *= r
-        factors[i] = f
+    # index i 에는 i 보다 뒤에서 일어난 모든 분할 비율의 곱을 적용(표준 back-adjust)
+    for t, r in splits:
+        factors[:t] *= r
     return factors
 
 
