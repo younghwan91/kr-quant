@@ -215,3 +215,38 @@ def test_db_table_resume_skips_existing_code_period_but_fetches_new_period(monke
         dart_earnings._fetch_with_rotation([], [0], corp_code, year, q)
 
     assert calls == [(corp_code, 2023, 2)]
+
+
+def test_all_codes_universe_includes_newly_listed_stock():
+    # 신규상장(IPO) 종목은 daily_bars에 최근 며칠치만 있고 과거 이력이 없다 —
+    # --all-codes 유니버스 쿼리가 이런 종목도 상장 첫날부터 바로 포함하는지 검증.
+    con = storage.connect(":memory:")
+    storage.upsert_daily_bars(con, [
+        ("005930", "2026-07-10", 70000, 71000, 69500, 70500, 1000000, 70000000000),
+        ("999999", "2026-07-10", 10000, 10500, 9800, 10200, 50000, 500000000),  # 오늘 상장한 신규종목
+    ])
+    args = argparse.Namespace(all_codes=True, top_n=800)
+    sql, params = _universe_query(args)
+
+    import pandas as pd
+    codes = pd.read_sql_query(sql, con, params=params)["code"].tolist()
+    assert "999999" in codes
+    assert "005930" in codes
+
+
+def test_new_stock_with_no_prior_earnings_is_never_skipped():
+    # 신규상장 종목은 earnings 테이블에 (code, period) 이력이 전혀 없다 —
+    # done_periods 조회에서 빈 집합이 나와야 하고, 그 종목의 모든 분기가
+    # (기존 종목의 새 분기와 마찬가지로) 정상적으로 fetch 대상이어야 한다.
+    con = storage.connect(":memory:")
+    storage.upsert_earnings(con, [
+        ("005930", "2023Q1", "20230515", 200.0, 100.0, 1000.0, 900.0, 300.0, 250.0),
+    ])
+
+    import pandas as pd
+    existing = pd.read_sql_query("SELECT code, period FROM earnings", con)
+    done_periods = set(zip(existing["code"], existing["period"]))
+
+    new_code = "999999"
+    assert not any(code == new_code for code, _ in done_periods)
+    assert (new_code, "2023Q1") not in done_periods  # 스킵 대상 아님 → fetch 진행

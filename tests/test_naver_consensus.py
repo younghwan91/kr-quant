@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from kr_quant.collectors.naver_consensus import parse_consensus, parse_estimate
+import argparse
+
+from kr_quant import storage
+from kr_quant.collectors.naver_consensus import _universe_query, parse_consensus, parse_estimate
 
 
 def test_parse_consensus_extracts_target_and_recommendation():
@@ -52,3 +55,36 @@ def test_parse_estimate_no_consensus_year_returns_none():
     payload = _finance([{"key": "202512", "isConsensus": "N"}], {"202512": {"value": "1"}})
     assert parse_estimate(payload) == (None, None, None)
     assert parse_estimate({}) == (None, None, None)
+
+
+def test_universe_query_all_codes_has_no_limit():
+    args = argparse.Namespace(all_codes=True, top_n=800)
+    sql, params = _universe_query(args)
+    assert "LIMIT" not in sql
+    assert "DISTINCT" in sql
+    assert params == {}
+
+
+def test_universe_query_default_uses_top_n_limit():
+    args = argparse.Namespace(all_codes=False, top_n=800)
+    sql, params = _universe_query(args)
+    assert "LIMIT %(n)s" in sql
+    assert params == {"n": 800}
+
+
+def test_all_codes_universe_includes_newly_listed_stock():
+    # 신규상장 종목은 daily_bars에 오늘치 한 줄만 있고 90일 유동성 윈도우
+    # 밖이라 top-N에는 안 잡힐 수 있다 — --all-codes는 그런 종목도 상장
+    # 첫날부터 바로 포함해야 한다.
+    con = storage.connect(":memory:")
+    storage.upsert_daily_bars(con, [
+        ("005930", "2026-07-10", 70000, 71000, 69500, 70500, 1000000, 70000000000),
+        ("999999", "2026-07-10", 10000, 10500, 9800, 10200, 50000, 500000000),  # 오늘 상장한 신규종목
+    ])
+    args = argparse.Namespace(all_codes=True, top_n=800)
+    sql, params = _universe_query(args)
+
+    import pandas as pd
+    codes = pd.read_sql_query(sql, con, params=params)["code"].tolist()
+    assert "999999" in codes
+    assert "005930" in codes

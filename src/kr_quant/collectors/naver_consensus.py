@@ -113,6 +113,22 @@ def fetch_estimate(code: str) -> tuple[float | None, float | None, str | None]:
     return parse_estimate(d) if d else (None, None, None)
 
 
+def _universe_query(args: argparse.Namespace) -> tuple[str, dict]:
+    """SQL (+ params) selecting the code universe: all ``daily_bars`` codes or top-N liquid.
+
+    ``--all-codes`` uses a plain ``DISTINCT code`` scan with no recency window, so a
+    stock that just IPO'd today (and so has only today's row in ``daily_bars``) is
+    included from day one — no special-casing needed for newly listed codes.
+    """
+    if args.all_codes:
+        return "SELECT DISTINCT code FROM daily_bars ORDER BY code", {}
+    return (
+        "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
+        "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
+        {"n": args.top_n},
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="네이버 애널리스트 컨센서스 수집 (목표주가·투자의견, 일별 스냅샷)")
     ap.add_argument("--out", required=True, help="출력 CSV (일별 append)")
@@ -125,13 +141,8 @@ def main() -> int:
     import pandas as pd
     from ..storage import connect, default_db_path
     con = connect(args.db or str(default_db_path()))
-    if args.all_codes:
-        top = pd.read_sql_query("SELECT DISTINCT code FROM daily_bars ORDER BY code", con)
-    else:
-        top = pd.read_sql_query(
-            "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
-            "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
-            con, params={"n": args.top_n})
+    sql, params = _universe_query(args)
+    top = pd.read_sql_query(sql, con, params=params)
     con.close()
     codes = top["code"].tolist()
 
