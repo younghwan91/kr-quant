@@ -23,7 +23,7 @@ import pandas as pd
 
 from ..features.fundamentals import code33_panel, earnings_yield_panel
 from ..features.rs_rating import rs_rating_panel
-from ..features.universe import smallmid_universe
+from ..features.universe import CAP_BAND, smallmid_universe
 from ..price_adjust import adjust_prices
 from .minervini_sepa import sepa_entries, sepa_trades
 from .pead import market_cap_panel
@@ -78,7 +78,9 @@ def build_panels(
     return {
         "prices": prices,
         "cap": cap,
-        "smallmid": smallmid_universe(cap, adv),                       # rank 100-400
+        # Absolute cap band, not rank — rank-within-a-liquidity-filtered-universe
+        # silently lands on large/mega caps, not small-mid (see universe.py note).
+        "smallmid": smallmid_universe(cap, adv, cap_band=CAP_BAND),
         "largecap": smallmid_universe(cap, adv, cap_rank=LARGE_CAP_RANK),  # B-shell
         "rs": rs_rating_panel(prices),
         "code33": code33_panel(earnings, dates),
