@@ -74,6 +74,41 @@ def _monthly_prices(paths: dict[str, list[float]], months: list[str]) -> pd.Data
     return pd.DataFrame(rows)
 
 
+def test_book_returns_uses_exact_fill_price_within_a_single_month():
+    # Regression guard for the 2026-07-12 stop-invariance bug: two trades that
+    # enter/exit within the SAME calendar month but realize different prices
+    # (e.g. a tighter vs looser stop) must produce different monthly returns —
+    # previously book_returns ignored entry_price/exit_price entirely and marked
+    # same-month trades to the market's monthly close, making them indistinguishable.
+    months = ["2020-01", "2020-02", "2020-03"]
+    prices = _monthly_prices({"TIGHT": [100.0, 100.0, 100.0], "LOOSE": [100.0, 100.0, 100.0]}, months)
+    trades = pd.DataFrame([
+        # Both "enter and exit in Feb" per (f,x), but realized very different prices.
+        {"code": "TIGHT", "entry_date": "2020-02-15", "exit_date": "2020-02-15",
+         "entry_price": 100.0, "exit_price": 96.0, "ret": -0.04},   # tight stop, small loss
+        {"code": "LOOSE", "entry_date": "2020-02-15", "exit_date": "2020-02-15",
+         "entry_price": 100.0, "exit_price": 92.0, "ret": -0.08},   # loose stop, bigger loss
+    ])
+    tight_only = book_returns(prices, trades[trades["code"] == "TIGHT"], n_slots=6, sized=False)
+    loose_only = book_returns(prices, trades[trades["code"] == "LOOSE"], n_slots=6, sized=False)
+    assert abs(tight_only["2020-02"] - (-0.04)) < 1e-9   # uses exit_price, not market's flat 0%
+    assert abs(loose_only["2020-02"] - (-0.08)) < 1e-9
+    assert tight_only["2020-02"] != loose_only["2020-02"]
+
+
+def test_book_returns_falls_back_to_price_panel_when_prices_absent():
+    # Without entry_price/exit_price columns, fall back to an exact-date close
+    # lookup in the price panel (still precise, just sourced differently).
+    prices = pd.DataFrame([
+        {"code": "X", "date": "2020-01-15", "close": 100.0},
+        {"code": "X", "date": "2020-02-10", "close": 90.0},   # exact exit-date close
+        {"code": "X", "date": "2020-02-15", "close": 95.0},   # NOT the exit date — must be ignored
+    ])
+    trades = pd.DataFrame([{"code": "X", "entry_date": "2020-01-15", "exit_date": "2020-02-10"}])
+    r = book_returns(prices, trades, n_slots=6, sized=False)
+    assert abs(r["2020-02"] - (90.0 / 100.0 - 1.0)) < 1e-9   # uses exact exit-date close (90), not 95
+
+
 def test_book_returns_concentration_tilts_to_high_score_winner():
     months = [f"2020-{i:02d}" for i in range(1, 8)]        # 7 months → 6 monthly returns
     prices = _monthly_prices(

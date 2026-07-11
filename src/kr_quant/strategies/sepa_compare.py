@@ -66,13 +66,17 @@ def monthly_book_returns(trades: pd.DataFrame, months: list[str]) -> pd.Series:
     return by_month.reindex(idx).fillna(0.0).rename("ret")
 
 
-def _monthly_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    """Per-code monthly returns (code × ``YYYY-MM``) from the last close each month."""
+def _monthly_last_close(prices: pd.DataFrame) -> pd.DataFrame:
+    """Per-code last close in each month (code × ``YYYY-MM``)."""
     p = prices[["code", "date", "close"]].copy()
     p["close"] = p["close"].abs()
     p["month"] = p["date"].astype(str).str.slice(0, 7)
-    last = p.sort_values("date").groupby(["code", "month"])["close"].last().unstack("month")
-    return last.pct_change(axis=1)
+    return p.sort_values("date").groupby(["code", "month"])["close"].last().unstack("month")
+
+
+def _monthly_returns(prices: pd.DataFrame) -> pd.DataFrame:
+    """Per-code monthly returns (code × ``YYYY-MM``) from the last close each month."""
+    return _monthly_last_close(prices).pct_change(axis=1)
 
 
 def book_returns(
@@ -100,18 +104,62 @@ def book_returns(
     ``rest_w`` (others). Without a ``score`` column it stays equal-weight
     (backward-compat). Weights are renormalized each month; more-than-``n_slots``
     opens keep the earliest-entered.
+
+    ⚠️ **Exit precision (fixed 2026-07-12):** the entry/exit month's contribution
+    uses the position's actual fill/exit price (``trades["entry_price"]``/
+    ``["exit_price"]`` when present, else an exact-date close lookup in ``prices``)
+    rather than that month's aggregate market return — otherwise a stop/sell-half/
+    tennis-cull that fires mid-month was invisible whenever it didn't cross a month
+    boundary, silently making ``sepa_trades`` exit-rule parameters (e.g. ``stop_pct``
+    in :func:`kr_quant.strategies.sepa_experiment.robustness_sweep`) have **no
+    effect** on the aggregated book Sharpe. Interior (fully-held) months still mark
+    to the market close, an accepted simplification for multi-month holds.
     """
     mret = _monthly_returns(prices)
+    last_close = _monthly_last_close(prices)
     months = list(mret.columns)
+    month_idx = {m: i for i, m in enumerate(months)}
     idx = pd.Index(months, name="month")
     if trades.empty or not months:
         return pd.Series(0.0, index=idx, name="ret")
+    close_lookup = prices.pivot_table(index="code", columns="date", values="close", aggfunc="first").abs()
+
+    def _price_at(code: str, date: str) -> float:
+        try:
+            return float(close_lookup.at[code, date])
+        except KeyError:
+            return float("nan")
+
     tr = trades.sort_values("entry_date").reset_index(drop=True)
     apply_sizing = sized and "score" in tr.columns
-    pos = [{"code": t["code"], "f": str(t["entry_date"])[:7], "x": str(t["exit_date"])[:7],
-            "score": float(t["score"]) if apply_sizing and pd.notna(t.get("score")) else np.nan}
-           for _, t in tr.iterrows()]
+    has_prices = "entry_price" in tr.columns and "exit_price" in tr.columns
+    pos = []
+    for _, t in tr.iterrows():
+        entry_date, exit_date = str(t["entry_date"]), str(t["exit_date"])
+        ep = float(t["entry_price"]) if has_prices and pd.notna(t.get("entry_price")) else _price_at(t["code"], entry_date)
+        xp = float(t["exit_price"]) if has_prices and pd.notna(t.get("exit_price")) else _price_at(t["code"], exit_date)
+        pos.append({
+            "code": t["code"], "f": entry_date[:7], "x": exit_date[:7],
+            "entry_price": ep, "exit_price": xp,
+            "score": float(t["score"]) if apply_sizing and pd.notna(t.get("score")) else np.nan,
+        })
     cum = [0.0] * len(pos)  # cumulative return since entry, per position (for pilot)
+
+    def _month_return(k: int, m: str) -> float:
+        """Position ``k``'s return contribution for month ``m`` — exact fill/exit
+        price at the entry/exit boundary, market close-to-close for interior months."""
+        p = pos[k]
+        code, ep, xp = p["code"], p["entry_price"], p["exit_price"]
+        if m == p["f"] == p["x"]:                       # entered and exited within this month
+            return xp / ep - 1.0 if (np.isfinite(ep) and ep > 0) else float("nan")
+        if m == p["f"]:                                  # entry month, held past month-end
+            lc = last_close.at[code, m] if code in last_close.index else np.nan
+            return float(lc) / ep - 1.0 if (np.isfinite(lc) and np.isfinite(ep) and ep > 0) else float("nan")
+        if m == p["x"]:                                  # exit month, held since before it
+            mi = month_idx[m]
+            prior = last_close.at[code, months[mi - 1]] if mi > 0 and code in last_close.index else np.nan
+            return xp / float(prior) - 1.0 if (np.isfinite(prior) and prior > 0) else float("nan")
+        return mret.at[code, m] if code in mret.index else float("nan")  # interior: mark to market
 
     out = {}
     for m in months:
@@ -127,8 +175,7 @@ def book_returns(
             base_w = {k: 1.0 for k in active}
         num = den = 0.0
         for k in active:
-            code = pos[k]["code"]
-            r = mret.at[code, m] if code in mret.index else np.nan
+            r = _month_return(k, m)
             if not np.isfinite(r):
                 continue
             if not apply_sizing or cum[k] >= r_threshold:
