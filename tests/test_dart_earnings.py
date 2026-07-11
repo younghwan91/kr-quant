@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 
+from kr_quant.collectors import dart_earnings
 from kr_quant.collectors.dart_earnings import (
+    collect_keys,
     parse_financials,
     parse_net_income,
     yoy_growth,
@@ -80,3 +82,42 @@ def test_parse_net_income_still_backward_compatible():
         {"account_nm": "당기순이익", "thstrm_amount": "2,206,125", "frmtrm_amount": "974,571"},
     ])
     assert parse_net_income(payload) == (2206125.0, 974571.0)
+
+
+def test_collect_keys_priority_order(monkeypatch):
+    monkeypatch.setenv("DART_API_KEY", "k1")
+    monkeypatch.setenv("DART_API_KEY_2", "k2")
+    monkeypatch.delenv("DART_API_KEY_3", raising=False)
+    assert collect_keys() == ["k1", "k2"]
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    monkeypatch.delenv("DART_API_KEY_2", raising=False)
+    assert collect_keys() == []          # 키 없으면 빈 리스트
+
+
+def test_fetch_rotates_to_next_key_on_daily_limit(monkeypatch):
+    # 키1은 일한도(020), 키2는 정상 → 로테이션 후 키2 데이터 반환.
+    good = _payload([
+        {"account_nm": "매출액", "thstrm_amount": "1,000", "frmtrm_amount": "900"},
+        {"account_nm": "당기순이익", "thstrm_amount": "200", "frmtrm_amount": "100"},
+    ])
+    calls = []
+
+    def fake_payload(api_key, corp_code, year, quarter):
+        calls.append(api_key)
+        return {"status": "020", "message": "한도초과"} if api_key == "k1" else good
+
+    monkeypatch.setattr(dart_earnings, "_fetch_payload", fake_payload)
+    ki = [0]
+    ni, nip, rev, revp, oi, oip = dart_earnings._fetch_with_rotation(["k1", "k2"], ki, "c", 2023, 1)
+    assert ki[0] == 1                    # 키2로 로테이션됨
+    assert calls == ["k1", "k2"]         # k1(020) 후 k2 재시도
+    assert (ni, rev) == (200.0, 1000.0)  # 키2 데이터 파싱됨
+
+
+def test_fetch_no_rotation_when_single_key_limited(monkeypatch):
+    # 키 하나뿐인데 020이면 로테이션 불가 → None 반환(스킵), 무한루프 없음.
+    monkeypatch.setattr(dart_earnings, "_fetch_payload",
+                        lambda *a: {"status": "020"})
+    ki = [0]
+    assert dart_earnings._fetch_with_rotation(["only"], ki, "c", 2023, 1) == (None,) * 6
+    assert ki[0] == 0

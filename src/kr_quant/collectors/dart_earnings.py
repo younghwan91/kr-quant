@@ -180,6 +180,36 @@ def fetch_financials(
     return parse_financials(_fetch_payload(api_key, corp_code, year, quarter))
 
 
+def collect_keys() -> list[str]:
+    """DART keys from env in priority order: ``DART_API_KEY``, ``DART_API_KEY_2/3/...``.
+
+    Each key has its own 20,000-call/day quota (per-key, not per-IP), so listing
+    several lets collection roll over to the next when one hits the daily cap.
+    """
+    keys: list[str] = []
+    for name in ("DART_API_KEY", "DART_API_KEY_2", "DART_API_KEY_3", "DART_API_KEY_4"):
+        v = os.environ.get(name)
+        if v:
+            keys.append(v)
+    return keys
+
+
+def _fetch_with_rotation(
+    keys: list[str], ki: list[int], corp_code: str, year: int, quarter: int,
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
+    """Fetch financials, rotating to the next key on DART daily-limit (status 020).
+
+    ``ki`` is a one-element list holding the current key index, mutated in place so
+    the rotation persists across calls (once a key is exhausted it stays skipped).
+    """
+    payload = _fetch_payload(keys[ki[0]], corp_code, year, quarter)
+    while payload.get("status") == "020" and ki[0] + 1 < len(keys):
+        ki[0] += 1
+        print(f"DART 키 일한도(020) 도달 → 키{ki[0] + 1}로 로테이션", flush=True)
+        payload = _fetch_payload(keys[ki[0]], corp_code, year, quarter)
+    return parse_financials(payload)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="DART 분기 순이익 YoY 수집 (PEAD 입력)")
     ap.add_argument("--out", required=True, help="출력 CSV 경로")
@@ -190,9 +220,10 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=0.25)
     args = ap.parse_args()
 
-    api_key = os.environ.get("DART_API_KEY")
-    if not api_key:
+    keys = collect_keys()
+    if not keys:
         raise SystemExit("환경변수 DART_API_KEY 필요")
+    ki = [0]  # 현재 키 인덱스 (020 한도 시 로테이션)
 
     import pandas as pd
     from ..storage import connect, default_db_path
@@ -209,8 +240,8 @@ def main() -> int:
         for r in csv.reader(open(args.out)):
             if r:
                 done.add(r[0])
-    corp = load_corp_map(api_key)
-    print(f"corp_map {len(corp)} | universe {len(codes)} | already done {len(done)}", flush=True)
+    corp = load_corp_map(keys[0])
+    print(f"corp_map {len(corp)} | universe {len(codes)} | keys {len(keys)} | already done {len(done)}", flush=True)
 
     today = datetime.now().strftime("%Y%m%d")
     f = open(args.out, "a", newline="")
@@ -225,7 +256,7 @@ def main() -> int:
                                        is_annual=(q == 4)).strftime("%Y%m%d")
                 if avail > today:
                     continue
-                ni, nip, rev, revp, oi, oip = fetch_financials(api_key, corp[code], year, q)
+                ni, nip, rev, revp, oi, oip = _fetch_with_rotation(keys, ki, corp[code], year, q)
                 time.sleep(args.sleep)
                 if ni is None:
                     continue
