@@ -95,6 +95,7 @@ def sepa_entries(
     use_vcp: bool = True,
     use_code33: bool = True,
     start_index: int = 252,
+    vcp_params: dict | None = None,
 ) -> pd.DataFrame:
     """Assemble faithful arm-A entry signals by AND-ing every SEPA gate (as-of t).
 
@@ -115,6 +116,8 @@ def sepa_entries(
         rs_min: RS-rating floor (frozen 70).
         use_vcp, use_code33: Gate toggles for the A₋VCP / fundamental-off arms.
         start_index: First date index to signal from (trend-template warm-up).
+        vcp_params: Optional overrides forwarded to :func:`detect_vcp` — for the VCP
+            robustness sweep only (the verdict uses the frozen defaults).
 
     Returns:
         Long ``code``/``date``/``pivot`` of entry signals (one per qualifying bar).
@@ -135,6 +138,20 @@ def sepa_entries(
     )
     nD = len(dates)
 
+    # Precompute the trend-template rolling stats once (date × code), C-optimized —
+    # replaces a per-(code, t) nanmean that was the O(codes·dates·window) hot path.
+    # min_periods = window means a name with <window history is NaN (→ gate fails),
+    # a hair stricter than the old nanmean-of-partial but faithful (SEPA needs 200d+).
+    cT = pd.DataFrame(C.T)
+    ma50 = cT.rolling(50, min_periods=50).mean().to_numpy()
+    ma150 = cT.rolling(150, min_periods=150).mean().to_numpy()
+    ma200 = cT.rolling(200, min_periods=200).mean().to_numpy()
+    ma200_prev = np.full_like(ma200, np.nan)
+    ma200_prev[20:] = ma200[:-20]                         # ma200 as of t-20
+    hh = pd.DataFrame(H.T).rolling(252, min_periods=252).max().to_numpy()
+    ll = pd.DataFrame(L.T).rolling(252, min_periods=252).min().to_numpy()
+    vkw = vcp_params or {}
+
     rows: list[dict] = []
     for i, code in enumerate(codes):
         c = C[i]
@@ -145,19 +162,15 @@ def sepa_entries(
                 continue
             if use_code33 and c33[i, t] != 1.0:
                 continue
-            ma50 = np.nanmean(c[t - 49:t + 1])
-            ma150 = np.nanmean(c[t - 149:t + 1])
-            ma200 = np.nanmean(c[t - 199:t + 1])
-            ma200_prev = np.nanmean(c[t - 219:t - 19])
-            hh = np.nanmax(H[i, t - 251:t + 1])
-            ll = np.nanmin(L[i, t - 251:t + 1])
+            m50, m150, m200, m200p, h_, l_ = (
+                ma50[t, i], ma150[t, i], ma200[t, i], ma200_prev[t, i], hh[t, i], ll[t, i])
             # 7-criterion trend template (RS is the 8th, gated above).
-            if not (c[t] > ma50 > ma150 > ma200 and ma200 > ma200_prev
-                    and c[t] >= 1.25 * ll and c[t] >= 0.75 * hh):
+            if not (c[t] > m50 > m150 > m200 and m200 > m200p
+                    and c[t] >= 1.25 * l_ and c[t] >= 0.75 * h_):
                 continue
             pivot = c[t]  # default breakout level; VCP refines it when enabled
             if use_vcp:
-                vcp = detect_vcp(H[i], L[i], c, V[i], t)
+                vcp = detect_vcp(H[i], L[i], c, V[i], t, **vkw)
                 if not vcp["is_vcp"]:
                     continue
                 pivot = vcp["pivot"]
