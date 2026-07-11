@@ -21,6 +21,35 @@ import pandas as pd
 INF = ["institution", "foreign_", "etc_corp", "invtrt", "fnnc_invt"]
 
 
+def _backadjust(c, high, low, op):
+    """종목 가격배열을 기업행동(분할) 백조정 — 라이브 정합성(추세템플릿·MA가 분할에 안 깨지게).
+
+    한국 ±30% 가격제한상 종가 대비 ±30%를 넘고 이후 3일 새 레벨에 머무는(스파이크 아닌)
+    불연속은 분할이므로, 그 비율로 이전 구간을 백조정한다. self-contained(kr_quant 무의존).
+    src/kr_quant/price_adjust.py 와 동일 로직 — DAG 서브프로세스 path 제약 때문에 인라인.
+    """
+    n = len(c)
+    splits = []
+    for t in range(1, n - 3):
+        if np.isfinite(c[t]) and np.isfinite(c[t - 1]) and c[t - 1] > 0:
+            r = c[t] / c[t - 1]
+            if r < 0.70 or r > 1.4286:
+                fwd = [c[t + k] for k in range(1, 4) if np.isfinite(c[t + k])]
+                bwd = [c[t - 1 - k] for k in range(1, 4) if np.isfinite(c[t - 1 - k])]
+                fwd_ok = bool(fwd) and abs(np.median(fwd) / c[t] - 1) < 0.25
+                bwd_ok = (not bwd) or abs(np.median(bwd) / c[t - 1] - 1) < 0.25
+                if fwd_ok and bwd_ok:
+                    splits.append((t, r))
+    if not splits:
+        return c, high, low, op
+    fac = np.ones(n)
+    for i in range(n):
+        for t, r in splits:
+            if t > i:
+                fac[i] *= r
+    return c * fac, high * fac, low * fac, op * fac
+
+
 def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
     cols = ",".join(INF)
     sd = pd.read_sql(
@@ -44,7 +73,10 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         if not np.isfinite(c[ti]):
             continue
         vol = sub["volume"].to_numpy(float); tval = sub["trade_value"].to_numpy(float)
-        high = sub["high"].to_numpy(float)
+        high = sub["high"].to_numpy(float); low = sub["low"].to_numpy(float)
+        op = sub["open"].to_numpy(float)
+        # 기업행동(분할) 백조정 — MA/추세템플릿이 최근 window 내 분할에 깨지지 않도록
+        c, high, low, op = _backadjust(c, high, low, op)
         adv = np.nanmean(tval[ti - 20:ti])
         ma50 = np.nanmean(c[ti - 49:ti + 1])
         if np.isfinite(adv) and adv >= 3000:  # breadth 유니버스(30억)
@@ -53,7 +85,7 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
             continue
         ma150 = np.nanmean(c[ti - 149:ti + 1]); ma200 = np.nanmean(c[ti - 199:ti + 1])
         ma200_prev = np.nanmean(c[ti - 220:ti - 20])
-        hh252 = np.nanmax(high[ti - 251:ti + 1]); ll252 = np.nanmin(sub["low"].to_numpy(float)[ti - 251:ti + 1])
+        hh252 = np.nanmax(high[ti - 251:ti + 1]); ll252 = np.nanmin(low[ti - 251:ti + 1])
         # 추세템플릿
         tt = (c[ti] > ma50 > ma150 > ma200 and ma200 > ma200_prev
               and c[ti] >= 1.25 * ll252 and c[ti] >= 0.75 * hh252)
@@ -70,7 +102,6 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         # 시리얼 갭퍼 배제 (GOAL 루프48-49): 최근 120일 내 -10% 이상 갭다운 이력이 있으면 제외.
         # 잡주(배제군 평균 -0.84%)를 걸러 포트폴리오 CAGR/Sharpe 개선(+18.1%→+20.9%/0.63→0.69).
         # 파국적 갭 꼬리(-68%)는 못 막음(그건 분산 사이징의 몫) — 잡주 제거 효과.
-        op = sub["open"].to_numpy(float)
         prev_c = c[ti - 120:ti]; day_o = op[ti - 119:ti + 1]
         with np.errstate(invalid="ignore", divide="ignore"):
             gaps = day_o / prev_c - 1.0
