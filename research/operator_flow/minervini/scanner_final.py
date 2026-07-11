@@ -27,7 +27,7 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         f"SELECT code,date,{cols} FROM supply_demand "
         f"WHERE date > (SELECT MAX(date) FROM supply_demand) - INTERVAL '{lookback} days'", con)
     db = pd.read_sql(
-        f"SELECT code,date,high,low,close,volume,trade_value FROM daily_bars "
+        f"SELECT code,date,open,high,low,close,volume,trade_value FROM daily_bars "
         f"WHERE date > (SELECT MAX(date) FROM daily_bars) - INTERVAL '{lookback} days'", con)
     sd["date"] = sd["date"].astype(str); db["date"] = db["date"].astype(str)
     df = db.merge(sd, on=["code", "date"], how="inner").sort_values(["code", "date"])
@@ -66,6 +66,15 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         vprior = (vol60 - vol20) / 40.0
         vc = (vol20 / 20.0) / vprior if vprior > 0 else np.nan
         if not (breakout and np.isfinite(vc) and vc < 1.0):
+            continue
+        # 시리얼 갭퍼 배제 (GOAL 루프48-49): 최근 120일 내 -10% 이상 갭다운 이력이 있으면 제외.
+        # 잡주(배제군 평균 -0.84%)를 걸러 포트폴리오 CAGR/Sharpe 개선(+18.1%→+20.9%/0.63→0.69).
+        # 파국적 갭 꼬리(-68%)는 못 막음(그건 분산 사이징의 몫) — 잡주 제거 효과.
+        op = sub["open"].to_numpy(float)
+        prev_c = c[ti - 120:ti]; day_o = op[ti - 119:ti + 1]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            gaps = day_o / prev_c - 1.0
+        if np.any(np.isfinite(gaps) & (gaps <= -0.10)):
             continue
         # 스텔스 매집(60일 순매수/거래량, 5투자자 합)
         nb60 = sum(np.nansum(sub[inv].to_numpy(float)[ti - 60:ti]) for inv in INF)
