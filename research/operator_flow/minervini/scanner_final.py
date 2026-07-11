@@ -29,24 +29,27 @@ def _backadjust(c, high, low, op):
     src/kr_quant/price_adjust.py 와 동일 로직 — DAG 서브프로세스 path 제약 때문에 인라인.
     """
     n = len(c)
+    if n < 5:
+        return c, high, low, op
+    # 비정상 종가비율(±30% 초과)만 벡터로 추려 후보로 — 전체 일자 파이썬 루프 회피(성능).
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = c[1:] / c[:-1]
+    cand = np.where(np.isfinite(ratio) & ((ratio < 0.70) | (ratio > 1.4286)))[0] + 1
     splits = []
-    for t in range(1, n - 3):
-        if np.isfinite(c[t]) and np.isfinite(c[t - 1]) and c[t - 1] > 0:
-            r = c[t] / c[t - 1]
-            if r < 0.70 or r > 1.4286:
-                fwd = [c[t + k] for k in range(1, 4) if np.isfinite(c[t + k])]
-                bwd = [c[t - 1 - k] for k in range(1, 4) if np.isfinite(c[t - 1 - k])]
-                fwd_ok = bool(fwd) and abs(np.median(fwd) / c[t] - 1) < 0.25
-                bwd_ok = (not bwd) or abs(np.median(bwd) / c[t - 1] - 1) < 0.25
-                if fwd_ok and bwd_ok:
-                    splits.append((t, r))
+    for t in cand:  # 후보는 보통 0~few개
+        if t >= n - 3 or not (c[t - 1] > 0):
+            continue
+        fwd = c[t + 1:t + 4][np.isfinite(c[t + 1:t + 4])]
+        bwd = c[max(0, t - 4):t - 1][np.isfinite(c[max(0, t - 4):t - 1])]
+        fwd_ok = fwd.size > 0 and abs(np.median(fwd) / c[t] - 1) < 0.25
+        bwd_ok = bwd.size == 0 or abs(np.median(bwd) / c[t - 1] - 1) < 0.25
+        if fwd_ok and bwd_ok:
+            splits.append((int(t), float(ratio[t - 1])))
     if not splits:
         return c, high, low, op
     fac = np.ones(n)
-    for i in range(n):
-        for t, r in splits:
-            if t > i:
-                fac[i] *= r
+    for t, r in splits:  # 인덱스 i<t 전부에 비율 곱(벡터)
+        fac[:t] *= r
     return c * fac, high * fac, low * fac, op * fac
 
 
