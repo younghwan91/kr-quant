@@ -176,6 +176,13 @@ CREATE TABLE IF NOT EXISTS daily_bars_adjusted (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_dba_date ON daily_bars_adjusted(date);
+CREATE TABLE IF NOT EXISTS delisted_stocks (
+    code            TEXT NOT NULL,
+    name            TEXT,
+    market          TEXT,
+    last_trade_date TEXT,   -- daily_bars 기준 마지막 거래일(상장폐지일 근사), 이력 없으면 NULL
+    PRIMARY KEY (code)
+);
 """
 
 
@@ -365,6 +372,14 @@ def upsert_minervini_scan(con: Any, records: list[tuple]) -> int:
 def upsert_daily_bars_adjusted(con: Any, records: list[tuple]) -> int:
     """Insert/replace daily_bars_adjusted rows (tuples ordered by DAILY_BAR_COLUMNS)."""
     return _upsert(con, "daily_bars_adjusted", DAILY_BAR_COLUMNS, records)
+
+
+_DELISTED_STOCKS_COLS = ["code", "name", "market", "last_trade_date"]
+
+
+def upsert_delisted_stocks(con: Any, records: list[tuple]) -> int:
+    """Insert/replace delisted_stocks rows (tuples ordered by _DELISTED_STOCKS_COLS)."""
+    return _upsert(con, "delisted_stocks", _DELISTED_STOCKS_COLS, records, pk_cols=("code",))
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
