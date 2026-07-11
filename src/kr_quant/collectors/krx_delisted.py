@@ -85,17 +85,14 @@ def main() -> int:
     delisted = fetch_delisted_list()
     print(f"KRX 상장폐지 리스트 {len(delisted)}건", flush=True)
 
+    # 상폐 리스트(수천 건)를 통째로 IN(...) 파라미터로 넘기면 대형 파라미터 목록이
+    # 플래너에 부담을 준다(실측: 공유메모리 부족 에러) — daily_bars는 종목 수(~2,600)만큼만
+    # 있으니 전체를 한 번에 집계해서 파이썬 dict로 조회하는 편이 훨씬 가볍다.
     import pandas as pd
-    codes = [c for c, _, _ in delisted]
-    last_dates: dict[str, str] = {}
-    if codes:
-        ph = "%s" if con.__class__.__module__.startswith("psycopg") else "?"
-        placeholders = ",".join([ph] * len(codes))
-        df = pd.read_sql_query(
-            f"SELECT code, MAX(date) AS last_date FROM daily_bars "
-            f"WHERE code IN ({placeholders}) GROUP BY code",
-            con, params=codes)
-        last_dates = dict(zip(df["code"], df["last_date"].astype(str)))
+    all_last_dates = pd.read_sql_query(
+        "SELECT code, MAX(date) AS last_date FROM daily_bars GROUP BY code", con)
+    last_dates: dict[str, str] = dict(
+        zip(all_last_dates["code"], all_last_dates["last_date"].astype(str)))
 
     records = [
         (code, name, market, last_dates.get(code))
