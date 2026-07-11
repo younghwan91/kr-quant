@@ -39,3 +39,26 @@ def test_asof_ignores_future_bars():
     base = base_count(c, asof_idx=15)
     c2 = np.concatenate([c, [200, 60, 210]])   # future high+crash after asof
     assert base_count(c2, asof_idx=15) == base
+
+
+def test_deep_decline_resets_the_base_count_clock():
+    # Reproduces the real-data bug: 4 bases (stage=4, late), then a bear-market-
+    # scale (≥25%) decline and recovery, then ONE new base. Without the reset the
+    # unbounded-accumulation bug would report stage=5 (still "late"); the fix
+    # should treat this as a fresh cycle — stage=1, early again.
+    four_bases = _ramp(_ANCHORS)                        # ends at stage 4 (peak ~160)
+    crash = _ramp([160, 110], steps=10)[1:]              # −31% bear decline
+    recover_and_one_base = _ramp([110, 145, 122, 150], steps=10)[1:]  # one fresh base
+    c = np.concatenate([four_bases, crash, recover_and_one_base])
+
+    r = base_count(c, asof_idx=len(c) - 1)
+    assert r["base_stage"] == 1          # clock reset by the deep decline, not 5
+    assert r["is_early"] is True
+
+
+def test_shallow_decline_does_not_trigger_reset():
+    # A pullback well under the 25% deep-reset threshold must not reset the clock
+    # (regression guard: only bear-market-scale declines should reset).
+    c = _ramp(_ANCHORS)                                  # troughs are ~15-18% pullbacks
+    r = base_count(c, asof_idx=len(c) - 1)
+    assert r["base_stage"] == 4          # unaffected by the new deep-reset logic
