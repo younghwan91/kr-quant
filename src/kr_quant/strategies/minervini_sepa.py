@@ -21,6 +21,7 @@ from .minervini_exits import (
     breakeven_plus_stop,
     climax_run,
     hard_stop,
+    pe_expansion,
     sell_half_level,
     violations,
 )
@@ -203,6 +204,7 @@ def sepa_trades(
     sell_half: bool = True,
     breakeven: bool = True,
     sell_half_r: float = 2.0,
+    pe_panel: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Per-trade forward walk from each filled entry, applying Minervini exits.
 
@@ -230,6 +232,11 @@ def sepa_trades(
     V = prices.pivot_table(index="code", columns="date", values="volume", aggfunc="first").reindex(
         index=codes, columns=dates).to_numpy(float)
     ma50 = pd.DataFrame(C.T).rolling(ma_exit_window, min_periods=1).mean().to_numpy()  # for breakeven
+    PE = (
+        pe_panel.pivot_table(index="code", columns="date", values="pe", aggfunc="first")
+        .reindex(index=codes, columns=dates).to_numpy(float)
+        if pe_panel is not None else None
+    )
     cix = {c: k for k, c in enumerate(codes)}
     nD = len(dates)
 
@@ -241,6 +248,7 @@ def sepa_trades(
         stop = hard_stop(entry, pct=stop_pct)
         half_target = sell_half_level(entry, stop, r=sell_half_r)  # +2R price
         half_ret = None                                            # banked half return
+        pe_entry = PE[i, f0] if PE is not None else float("nan")   # P/E at entry base
         exit_price = exit_date = reason = None
         for t in range(f0 + 1, min(f0 + time_cap + 1, nD)):
             if not np.isfinite(C[i, t]):
@@ -248,6 +256,9 @@ def sepa_trades(
             if L[i, t] <= stop:  # stop hit — gap-through fills at the open
                 exit_price = float(min(OPN[i, t], stop) if OPN[i, t] < stop else stop)
                 exit_date, reason = dates[t], "stop"
+                break
+            if PE is not None and pe_expansion(PE[i, t], pe_entry):  # valuation overheated
+                exit_price, exit_date, reason = float(C[i, t]), dates[t], "pe_expansion"
                 break
             # Sell half at +2R and raise the stop to break-even-or-better (max entry, MA50).
             if sell_half and half_ret is None and H[i, t] >= half_target:

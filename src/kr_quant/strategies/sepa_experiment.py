@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..features.fundamentals import code33_panel
+from ..features.fundamentals import code33_panel, earnings_yield_panel
 from ..features.rs_rating import rs_rating_panel
 from ..features.universe import smallmid_universe
 from ..price_adjust import adjust_prices
@@ -72,6 +72,9 @@ def build_panels(
     dates = sorted(prices["date"].astype(str).unique())
     cap = market_cap_panel(prices, shares)
     adv = _adv_panel(prices)
+    annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
+    ep = earnings_yield_panel(annual, cap)                             # code/date/ep (E/P)
+    ep["pe"] = (1.0 / ep["ep"]).where(ep["ep"] > 0)                    # P/E for the sell rule
     return {
         "prices": prices,
         "cap": cap,
@@ -79,6 +82,7 @@ def build_panels(
         "largecap": smallmid_universe(cap, adv, cap_rank=LARGE_CAP_RANK),  # B-shell
         "rs": rs_rating_panel(prices),
         "code33": code33_panel(earnings, dates),
+        "pe": ep[["code", "date", "pe"]],
     }
 
 
@@ -98,8 +102,9 @@ def run_experiment(
     p = build_panels(prices, earnings, shares, adjust=adjust)
     px, rs, c33 = p["prices"], p["rs"], p["code33"]
 
+    pe = p["pe"]
     ent_a = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=True, use_code33=True)
-    trades_a = sepa_trades(px, ent_a)
+    trades_a = sepa_trades(px, ent_a, pe_panel=pe)
     ent_avcp = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=False, use_code33=True)
     ent_b = sepa_entries(px, p["largecap"], rs, c33, use_vcp=False, use_code33=False,
                          use_base_count=False, rs_min=0.0)
@@ -109,7 +114,7 @@ def run_experiment(
         "A": book_returns(px, trades_a, n_slots=N_CONCENTRATED, sized=True),
         # A-diversified / B-shell: deployed-style diversified equal-weight (isolates concentration).
         "A-diversified": book_returns(px, trades_a, n_slots=N_DIVERSIFIED, sized=False),
-        "A-noVCP": book_returns(px, sepa_trades(px, ent_avcp), n_slots=N_CONCENTRATED, sized=True),
+        "A-noVCP": book_returns(px, sepa_trades(px, ent_avcp, pe_panel=pe), n_slots=N_CONCENTRATED, sized=True),
         "B-shell": book_returns(px, sepa_trades(px, ent_b), n_slots=N_DIVERSIFIED, sized=False),
         "C-bench": benchmark_returns(px, p["cap"]),
     }

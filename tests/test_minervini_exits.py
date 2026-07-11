@@ -8,6 +8,7 @@ from kr_quant.strategies.minervini_exits import (
     breakeven_plus_stop,
     climax_run,
     hard_stop,
+    pe_expansion,
     sell_half_level,
     staggered_stops,
     violations,
@@ -59,6 +60,13 @@ def test_violations_normal_hold():
 
 def test_sell_half_is_two_r():
     assert sell_half_level(100.0, 95.0) == 110.0    # 2 × (100−95) above entry
+
+
+def test_pe_expansion_trigger_and_guards():
+    assert pe_expansion(30.0, 10.0) is True        # 3× ≥ 2.5× → sell
+    assert pe_expansion(20.0, 10.0) is False       # 2× < 2.5× → hold
+    assert pe_expansion(30.0, 0.0) is False        # entry P/E non-positive → undefined
+    assert pe_expansion(float("nan"), 10.0) is False
 
 
 def test_breakeven_plus_only_after_two_r():

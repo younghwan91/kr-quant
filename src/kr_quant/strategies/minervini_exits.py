@@ -102,3 +102,17 @@ def breakeven_plus_stop(entry: float, ma50: float, *, r_reached: bool) -> float 
     if not r_reached:
         return None
     return float(max(entry, ma50))
+
+
+PE_EXPANSION_FACTOR = 2.5   # frozen: sell when P/E has expanded 2–3× since entry
+
+
+def pe_expansion(pe_now: float, pe_entry: float, *, factor: float = PE_EXPANSION_FACTOR) -> bool:
+    """Sell-into-strength trigger: P/E has expanded ≥ ``factor``× since the base start.
+
+    Minervini exits when a leader's valuation multiple has run 2–3× from the trend's
+    starting P/E (a late-base overheating signal). ``False`` when either P/E is
+    missing or the entry P/E is non-positive (loss-making → ratio undefined)."""
+    if not (np.isfinite(pe_now) and np.isfinite(pe_entry) and pe_entry > 0):
+        return False
+    return pe_now >= factor * pe_entry

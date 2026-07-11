@@ -76,6 +76,23 @@ def test_sepa_trades_sell_half_and_breakeven():
     assert whole["ret"] < half["ret"]                  # rode it down instead of banking half
 
 
+def test_sepa_trades_pe_expansion_exit():
+    from kr_quant.strategies.minervini_sepa import sepa_trades
+    # Gentle rise (no stop/half/climax), but P/E triples from entry → valuation sell.
+    close = [100.0] * 11 + [101.0, 102.0, 103.0, 103.0, 103.0]
+    dates = pd.bdate_range("2020-01-01", periods=len(close)).strftime("%Y-%m-%d")
+    prices = pd.DataFrame([{"code": "X", "date": d, "open": c, "high": c, "low": c,
+                            "close": c, "volume": 1000.0} for d, c in zip(dates, close)])
+    entries = pd.DataFrame([{"code": "X", "date": dates[9], "pivot": 100.0}])
+    pe = pd.DataFrame([{"code": "X", "date": d, "pe": (10.0 if k < 12 else 30.0)}
+                       for k, d in enumerate(dates)])   # P/E 10 → 30 (3×)
+    tr = sepa_trades(prices, entries, time_cap=20, pe_panel=pe).iloc[0]
+    assert tr["reason"] == "pe_expansion"
+    # Without the P/E panel it would ride to the time cap instead.
+    tr2 = sepa_trades(prices, entries, time_cap=20).iloc[0]
+    assert tr2["reason"] == "time_cap"
+
+
 def test_sepa_entries_gates_uptrend_only():
     # Strong uptrend passes the trend template + RS; a flat name fails both.
     n = 300
