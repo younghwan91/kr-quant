@@ -127,7 +127,9 @@ def main() -> int:
     ap.add_argument("--no-adjust", action="store_true", help="분할조정 생략(디버그용)")
     args = ap.parse_args()
 
-    cols = ["code", "period", "avail_date", "netinc", "netinc_prior",
+    # dart_earnings.main() CSV 스키마 (10칸, 헤더 없음): yoy가 6번째 — code33_panel엔
+    # 불필요하나 위치 정렬을 위해 이름을 준다. (실적 DB 테이블로 이관되면 여기만 교체.)
+    cols = ["code", "period", "avail_date", "netinc", "netinc_prior", "yoy",
             "revenue", "revenue_prior", "op_income", "op_income_prior"]
     ea = _pd.read_csv(args.earnings_csv, names=cols, dtype={"code": str, "avail_date": str, "period": str})
     con = connect(args.db)
