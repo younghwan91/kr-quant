@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..features.base_count import base_count
 from ..features.vcp import detect_vcp
 from .minervini_exits import climax_run, hard_stop, violations
 
@@ -95,6 +96,7 @@ def sepa_entries(
     rs_min: float = 70.0,
     use_vcp: bool = True,
     use_code33: bool = True,
+    use_base_count: bool = True,
     start_index: int = 252,
     vcp_params: dict | None = None,
 ) -> pd.DataFrame:
@@ -115,7 +117,8 @@ def sepa_entries(
         rs_panel: ``rs_rating_panel`` output (``code``/``date``/``rs_rating``).
         code33: ``code33_panel`` output (``code``/``date``/``is_code33``).
         rs_min: RS-rating floor (frozen 70).
-        use_vcp, use_code33: Gate toggles for the A₋VCP / fundamental-off arms.
+        use_vcp, use_code33, use_base_count: Gate toggles (base_count keeps only
+            1st/2nd-stage bases). Off for the shell / decomposition arms.
         start_index: First date index to signal from (trend-template warm-up).
         vcp_params: Optional overrides forwarded to :func:`detect_vcp` — for the VCP
             robustness sweep only (the verdict uses the frozen defaults).
@@ -168,6 +171,9 @@ def sepa_entries(
             # 7-criterion trend template (RS is the 8th, gated above).
             if not (c[t] > m50 > m150 > m200 and m200 > m200p
                     and c[t] >= 1.25 * l_ and c[t] >= 0.75 * h_):
+                continue
+            # Base count: Minervini buys only 1st/2nd-stage bases (late bases fail more).
+            if use_base_count and not base_count(c, t)["is_early"]:
                 continue
             pivot = c[t]  # default breakout level; VCP refines it when enabled
             if use_vcp:

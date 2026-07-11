@@ -101,7 +101,8 @@ def run_experiment(
     ent_a = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=True, use_code33=True)
     trades_a = sepa_trades(px, ent_a)
     ent_avcp = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=False, use_code33=True)
-    ent_b = sepa_entries(px, p["largecap"], rs, c33, use_vcp=False, use_code33=False, rs_min=0.0)
+    ent_b = sepa_entries(px, p["largecap"], rs, c33, use_vcp=False, use_code33=False,
+                         use_base_count=False, rs_min=0.0)
 
     arms = {
         # A / A-noVCP: frozen concentration sizing (6 names, 25/15, pilot).

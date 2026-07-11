@@ -31,6 +31,32 @@ def _eligible_all(prices: pd.DataFrame) -> pd.DataFrame:
     return e
 
 
+def _ramp(anchors: list[float], steps: int) -> np.ndarray:
+    out = [anchors[0]]
+    for a, b in zip(anchors[:-1], anchors[1:]):
+        for k in range(1, steps + 1):
+            out.append(a + (b - a) * k / steps)
+    return np.asarray(out)
+
+
+def test_sepa_entries_base_count_filters_late_bases():
+    # Long warm-up rise then several short (<20d) −15% base cycles = a late-stage
+    # base at the final breakout; base_count should filter those signals out.
+    warm = np.linspace(50, 100, 200)
+    cyc = _ramp([100, 130, 110, 140, 118, 150, 128, 160, 136, 175], 8)  # 8-bar legs
+    stair = np.concatenate([warm, cyc[1:]])
+    prices = _prices({"STAIR": stair, "FLAT": np.full(len(stair), 100.0)})
+    rs = rs_rating_panel(prices)
+    kw = dict(code33=pd.DataFrame(columns=["code", "date", "is_code33"]),
+              use_vcp=False, use_code33=False)
+    on = sepa_entries(prices, _eligible_all(prices), rs, use_base_count=True, **kw)
+    off = sepa_entries(prices, _eligible_all(prices), rs, use_base_count=False, **kw)
+    on_set = set(zip(on["code"], on["date"]))
+    off_set = set(zip(off["code"], off["date"]))
+    assert on_set <= off_set          # base count only removes, never adds
+    assert len(on) < len(off)         # late bases actually filtered
+
+
 def test_sepa_entries_gates_uptrend_only():
     # Strong uptrend passes the trend template + RS; a flat name fails both.
     n = 300
