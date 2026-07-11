@@ -117,6 +117,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="네이버 애널리스트 컨센서스 수집 (목표주가·투자의견, 일별 스냅샷)")
     ap.add_argument("--out", required=True, help="출력 CSV (일별 append)")
     ap.add_argument("--top-n", type=int, default=800, help="유동성 상위 N종목")
+    ap.add_argument("--all-codes", action="store_true", help="유동성 상위 N 대신 daily_bars 전종목 사용")
     ap.add_argument("--db", default=None)
     ap.add_argument("--sleep", type=float, default=0.2)
     args = ap.parse_args()
@@ -124,10 +125,13 @@ def main() -> int:
     import pandas as pd
     from ..storage import connect, default_db_path
     con = connect(args.db or str(default_db_path()))
-    top = pd.read_sql_query(
-        "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
-        "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
-        con, params={"n": args.top_n})
+    if args.all_codes:
+        top = pd.read_sql_query("SELECT DISTINCT code FROM daily_bars ORDER BY code", con)
+    else:
+        top = pd.read_sql_query(
+            "SELECT code FROM daily_bars WHERE date >= (SELECT MAX(date) FROM daily_bars) - INTERVAL '90 days' "
+            "GROUP BY code ORDER BY AVG(trade_value) DESC LIMIT %(n)s",
+            con, params={"n": args.top_n})
     con.close()
     codes = top["code"].tolist()
 
