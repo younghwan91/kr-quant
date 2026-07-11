@@ -131,29 +131,38 @@ def _universe_query(args: argparse.Namespace) -> tuple[str, dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="네이버 애널리스트 컨센서스 수집 (목표주가·투자의견, 일별 스냅샷)")
-    ap.add_argument("--out", required=True, help="출력 CSV (일별 append)")
+    ap.add_argument("--out", default=None, help="출력 CSV (일별 append)")
     ap.add_argument("--top-n", type=int, default=800, help="유동성 상위 N종목")
     ap.add_argument("--all-codes", action="store_true", help="유동성 상위 N 대신 daily_bars 전종목 사용")
+    ap.add_argument("--db-table", action="store_true", help="CSV 대신 consensus 테이블에 직접 upsert")
     ap.add_argument("--db", default=None)
     ap.add_argument("--sleep", type=float, default=0.2)
     args = ap.parse_args()
+    if not args.db_table and not args.out:
+        ap.error("--out is required unless --db-table is set")
 
     import pandas as pd
-    from ..storage import connect, default_db_path
+    from ..storage import connect, default_db_path, upsert_consensus
     con = connect(args.db or str(default_db_path()))
     sql, params = _universe_query(args)
     top = pd.read_sql_query(sql, con, params=params)
-    con.close()
     codes = top["code"].tolist()
 
     today = date.today().isoformat()
     done: set[str] = set()
-    if os.path.exists(args.out):
-        for r in csv.reader(open(args.out)):
-            if r and r[0] == today:
-                done.add(r[1])  # (date, code) already collected today
-    f = open(args.out, "a", newline="")
-    w = csv.writer(f)
+    if args.db_table:
+        existing = pd.read_sql_query(
+            "SELECT code FROM consensus WHERE date = %(d)s", con, params={"d": today})
+        done = set(existing["code"])
+    else:
+        con.close()
+        if os.path.exists(args.out):
+            for r in csv.reader(open(args.out)):
+                if r and r[0] == today:
+                    done.add(r[1])  # (date, code) already collected today
+
+    f = open(args.out, "a", newline="") if args.out else None
+    w = csv.writer(f) if f else None
     n = 0
     for i, code in enumerate(codes, 1):
         if code in done:
@@ -165,14 +174,21 @@ def main() -> int:
         if tm is None and rm is None and fe is None:
             continue
 
-        def _s(x: object) -> object:
-            return x if x is not None else ""
-        w.writerow([today, code, _s(tm), _s(rm), bd or "", _s(fe), _s(pe), ey or ""])
+        if args.db_table:
+            upsert_consensus(con, [(code, today, tm, rm, bd, fe, pe, ey)])
+        else:
+            def _s(x: object) -> object:
+                return x if x is not None else ""
+            w.writerow([today, code, _s(tm), _s(rm), bd or "", _s(fe), _s(pe), ey or ""])
         n += 1
         if i % 50 == 0:
-            f.flush()
+            if f:
+                f.flush()
             print(f"[{i}/{len(codes)}] rows={n}", flush=True)
-    f.close()
+    if f:
+        f.close()
+    if args.db_table:
+        con.close()
     print(f"DONE date={today} rows={n}", flush=True)
     return 0
 

@@ -144,6 +144,18 @@ CREATE TABLE IF NOT EXISTS earnings (
     PRIMARY KEY (code, period)
 );
 CREATE INDEX IF NOT EXISTS idx_earnings_avail_date ON earnings(avail_date);
+CREATE TABLE IF NOT EXISTS consensus (
+    code         TEXT NOT NULL,
+    date         TEXT NOT NULL,   -- 스냅샷 수집일 (오늘)
+    target_mean  REAL,            -- 목표주가 평균
+    recomm_mean  REAL,            -- 투자의견 평균 (1~5, 5=강력매수)
+    base_date    TEXT,            -- 컨센서스 기준일(네이버 createDate)
+    fwd_eps      REAL,            -- 향후 컨센서스 EPS
+    prev_eps     REAL,            -- 직전 확정 EPS
+    est_year     TEXT,            -- fwd_eps가 가리키는 연도(예: '202612')
+    PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_consensus_date ON consensus(date);
 """
 
 
@@ -310,6 +322,16 @@ _EARNINGS_COLS = [
 def upsert_earnings(con: Any, records: list[tuple]) -> int:
     """Insert/replace earnings rows (tuples ordered by _EARNINGS_COLS)."""
     return _upsert(con, "earnings", _EARNINGS_COLS, records, pk_cols=("code", "period"))
+
+
+_CONSENSUS_COLS = [
+    "code", "date", "target_mean", "recomm_mean", "base_date", "fwd_eps", "prev_eps", "est_year",
+]
+
+
+def upsert_consensus(con: Any, records: list[tuple]) -> int:
+    """Insert/replace consensus rows (tuples ordered by _CONSENSUS_COLS)."""
+    return _upsert(con, "consensus", _CONSENSUS_COLS, records)
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:

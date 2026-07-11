@@ -88,3 +88,18 @@ def test_all_codes_universe_includes_newly_listed_stock():
     codes = pd.read_sql_query(sql, con, params=params)["code"].tolist()
     assert "999999" in codes
     assert "005930" in codes
+
+
+def test_db_table_upserts_correct_tuple_shape():
+    con = storage.connect(":memory:")
+    storage.upsert_consensus(con, [
+        ("005930", "2026-07-11", 513958.0, 4.04, "2026-07-09", 46664.0, 6564.0, "202612"),
+    ])
+
+    import pandas as pd
+    row = pd.read_sql_query("SELECT * FROM consensus", con).iloc[0]
+    assert row["code"] == "005930"
+    assert row["date"] == "2026-07-11"
+    assert row["target_mean"] == 513958.0
+    assert row["recomm_mean"] == 4.04
+    assert row["fwd_eps"] == 46664.0
