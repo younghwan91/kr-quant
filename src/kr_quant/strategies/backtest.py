@@ -20,25 +20,21 @@ import argparse
 
 import pandas as pd
 
+from ..engine.metrics import quantile_summary as _engine_qsummary
+from ..engine.metrics import spearman as _engine_spearman
+from ..engine.panels import forward_returns as _engine_fwd_returns
 from ..storage import connect, db_default
 from .accumulation import load_frame, screen
 
-
-def spearman(a: pd.Series, b: pd.Series) -> float:
-    """Spearman rank correlation (Pearson on ranks — no scipy dependency)."""
-    if len(a) < 2:
-        return float("nan")
-    return float(a.rank().corr(b.rank()))
-
-
-def forward_returns(df: pd.DataFrame, base_date: str, eval_date: str) -> pd.Series:
-    """Per-code return from ``base_date``'s close to ``eval_date``'s close.
-
-    Kiwoom stores a signed close (the sign marks the day's direction), so we
-    take the absolute value to recover the price level.
-    """
-    piv = df.pivot_table(index="code", columns="date", values="close", aggfunc="first").abs()
-    return (piv[eval_date] / piv[base_date] - 1.0).rename("fwd_ret")
+# Re-exports for backward compatibility. ``supply_wave.py`` and ``multi_signal.py``
+# (out of scope) import these via ``from .backtest import forward_returns, spearman``;
+# that path must keep working after the metrics/panels moved into the engine.
+# ``_quantile_summary`` is retained as a private re-export for the Step 0
+# source-equivalence test (``test_engine_metrics.py``), mirroring how
+# ``sepa_compare.py`` kept ``_ann_sharpe``/``_cagr``/``_max_drawdown``.
+spearman = _engine_spearman
+forward_returns = _engine_fwd_returns
+_quantile_summary = _engine_qsummary
 
 
 def backtest(
@@ -82,7 +78,7 @@ def backtest(
         .reset_index(drop=True)
     )
 
-    buckets = _quantile_summary(merged, quantiles)
+    buckets = _engine_qsummary(merged, quantiles)
     summary = {
         "formation_days": formation_days,
         "base_date": base_date,
@@ -93,23 +89,6 @@ def backtest(
         "buckets": buckets,
     }
     return merged, summary
-
-
-def _quantile_summary(merged: pd.DataFrame, quantiles: int) -> pd.DataFrame:
-    """Mean forward return + hit rate per score quantile (Q1 = highest score)."""
-    cols = ["quantile", "n", "mean_fwd", "hit_rate"]
-    if len(merged) < quantiles:
-        return pd.DataFrame(columns=cols)
-    # rank=False so Q1 is the top score bucket; labels 1..quantiles.
-    q = pd.qcut(merged["score"].rank(method="first", ascending=False), quantiles, labels=False) + 1
-    out = (
-        merged.assign(_q=q)
-        .groupby("_q")
-        .agg(n=("fwd_ret", "size"), mean_fwd=("fwd_ret", "mean"), hit_rate=("fwd_ret", lambda s: (s > 0).mean()))
-        .reset_index()
-        .rename(columns={"_q": "quantile"})
-    )
-    return out[cols]
 
 
 def rolling_backtest(

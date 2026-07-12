@@ -17,35 +17,24 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from kr_quant.engine.metrics import (
+    ann_sharpe,
+    cagr,
+    max_drawdown,
+    paired_bootstrap as _engine_bootstrap,
+    regime_buckets as _engine_regimes,
+)
+
 from .minervini_sizing import PILOT_FRAC, REST_WEIGHT, STOP_PCT, TOP_WEIGHT
 
 PPY = 12  # periods per year (monthly return series)
 
-
-def _ann_sharpe(r: np.ndarray, ppy: int = PPY) -> float:
-    r = np.asarray(r, float)
-    r = r[np.isfinite(r)]
-    if r.size < 2 or r.std() < 1e-12:  # degenerate/no-dispersion → Sharpe undefined
-        return float("nan")
-    return float(r.mean() / r.std() * np.sqrt(ppy))
-
-
-def _cagr(r: np.ndarray, ppy: int = PPY) -> float:
-    r = np.asarray(r, float)
-    r = r[np.isfinite(r)]
-    if r.size == 0:
-        return float("nan")
-    return float((1.0 + r).prod() ** (ppy / r.size) - 1.0)
-
-
-def _max_drawdown(r: np.ndarray) -> float:
-    r = np.asarray(r, float)
-    r = r[np.isfinite(r)]
-    if r.size == 0:
-        return float("nan")
-    equity = np.cumprod(1.0 + r)
-    peak = np.maximum.accumulate(equity)
-    return float((equity / peak - 1.0).min())
+# Metric primitives now live in ``kr_quant.engine.metrics`` (single source of
+# truth). Re-exported under their historical private names for backward compat —
+# ``sepa_experiment.py`` still does ``from .sepa_compare import _ann_sharpe, _cagr``.
+_ann_sharpe = ann_sharpe
+_cagr = cagr
+_max_drawdown = max_drawdown
 
 
 def monthly_book_returns(trades: pd.DataFrame, months: list[str]) -> pd.Series:
@@ -226,17 +215,12 @@ def benchmark_returns(prices: pd.DataFrame, cap_panel: pd.DataFrame) -> pd.Serie
 
 def regime_buckets(returns: pd.Series, *, n: int = 4) -> list[dict]:
     """Split the return series into ``n`` equal chronological buckets; report each
-    bucket's mean and sign — the design's regime-persistence check (want 3+/4 +)."""
-    r = returns.to_numpy(float)
-    out: list[dict] = []
-    if len(r) < n:
-        return out
-    b = len(r) // n
-    for k in range(n):
-        seg = r[k * b:(k + 1) * b if k < n - 1 else len(r)]
-        m = float(np.nanmean(seg))
-        out.append({"start": returns.index[k * b], "mean": m, "positive": m > 0})
-    return out
+    bucket's mean and sign — the design's regime-persistence check (want 3+/4 +).
+
+    Delegates to :func:`kr_quant.engine.metrics.regime_buckets` (single source of
+    truth); kept here so ``compare_arms`` and callers keep the same import path.
+    """
+    return _engine_regimes(returns, n=n)
 
 
 def paired_bootstrap(
@@ -258,33 +242,11 @@ def paired_bootstrap(
     Returns:
         ``{"d_sharpe_ci", "d_cagr_ci", "prob_a_better_sharpe", "n"}`` where the CIs
         are ``(lo, hi)`` at the 2.5/97.5 percentiles.
+
+    Delegates to :func:`kr_quant.engine.metrics.paired_bootstrap` (single source of
+    truth); kept here so ``compare_arms`` and callers keep the same import path.
     """
-    a = ret_a.reindex(ret_b.index).to_numpy(float)
-    b = ret_b.to_numpy(float)
-    mask = np.isfinite(a) & np.isfinite(b)
-    a, b = a[mask], b[mask]
-    n = len(a)
-    if n < block + 1:
-        return {"d_sharpe_ci": (float("nan"),) * 2, "d_cagr_ci": (float("nan"),) * 2,
-                "prob_a_better_sharpe": float("nan"), "n": n}
-    rng = np.random.default_rng(seed)
-    n_blocks = int(np.ceil(n / block))
-    d_sharpe = np.empty(n_boot)
-    d_cagr = np.empty(n_boot)
-    for i in range(n_boot):
-        starts = rng.integers(0, n - block + 1, size=n_blocks)
-        idx = np.concatenate([np.arange(s, s + block) for s in starts])[:n]
-        d_sharpe[i] = _ann_sharpe(a[idx], ppy) - _ann_sharpe(b[idx], ppy)
-        d_cagr[i] = _cagr(a[idx], ppy) - _cagr(b[idx], ppy)
-    ds = d_sharpe[np.isfinite(d_sharpe)]
-    dc = d_cagr[np.isfinite(d_cagr)]
-    nan2 = (float("nan"), float("nan"))
-    return {
-        "d_sharpe_ci": (float(np.percentile(ds, 2.5)), float(np.percentile(ds, 97.5))) if ds.size else nan2,
-        "d_cagr_ci": (float(np.percentile(dc, 2.5)), float(np.percentile(dc, 97.5))) if dc.size else nan2,
-        "prob_a_better_sharpe": float((ds > 0).mean()) if ds.size else float("nan"),
-        "n": n,
-    }
+    return _engine_bootstrap(ret_a, ret_b, block=block, n_boot=n_boot, seed=seed, ppy=ppy)
 
 
 def compare_arms(
