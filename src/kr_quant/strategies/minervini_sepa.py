@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..features.base_count import base_count
+from ..features.base_count import base_count_series
 from ..features.vcp import detect_vcp
 from .minervini_exits import (
     breakeven_plus_stop,
@@ -168,6 +168,10 @@ def sepa_entries(
     rows: list[dict] = []
     for i, code in enumerate(codes):
         c = C[i]
+        # base_count(c, t) re-scans c[:t+1] from scratch on every call — O(bars) per
+        # call, O(bars²) total per code. Precompute the full per-bar stage sequence
+        # once here instead (found 2026-07-12 as the sepa_entries hot-path bottleneck).
+        base_early = base_count_series(c)["is_early"] if use_base_count else None
         for t in range(start_index, nD):
             if not np.isfinite(c[t]) or elig[i, t] != 1.0:
                 continue
@@ -177,12 +181,15 @@ def sepa_entries(
                 continue
             m50, m150, m200, m200p, h_, l_ = (
                 ma50[t, i], ma150[t, i], ma200[t, i], ma200_prev[t, i], hh[t, i], ll[t, i])
-            # 7-criterion trend template (RS is the 8th, gated above).
+            # 7-criterion trend template (RS is the 8th, gated above). The 52-week-high
+            # criterion is a proximity/eligibility check ("Stage 2 uptrend, near highs"),
+            # not the breakout trigger — the real breakout is the VCP pivot below (the
+            # base's own last-contraction resistance), per docs/minervini.txt §2.
             if not (c[t] > m50 > m150 > m200 and m200 > m200p
                     and c[t] >= 1.25 * l_ and c[t] >= 0.75 * h_):
                 continue
             # Base count: Minervini buys only 1st/2nd-stage bases (late bases fail more).
-            if use_base_count and not base_count(c, t)["is_early"]:
+            if use_base_count and not base_early[t]:
                 continue
             pivot = c[t]  # default breakout level; VCP refines it when enabled
             if use_vcp:

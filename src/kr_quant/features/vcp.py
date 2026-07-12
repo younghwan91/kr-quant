@@ -117,16 +117,21 @@ def detect_vcp(
     tightness = depths[-1] if depths else float("nan")
     pivot = peak_highs[-1] if peak_highs else float("nan")
     base_vol = float(np.nanmean(v)) if v.size else float("nan")
-    recent_vol = float(np.nanmean(v[-dry_days:])) if v.size >= dry_days else float("nan")
+    # Dry-up window excludes today (asof_idx): a signal day already clearing the
+    # trend/RS/Code33 gates typically has volume already picking back up, so
+    # including today in "recent" self-contaminates the "still dry" read (found
+    # 2026-07-12 via funnel diagnostic — this was the actual bottleneck, not the
+    # contraction shape). Measure the dry-up strictly *into* the pivot, at t-1.
+    pre_today = v[:-1]
+    recent_vol = float(np.nanmean(pre_today[-dry_days:])) if pre_today.size >= dry_days else float("nan")
     dry = recent_vol / base_vol if base_vol and base_vol > 0 else float("nan")
 
-    shrinking = n >= 2 and all(
-        depths[k] <= shrink_ratio * depths[k - 1] for k in range(1, n)
-    )
+    # Chart shape (contraction depths shrinking a clean 25%→15%→8%→3%) is easy for
+    # institutional flow to paint; volume is not. Per user direction (2026-07-12):
+    # drop the price-geometry requirements (monotonic shrink, final-depth cap) —
+    # a base merely needs to exist (>=1 contraction); volume dry-up is the real gate.
     is_vcp = bool(
-        min_contractions <= n <= max_contractions
-        and shrinking
-        and np.isfinite(tightness) and tightness <= final_max_depth
+        n >= min_contractions
         and np.isfinite(dry) and dry < vol_dryup
     )
     return {"n_contractions": n, "pivot": pivot, "tightness": tightness,
