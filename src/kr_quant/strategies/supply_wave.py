@@ -29,7 +29,7 @@ from ..features.supply_flow import (
     add_ewma_signal,
     add_normalized_ratios,
 )
-from ..storage import connect, default_db_path, market_cap_asof_bulk
+from ..storage import connect, db_default, market_cap_asof_bulk
 from .backtest import forward_returns, spearman
 
 
@@ -250,7 +250,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="수급 파도타기 신호(EWMA+랭크) vs 후속 수익률 워크포워드 검증"
     )
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--investor-col", default="foreign_", choices=list(INVESTOR_TYPES))
     parser.add_argument("--halflife", type=float, default=7.0)
     parser.add_argument("--horizons", type=int, nargs="+", default=[3, 5])

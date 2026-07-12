@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.font_manager as fm  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
-from ..storage import connect, default_db_path  # noqa: E402
+from ..storage import connect, db_default, default_db_path  # noqa: E402
 
 for _fp in (Path.home() / ".local/share/fonts").glob("NanumGothic*.ttf"):
     fm.fontManager.addfont(str(_fp))
@@ -93,7 +93,7 @@ def build_chart(con: sqlite3.Connection, code: str, out_path: str | Path) -> Pat
 def main() -> int:
     parser = argparse.ArgumentParser(description="종목 수급 차트 생성 (DB 기반)")
     parser.add_argument("--code", required=True, help="종목코드 (예: 005930)")
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 

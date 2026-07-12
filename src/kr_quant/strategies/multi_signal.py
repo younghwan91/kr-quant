@@ -43,7 +43,7 @@ from ..features.supply_flow import (
     add_ewma_signal,
     add_normalized_ratios,
 )
-from ..storage import connect, default_db_path, market_cap_asof_bulk
+from ..storage import connect, db_default, market_cap_asof_bulk
 from .backtest import forward_returns, spearman
 from .supply_wave import assert_no_lookahead
 
@@ -322,7 +322,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="다채널 수급 신호(장기기관 EWMA+평단갭+숏커버링) vs 후속 수익률 워크포워드 검증"
     )
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument(
         "--flow-channels", nargs="+", default=list(DEFAULT_FLOW_CHANNELS), choices=INVESTOR_TYPES
     )

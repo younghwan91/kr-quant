@@ -13,11 +13,22 @@ local sqlite file exactly as before.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 _PG_PREFIXES = ("postgresql://", "postgres://")
+
+
+def db_default() -> str:
+    """CLI ``--db`` flag default: ``KR_QUANT_DB`` env var if set, else local sqlite.
+
+    Lets an analysis-only checkout point at the shared TimescaleDB once (via
+    ``.env``/``export KR_QUANT_DB=postgresql://...``) instead of passing
+    ``--db`` on every command.
+    """
+    return os.environ.get("KR_QUANT_DB") or str(default_db_path())
 
 # ka10059 (투자자기관별종목별) net-buy fields → DB columns.
 # Order matters: it defines the column order for ``supply_demand`` inserts.

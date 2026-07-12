@@ -55,12 +55,13 @@ kr_quant/
 git clone https://github.com/younghwan91/kr-quant
 cd kr-quant
 uv venv && uv pip install -e ".[viz,dev]"
-cp .env.example .env          # TimescaleDB/SQLite 접속 정보 (필요시)
+cp .env.example .env          # KR_QUANT_DB에 TimescaleDB 접속정보 채우기 (아래 참고)
+export $(grep -v '^#' .env | xargs)   # 자동 로드 안 됨 — 셸에 직접 로드
 ```
 
 ## 사용법
 
-데이터 수집은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)의 Airflow DAG가 담당합니다(`python -m collectors.X`). 아래는 이미 채워진 DB(TimescaleDB 또는 로컬 SQLite)를 대상으로 한 분석 명령입니다.
+데이터 수집은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)의 Airflow DAG가 담당합니다(`python -m collectors.X`). 이 레포는 읽기 전용이며, `KR_QUANT_DB` 환경변수(비우면 로컬 SQLite)로 접속 대상을 정합니다 — 아래는 이미 채워진 DB를 대상으로 한 분석 명령입니다.
 
 ```bash
 # 매집 후보 스크리닝

@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 
 from ..features.supply_flow import INVESTOR_TYPES
-from ..storage import connect, default_db_path
+from ..storage import connect, db_default
 from ..strategies.backtest import forward_returns, spearman
 from ..strategies.supply_wave import assert_no_lookahead, build_supply_wave_signal, load_frame
 
@@ -264,7 +264,7 @@ def main() -> int:
         description="Phase 2: 섹터 그래프 확산 신호 vs 후속 수익률 워크포워드 검증 "
         "(Phase 1 원신호와 나란히 비교)"
     )
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--investor-col", default="foreign_", choices=list(INVESTOR_TYPES))
     parser.add_argument("--halflife", type=float, default=7.0)
     parser.add_argument("--horizons", type=int, nargs="+", default=[3, 5])

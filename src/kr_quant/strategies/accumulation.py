@@ -16,7 +16,7 @@ import sqlite3
 
 import pandas as pd
 
-from ..storage import connect, default_db_path
+from ..storage import connect, db_default
 
 # Floor for the sideways range so tiny ranges don't make the score explode.
 _RANGE_FLOOR = 0.02
@@ -152,7 +152,7 @@ def _empty_result() -> pd.DataFrame:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="매집 후보 스크리너 (횡보 + 외인·기관 순매수)")
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--top", type=int, default=30, help="상위 N개 출력")
     parser.add_argument("--min-days", type=int, default=10)
     parser.add_argument("--max-range", type=float, default=0.15,

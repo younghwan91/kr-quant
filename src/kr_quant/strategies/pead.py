@@ -487,11 +487,11 @@ def main() -> int:
     """
     import argparse
     import pandas as _pd
-    from ..storage import connect, default_db_path
+    from ..storage import connect, db_default
     from ..features.fundamentals import combined_signal, earnings_yoy_panel
 
     ap = argparse.ArgumentParser(description="PEAD⊕가치 저회전 알파 백테스트 (실적 드리프트 + 가치)")
-    ap.add_argument("--db", default=str(default_db_path()))
+    ap.add_argument("--db", default=db_default())
     ap.add_argument("--earnings-csv", required=True, help="DART 실적 CSV: code,period,avail_date,netinc,prior,yoy")
     ap.add_argument("--horizon", type=int, default=60)
     ap.add_argument("--adv-floor", type=float, default=20000, help="유동성 하한(백만원, 200억=공매도가능 대형주)")

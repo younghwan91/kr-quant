@@ -20,7 +20,7 @@ import argparse
 
 import pandas as pd
 
-from ..storage import connect, default_db_path
+from ..storage import connect, db_default
 from .accumulation import load_frame, screen
 
 
@@ -196,7 +196,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="매집 점수 vs 후속 수익률 검증 (형성구간 스크리닝 → 보유구간 수익률)"
     )
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--formation-days", type=int, default=12,
                         help="형성구간(스크리닝) 거래일 수 — 나머지는 보유구간")
     parser.add_argument("--max-range", type=float, default=0.15)

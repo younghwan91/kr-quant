@@ -29,7 +29,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from ..storage import connect, default_db_path
+from ..storage import connect, db_default
 from ..strategies.backtest import forward_returns, spearman
 from ..strategies.multi_signal import (
     DEFAULT_FLOW_CHANNELS,
@@ -390,7 +390,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="채널별 가중치를 릿지회귀로 학습하는 다채널 수급 신호 앙상블 워크포워드 검증"
     )
-    parser.add_argument("--db", default=str(default_db_path()))
+    parser.add_argument("--db", default=db_default())
     parser.add_argument("--flow-channels", nargs="+", default=list(DEFAULT_FLOW_CHANNELS))
     parser.add_argument("--cost-gap-channel", default="penfnd_etc")
     parser.add_argument("--halflife", type=float, default=7.0)

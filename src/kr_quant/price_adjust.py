@@ -148,8 +148,8 @@ def main() -> int:
     ap.add_argument("--rebuild-db", action="store_true",
                     help="진단만 하지 않고 daily_bars_adjusted 테이블을 전체 재계산해 upsert")
     args = ap.parse_args()
-    from kr_quant.storage import connect, default_db_path
-    con = connect(args.db or str(default_db_path()))
+    from kr_quant.storage import connect, db_default
+    con = connect(args.db or db_default())
 
     if args.rebuild_db:
         n = rebuild_adjusted_table(con)

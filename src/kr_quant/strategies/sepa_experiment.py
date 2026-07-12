@@ -286,10 +286,10 @@ def main() -> int:
 
     import pandas as _pd
 
-    from ..storage import connect, default_db_path
+    from ..storage import connect, db_default
 
     ap = argparse.ArgumentParser(description="미너비니 SEPA 충실 재현 — 다-arm 비교 판정")
-    ap.add_argument("--db", default=str(default_db_path()))
+    ap.add_argument("--db", default=db_default())
     ap.add_argument("--earnings-csv", default=None,
                     help="DART 실적 CSV(dart_earnings.main() 산출물, 10컬럼): code,period,"
                          "avail_date,netinc,netinc_prior,yoy,revenue,revenue_prior,op_income,"
