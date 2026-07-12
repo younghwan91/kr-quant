@@ -4,6 +4,19 @@
 전달한다. 원 로그: `.omc/progress.txt`. 상세: `research/MULTI_ALPHA.md`,
 `research/operator_flow/minervini/HONEST_VERDICT.md`.
 
+## ⚠️ 백테스팅 엔진 사용 규칙 (필독)
+
+성과지표(Sharpe/CAGR/MDD/t-stat/Newey-West/부트스트랩)와 시뮬레이션 루프(횡단면
+랭크틸트·스태거드 트랜치, 이벤트드리븐 트레이드워크)는 전부 `src/kr_quant/engine/`에
+통일돼있다(`metrics.py`/`panels.py`/`sim_crosssectional.py`/`sim_eventdriven.py`/
+`recipe.py` — RALPLAN-DR 2회 컨센서스 검증 완료, `.omc/plans/backtest-engine-plan.md`).
+
+**새 백테스트 실험은 반드시 `kr_quant.engine`의 지표/시뮬레이션 함수를 재사용하고,
+회계 로직(진입가·벤치마크·비용·연율화)을 새로 구현하지 않는다.** 새 실험을 짤 땐
+`examples/pead_sweep_via_recipe.py`처럼 `engine.recipe.ExperimentConfig`+`run_recipe()`로
+파라미터만 정의하는 걸 먼저 시도할 것 — 전략 파일을 통째로 읽고 회계 로직을 손으로
+베끼는 건 오늘 이 엔진을 만든 이유 자체를 무시하는 것이다.
+
 ## ★ 최선 결과 (배포형 확정): 멀티-알파 북
 
 서로 **무상관**인 세 수익원을 결합한 북. 개별로는 어느 것도 인덱스를 압도하지 못하나
