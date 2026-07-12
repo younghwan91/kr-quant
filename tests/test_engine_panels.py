@@ -14,8 +14,9 @@ from kr_quant.engine.panels import (
     yoy_panels,
 )
 
-# Source functions the engine copied from (equivalence pins).
-from kr_quant.strategies.minervini_sepa import _lookup as _src_lookup
+# Source functions the engine copied from (equivalence pins). minervini_sepa._lookup
+# was migrated onto engine.lookup_panel (Step 4) and deleted; its equivalence is now
+# pinned inline against the canonical pivot+reindex below.
 from kr_quant.strategies.pead import _panel as _src_panel
 from kr_quant.strategies.sepa_experiment import _adv_panel as _src_adv_panel
 
@@ -49,8 +50,11 @@ def test_lookup_panel_reindexes_and_matches_source():
     assert arr[0, 0] == 100.0
     assert np.isnan(arr[2, 0])   # unknown code Z
     assert np.isnan(arr[0, 2])   # unknown date
-    np.testing.assert_array_equal(
-        arr, _src_lookup(piv, "close", codes, dates), )
+    expected = (
+        piv.pivot_table(index="code", columns="date", values="close", aggfunc="first")
+        .reindex(index=codes, columns=dates).to_numpy(float)
+    )  # the canonical pivot+reindex the original _lookup performed
+    np.testing.assert_array_equal(arr, expected)
 
 
 def test_adv_panel_trailing_mean_and_matches_source():

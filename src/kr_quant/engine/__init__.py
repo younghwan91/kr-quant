@@ -33,6 +33,10 @@ from .sim_crosssectional import (
     rank_tilt_backtest,
     staggered_tranche_backtest,
 )
+from .sim_eventdriven import (
+    position_walk,
+    trade_runner,
+)
 
 __all__ = [
     # metrics
@@ -58,4 +62,7 @@ __all__ = [
     "rank_tilt_backtest",
     "staggered_tranche_backtest",
     "rank_ic",
+    # event-driven simulation
+    "position_walk",
+    "trade_runner",
 ]

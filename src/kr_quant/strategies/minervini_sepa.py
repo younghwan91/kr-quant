@@ -15,16 +15,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..engine.panels import lookup_panel, panel_pivot
+from ..engine.sim_eventdriven import trade_runner
 from ..features.base_count import base_count_series
 from ..features.vcp import detect_vcp
-from .minervini_exits import (
-    breakeven_plus_stop,
-    climax_run,
-    hard_stop,
-    pe_expansion,
-    sell_half_level,
-    violations,
-)
 
 STAGGERED_STOPS = (0.04, 0.06, 0.08)  # −4/−6/−8% tranche stops (frozen)
 
@@ -88,14 +82,6 @@ def pivot_fills(entries: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
         rows, columns=["code", "date", "pivot", "score", "fill_date", "fill_price", "filled"])
 
 
-def _lookup(panel: pd.DataFrame, value: str, codes, dates) -> np.ndarray:
-    """Reindex a long code/date/value panel to a codes×dates numpy array."""
-    return (
-        panel.pivot_table(index="code", columns="date", values=value, aggfunc="first")
-        .reindex(index=codes, columns=dates).to_numpy(float)
-    )
-
-
 def sepa_entries(
     prices: pd.DataFrame,
     eligible_panel: pd.DataFrame,
@@ -135,18 +121,18 @@ def sepa_entries(
     Returns:
         Long ``code``/``date``/``pivot`` of entry signals (one per qualifying bar).
     """
-    close = _panel(prices, "close")
+    close = panel_pivot(prices, "close")
     codes, dates = list(close.index), list(close.columns)
     C = close.to_numpy(float)
-    H = _panel(prices, "high").reindex(index=codes, columns=dates).to_numpy(float)
-    L = _panel(prices, "low").reindex(index=codes, columns=dates).to_numpy(float)
+    H = panel_pivot(prices, "high").reindex(index=codes, columns=dates).to_numpy(float)
+    L = panel_pivot(prices, "low").reindex(index=codes, columns=dates).to_numpy(float)
     V = prices.pivot_table(index="code", columns="date", values="volume", aggfunc="first").reindex(
         index=codes, columns=dates).to_numpy(float)
-    elig = _lookup(eligible_panel.assign(eligible=eligible_panel["eligible"].astype(float)),
-                   "eligible", codes, dates)
-    rs = _lookup(rs_panel, "rs_rating", codes, dates)
+    elig = lookup_panel(eligible_panel.assign(eligible=eligible_panel["eligible"].astype(float)),
+                        "eligible", codes, dates)
+    rs = lookup_panel(rs_panel, "rs_rating", codes, dates)
     c33 = (
-        _lookup(code33.assign(is_code33=code33["is_code33"].astype(float)), "is_code33", codes, dates)
+        lookup_panel(code33.assign(is_code33=code33["is_code33"].astype(float)), "is_code33", codes, dates)
         if use_code33 else None
     )
     nD = len(dates)
@@ -233,14 +219,19 @@ def sepa_trades(
         ``exit_price``/``ret``/``reason`` (``reason`` ``+half`` suffix when a half
         was banked at 2R).
     """
+    # Entry logic (pivot fills) stays here; the forward walk + exit accounting is the
+    # engine's Minervini-style event-driven sim. Panels are built once and handed over:
+    # ma50 (for the break-even stop raise) and PE (for the valuation exit) are
+    # precomputed here and passed in as explicit inputs — the engine never recomputes
+    # them. stop_pct is converted to an absolute price inside trade_runner (via
+    # hard_stop, incl. its 10% clamp), exactly as before.
     fills = pivot_fills(entries, prices)
-    close = _panel(prices, "close")
+    close = panel_pivot(prices, "close")
     codes, dates = list(close.index), list(close.columns)
-    didx = {d: k for k, d in enumerate(dates)}
     C = close.to_numpy(float)
-    OPN = _panel(prices, "open").reindex(index=codes, columns=dates).to_numpy(float)
-    H = _panel(prices, "high").reindex(index=codes, columns=dates).to_numpy(float)
-    L = _panel(prices, "low").reindex(index=codes, columns=dates).to_numpy(float)
+    OPN = panel_pivot(prices, "open").reindex(index=codes, columns=dates).to_numpy(float)
+    H = panel_pivot(prices, "high").reindex(index=codes, columns=dates).to_numpy(float)
+    L = panel_pivot(prices, "low").reindex(index=codes, columns=dates).to_numpy(float)
     V = prices.pivot_table(index="code", columns="date", values="volume", aggfunc="first").reindex(
         index=codes, columns=dates).to_numpy(float)
     ma50 = pd.DataFrame(C.T).rolling(ma_exit_window, min_periods=1).mean().to_numpy()  # for breakeven
@@ -249,73 +240,9 @@ def sepa_trades(
         .reindex(index=codes, columns=dates).to_numpy(float)
         if pe_panel is not None else None
     )
-    cix = {c: k for k, c in enumerate(codes)}
-    nD = len(dates)
-
-    def _walk(i: int, f0: int, entry: float, stop0: float) -> tuple[float, float, str, str]:
-        """One sub-position's forward walk under stop ``stop0`` → (ret, price, date, reason)."""
-        stop = stop0
-        half_target = sell_half_level(entry, stop, r=sell_half_r)  # +2R (relative to this stop)
-        half_ret = None
-        pe_entry = PE[i, f0] if PE is not None else float("nan")
-        made_new_high = False
-        exit_price = exit_date = reason = None
-        for t in range(f0 + 1, min(f0 + time_cap + 1, nD)):
-            if not np.isfinite(C[i, t]):
-                continue
-            if H[i, t] > entry:
-                made_new_high = True
-            if L[i, t] <= stop:  # stop hit — gap-through fills at the open
-                exit_price = float(min(OPN[i, t], stop) if OPN[i, t] < stop else stop)
-                exit_date, reason = dates[t], "stop"
-                break
-            if PE is not None and pe_expansion(PE[i, t], pe_entry):  # valuation overheated
-                exit_price, exit_date, reason = float(C[i, t]), dates[t], "pe_expansion"
-                break
-            # Tennis-ball cull: a healthy leader bounces to a new high within a few days;
-            # a "broken egg" that hasn't by tennis_window is dumped early.
-            if tennis and (t - f0) >= tennis_window and not made_new_high:
-                exit_price, exit_date, reason = float(C[i, t]), dates[t], "tennis"
-                break
-            # Sell half at +2R and raise the stop to break-even-or-better (max entry, MA50).
-            if sell_half and half_ret is None and H[i, t] >= half_target:
-                half_ret = half_target / entry - 1.0
-                if breakeven:
-                    raised = breakeven_plus_stop(entry, float(ma50[t, i]), r_reached=True)
-                    stop = max(stop, raised)
-            window = C[i, max(0, t - ma_exit_window):t + 1]
-            vol_w = V[i, max(0, t - ma_exit_window):t + 1]
-            if violations(window, vol_w, ma_window=ma_exit_window) or climax_run(C[i, :t + 1]):
-                exit_price, exit_date = float(C[i, t]), dates[t]
-                reason = "climax" if climax_run(C[i, :t + 1]) else "violation"
-                break
-        if exit_price is None:  # timed out — mark to last available bar
-            t = min(f0 + time_cap, nD - 1)
-            exit_price, exit_date, reason = float(C[i, t]), dates[t], "time_cap"
-        rem_ret = exit_price / entry - 1.0
-        if half_ret is not None:                       # blend: half at 2R, half at final exit
-            return 0.5 * half_ret + 0.5 * rem_ret, exit_price, exit_date, f"{reason}+half"
-        return rem_ret, exit_price, exit_date, reason
-
-    out: list[dict] = []
-    for _, f in fills[fills["filled"]].iterrows():
-        i = cix[f["code"]]
-        f0 = didx[str(f["fill_date"])]
-        entry = float(f["fill_price"])
-        if staggered:  # 3 equal tranches at −4/−6/−8% → average their outcomes
-            legs = [_walk(i, f0, entry, hard_stop(entry, pct=p)) for p in STAGGERED_STOPS]
-            ret = float(np.mean([leg[0] for leg in legs]))
-            exit_price, exit_date, reason = legs[-1][1], legs[-1][2], "staggered"
-        else:
-            ret, exit_price, exit_date, reason = _walk(i, f0, entry, hard_stop(entry, pct=stop_pct))
-        out.append({
-            "code": f["code"], "entry_date": f["fill_date"], "entry_price": entry,
-            "exit_date": exit_date, "exit_price": exit_price, "ret": ret, "reason": reason,
-            "score": f.get("score", float("nan")),  # RS score for concentration sizing
-        })
-    return pd.DataFrame(out)
-
-
-def _panel(prices: pd.DataFrame, value: str) -> pd.DataFrame:
-    """Pivot a long price frame to a code × date panel (abs — close/high/low signed)."""
-    return prices.pivot_table(index="code", columns="date", values=value, aggfunc="first").abs()
+    return trade_runner(
+        C, OPN, H, L, V, ma50, dates, codes, fills,
+        stop_pct=stop_pct, ma_exit_window=ma_exit_window, time_cap=time_cap,
+        sell_half=sell_half, breakeven=breakeven, sell_half_r=sell_half_r,
+        pe_array=PE, tennis=tennis, tennis_window=tennis_window,
+        staggered=staggered, staggered_stops=STAGGERED_STOPS)
