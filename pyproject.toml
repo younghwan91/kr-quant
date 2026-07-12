@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kr-quant"
 version = "0.1.0"
-description = "키움 수급·시세 데이터 수집 및 퀀트 분석 (kiwoom-client 기반)"
+description = "코스피·코스닥 수급·시세·실적 기반 전략/피처 분석 라이브러리 (데이터 수집은 kr-quant-airflow)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
