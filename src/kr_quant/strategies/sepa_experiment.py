@@ -21,71 +21,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..features.fundamentals import code33_panel, earnings_yield_panel
-from ..features.rs_rating import rs_rating_panel
-from ..features.universe import CAP_BAND, smallmid_universe
-from ..price_adjust import adjust_prices
-from .minervini_sepa import sepa_entries, sepa_trades
-from .pead import market_cap_panel
-from .sepa_compare import benchmark_returns, book_returns, compare_arms
+from ..engine.recipe import ArmSpec, ExperimentConfig, run_recipe, sepa_faithful_config
 
 N_CONCENTRATED = 6      # arm A frozen concentration
 N_DIVERSIFIED = 50      # A-diversified / B-shell (deployed over-diversification)
 LARGE_CAP_RANK = (0, 100)   # B-shell universe: mega/large (the deployed inversion)
-
-
-def _adv_panel(prices: pd.DataFrame, *, window: int = 20) -> pd.DataFrame:
-    """Trailing ``window``-day average trade value → long code/date/adv (as-of)."""
-    tv = prices[["code", "date", "trade_value"]].copy()
-    tv["trade_value"] = tv["trade_value"].abs()
-    tv = tv.sort_values(["code", "date"])
-    tv["adv"] = tv.groupby("code")["trade_value"].transform(
-        lambda s: s.rolling(window, min_periods=window).mean())
-    return tv.dropna(subset=["adv"])[["code", "date", "adv"]].reset_index(drop=True)
-
-
-def build_panels(
-    prices: pd.DataFrame,
-    earnings: pd.DataFrame,
-    shares: pd.DataFrame,
-    *,
-    adjust: bool = True,
-) -> dict:
-    """Assemble every panel the arms need (split-adjusted, point-in-time).
-
-    Args:
-        prices: Long ``code``/``date``/``open``/``high``/``low``/``close``/
-            ``trade_value``/``volume``.
-        earnings: DART rows for :func:`code33_panel` (code, avail_date, netinc,
-            netinc_prior, revenue, revenue_prior, op_income, op_income_prior).
-        shares: ``code``/``date``/shares-outstanding for market cap.
-        adjust: Apply corporate-action back-adjustment (both strategy and bench).
-    """
-    # Normalize date to string so every downstream to_datetime yields the same
-    # resolution — DB columns arrive at mixed datetime64 units and break merge_asof.
-    prices = prices.copy()
-    prices["date"] = prices["date"].astype(str)
-    shares = shares.copy()
-    shares["date"] = shares["date"].astype(str)
-    if adjust:
-        prices = adjust_prices(prices)
-    dates = sorted(prices["date"].astype(str).unique())
-    cap = market_cap_panel(prices, shares)
-    adv = _adv_panel(prices)
-    annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
-    ep = earnings_yield_panel(annual, cap)                             # code/date/ep (E/P)
-    ep["pe"] = (1.0 / ep["ep"]).where(ep["ep"] > 0)                    # P/E for the sell rule
-    return {
-        "prices": prices,
-        "cap": cap,
-        # Absolute cap band, not rank — rank-within-a-liquidity-filtered-universe
-        # silently lands on large/mega caps, not small-mid (see universe.py note).
-        "smallmid": smallmid_universe(cap, adv, cap_band=CAP_BAND),
-        "largecap": smallmid_universe(cap, adv, cap_rank=LARGE_CAP_RANK),  # B-shell
-        "rs": rs_rating_panel(prices),
-        "code33": code33_panel(earnings, dates),
-        "pe": ep[["code", "date", "pe"]],
-    }
 
 
 def run_experiment(
@@ -99,32 +39,15 @@ def run_experiment(
     """Run all five arms and return ``(comparison_table, verdicts)``.
 
     Everything downstream of the frozen hyperparameters — no tuning knobs — so a
-    live run is a single call once the earnings backfill lands.
+    live run is a single call once the earnings backfill lands. Delegates to the
+    declarative recipe API (:func:`kr_quant.engine.recipe.sepa_faithful_config` +
+    :func:`kr_quant.engine.recipe.run_recipe`); the panel build + simulation loops
+    now live in ``kr_quant.engine``, not here.
     """
-    p = build_panels(prices, earnings, shares, adjust=adjust)
-    px, rs, c33 = p["prices"], p["rs"], p["code33"]
-
-    pe = p["pe"]
-    ent_a = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=True, use_code33=True)
-    trades_a = sepa_trades(px, ent_a, pe_panel=pe)
-    ent_avcp = sepa_entries(px, p["smallmid"], rs, c33, use_vcp=False, use_code33=True)
-    ent_b = sepa_entries(px, p["largecap"], rs, c33, use_vcp=False, use_code33=False,
-                         use_base_count=False, rs_min=0.0)
-
-    arms = {
-        # A / A-noVCP: frozen concentration sizing (6 names, 25/15, pilot).
-        "A": book_returns(px, trades_a, n_slots=N_CONCENTRATED, sized=True),
-        # A-diversified / B-shell: deployed-style diversified equal-weight (isolates concentration).
-        "A-diversified": book_returns(px, trades_a, n_slots=N_DIVERSIFIED, sized=False),
-        "A-noVCP": book_returns(px, sepa_trades(px, ent_avcp, pe_panel=pe), n_slots=N_CONCENTRATED, sized=True),
-        "B-shell": book_returns(px, sepa_trades(px, ent_b), n_slots=N_DIVERSIFIED, sized=False),
-        "C-bench": benchmark_returns(px, p["cap"]),
-    }
-    # Align every arm on the union of months so the paired bootstrap is well-defined.
-    months = sorted(set().union(*[r.index for r in arms.values()]))
-    idx = pd.Index(months, name="month")
-    arms = {k: r.reindex(idx).fillna(0.0) for k, r in arms.items()}
-    return compare_arms(arms, deployed="B-shell", benchmark="C-bench", **boot_kwargs)
+    config = sepa_faithful_config(
+        adjust=adjust, n_concentrated=N_CONCENTRATED, n_diversified=N_DIVERSIFIED,
+        **boot_kwargs)
+    return run_recipe(config, prices, earnings, shares)
 
 
 def robustness_sweep(
@@ -142,26 +65,31 @@ def robustness_sweep(
     The verdict uses the frozen (6 names, 5% stop); this sweeps the *alternates*
     (``SEPA_FAITHFUL_DESIGN.md`` §견고성 부록 — **for robustness only, not selection**)
     to show the frozen point is not a knife-edge. Concentration varies the book slots,
-    stop varies the hard stop in :func:`sepa_trades`.
+    stop varies the hard stop in :func:`sepa_trades`. Each stop is one summary-only
+    recipe run (a config whose arms are the concentrations).
 
     Returns:
         Long DataFrame ``concentration``/``stop``/``sharpe``/``cagr``/``n_trades`` —
         one row per (concentration, stop). NaN Sharpe means the gate produced no
         trades at that setting (not a failure — the faithful gates are very selective).
     """
-    from .sepa_compare import _ann_sharpe, _cagr, book_returns
-
-    p = build_panels(prices, earnings, shares, adjust=adjust)
-    ent = sepa_entries(p["prices"], p["smallmid"], p["rs"], p["code33"],
-                       use_vcp=use_vcp, use_code33=True)
     rows: list[dict] = []
     for stop in stops:
-        trades = sepa_trades(p["prices"], ent, stop_pct=stop)
+        arms = [
+            ArmSpec(name=str(n), kind="sepa", universe="smallmid",
+                    entry_kwargs={"use_vcp": use_vcp, "use_code33": True},
+                    trade_kwargs={"stop_pct": stop},
+                    book_kwargs={"n_slots": n, "sized": True})
+            for n in concentrations
+        ]
+        config = ExperimentConfig(experiment_type="event_driven", arms=arms,
+                                  adjust=adjust, compare=False)
+        table, _ = run_recipe(config, prices, earnings, shares)
         for n in concentrations:
-            r = book_returns(p["prices"], trades, n_slots=n, sized=True)
+            row = table.loc[str(n)]
             rows.append({"concentration": n, "stop": stop,
-                         "sharpe": _ann_sharpe(r.to_numpy(float)),
-                         "cagr": _cagr(r.to_numpy(float)), "n_trades": len(trades)})
+                         "sharpe": row["sharpe"], "cagr": row["cagr"],
+                         "n_trades": int(row["n_trades"])})
     return pd.DataFrame(rows)
 
 

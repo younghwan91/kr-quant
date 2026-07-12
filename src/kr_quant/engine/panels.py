@@ -13,6 +13,7 @@ preserved):
     yoy_panels     <- pead._yoy_panels
     resolve_signal <- pead._resolve_signal
     forward_returns <- backtest.forward_returns
+    build_panels   <- sepa_experiment.build_panels (Step 5, + session cache)
 """
 
 from __future__ import annotations
@@ -141,3 +142,102 @@ PANEL_CACHE = PanelCache()
 def cached_panel_pivot(prices: pd.DataFrame, value: str) -> pd.DataFrame:
     """Session-scoped cached wrapper over :func:`panel_pivot` (see :data:`PANEL_CACHE`)."""
     return PANEL_CACHE.panel_pivot(prices, value)
+
+
+# --- Panel assembly (split-adjusted, point-in-time) + session cache ------------
+#
+# ``build_panels`` (migrated from ``sepa_experiment`` in Step 5) assembles every
+# panel a Minervini-SEPA experiment needs. It depends on feature/strategy modules
+# that themselves import this engine package, so those imports are made *lazily*
+# inside the function to keep ``engine`` importable as a leaf. A content-keyed
+# session cache lets a parameter sweep that reuses the same DB-loaded frames build
+# the panels once instead of on every recipe run.
+
+
+def _frame_digest(df: pd.DataFrame) -> str:
+    return hashlib.sha1(
+        pd.util.hash_pandas_object(df, index=True).to_numpy().tobytes()
+    ).hexdigest()
+
+
+def _build_panels_key(prices, earnings, shares, adjust, large_cap_rank) -> tuple:
+    return (
+        _frame_digest(prices), prices.shape,
+        _frame_digest(earnings), earnings.shape,
+        _frame_digest(shares), shares.shape,
+        bool(adjust), tuple(large_cap_rank),
+    )
+
+
+_BUILD_PANELS_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_BUILD_PANELS_MAXSIZE = 8
+
+
+def build_panels(
+    prices: pd.DataFrame,
+    earnings: pd.DataFrame,
+    shares: pd.DataFrame,
+    *,
+    adjust: bool = True,
+    large_cap_rank: tuple[int, int] = (0, 100),
+    use_cache: bool = True,
+) -> dict:
+    """Assemble every panel the SEPA arms need (split-adjusted, point-in-time).
+
+    Args:
+        prices: Long ``code``/``date``/``open``/``high``/``low``/``close``/
+            ``trade_value``/``volume``.
+        earnings: DART rows for :func:`code33_panel` (code, avail_date, netinc,
+            netinc_prior, revenue, revenue_prior, op_income, op_income_prior).
+        shares: ``code``/``date``/shares-outstanding for market cap.
+        adjust: Apply corporate-action back-adjustment (both strategy and bench).
+        large_cap_rank: Cap-rank tier for the B-shell (large-cap) universe.
+        use_cache: Reuse a cached result for identical-content inputs (sweep win).
+
+    Returns a dict of panels: ``prices``, ``cap``, ``smallmid``, ``largecap``,
+    ``rs``, ``code33``, ``pe``.
+    """
+    if use_cache:
+        key = _build_panels_key(prices, earnings, shares, adjust, large_cap_rank)
+        cached = _BUILD_PANELS_CACHE.get(key)
+        if cached is not None:
+            _BUILD_PANELS_CACHE.move_to_end(key)
+            return cached
+
+    # Lazy imports (keep ``engine`` a leaf — these modules import engine).
+    from ..features.fundamentals import code33_panel, earnings_yield_panel
+    from ..features.rs_rating import rs_rating_panel
+    from ..features.universe import CAP_BAND, smallmid_universe
+    from ..price_adjust import adjust_prices
+    from ..strategies.pead import market_cap_panel
+
+    # Normalize date to string so every downstream to_datetime yields the same
+    # resolution — DB columns arrive at mixed datetime64 units and break merge_asof.
+    prices = prices.copy()
+    prices["date"] = prices["date"].astype(str)
+    shares = shares.copy()
+    shares["date"] = shares["date"].astype(str)
+    if adjust:
+        prices = adjust_prices(prices)
+    dates = sorted(prices["date"].astype(str).unique())
+    cap = market_cap_panel(prices, shares)
+    adv = adv_panel(prices)
+    annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
+    ep = earnings_yield_panel(annual, cap)                             # code/date/ep (E/P)
+    ep["pe"] = (1.0 / ep["ep"]).where(ep["ep"] > 0)                    # P/E for the sell rule
+    result = {
+        "prices": prices,
+        "cap": cap,
+        # Absolute cap band, not rank — rank-within-a-liquidity-filtered-universe
+        # silently lands on large/mega caps, not small-mid (see universe.py note).
+        "smallmid": smallmid_universe(cap, adv, cap_band=CAP_BAND),
+        "largecap": smallmid_universe(cap, adv, cap_rank=large_cap_rank),  # B-shell
+        "rs": rs_rating_panel(prices),
+        "code33": code33_panel(earnings, dates),
+        "pe": ep[["code", "date", "pe"]],
+    }
+    if use_cache:
+        _BUILD_PANELS_CACHE[key] = result
+        if len(_BUILD_PANELS_CACHE) > _BUILD_PANELS_MAXSIZE:
+            _BUILD_PANELS_CACHE.popitem(last=False)
+    return result

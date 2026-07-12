@@ -15,10 +15,19 @@ from kr_quant.engine.panels import (
 )
 
 # Source functions the engine copied from (equivalence pins). minervini_sepa._lookup
-# was migrated onto engine.lookup_panel (Step 4) and deleted; its equivalence is now
-# pinned inline against the canonical pivot+reindex below.
+# (Step 4) and sepa_experiment._adv_panel (Step 5) were migrated onto the engine and
+# deleted; their equivalence is now pinned inline against the canonical transforms.
 from kr_quant.strategies.pead import _panel as _src_panel
-from kr_quant.strategies.sepa_experiment import _adv_panel as _src_adv_panel
+
+
+def _src_adv_panel(prices: pd.DataFrame, *, window: int = 20) -> pd.DataFrame:
+    """The pre-migration ``sepa_experiment._adv_panel`` body (equivalence pin)."""
+    tv = prices[["code", "date", "trade_value"]].copy()
+    tv["trade_value"] = tv["trade_value"].abs()
+    tv = tv.sort_values(["code", "date"])
+    tv["adv"] = tv.groupby("code")["trade_value"].transform(
+        lambda s: s.rolling(window, min_periods=window).mean())
+    return tv.dropna(subset=["adv"])[["code", "date", "adv"]].reset_index(drop=True)
 
 
 def _prices() -> pd.DataFrame:
