@@ -12,8 +12,6 @@ requires-python = ">=3.10"
 keywords = ["kiwoom", "키움", "quant", "퀀트", "supply-demand", "수급", "kospi", "kosdaq"]
 authors = [{ name = "Younghwan Chae", email = "chyohw97@gmail.com" }]
 dependencies = [
-    # auth 로그인 수정이 포함된 0.1.14 이상 필요. 미배포 시 README 의 개발 설정 참고.
-    "kiwoom-client>=0.1.14",
     "pandas>=2.0",
 ]
 
@@ -23,15 +21,7 @@ pg = ["psycopg2-binary>=2.9"]
 dev = ["pytest>=8.0", "ruff>=0.6", "matplotlib>=3.8"]
 
 [project.scripts]
-kq-collect = "kr_quant.collectors.supply_demand:main"
-kq-collect-daily = "kr_quant.collectors.daily_bars:main"
-kq-collect-both = "kr_quant.collectors.combined:main"
-kq-collect-sc = "kr_quant.collectors.short_credit:main"
-kq-collect-sector = "kr_quant.collectors.sector_index:main"
-kq-collect-shares = "kr_quant.collectors.listed_shares:main"
-kq-collect-krx-shares = "kr_quant.collectors.krx_shares:main"
-kq-collect-earnings = "kr_quant.collectors.dart_earnings:main"
-kq-collect-consensus = "kr_quant.collectors.naver_consensus:main"
+# 데이터 수집 CLI(kq-collect*)는 collectors/와 함께 kr-quant-airflow로 이전됨.
 kq-screen = "kr_quant.strategies.accumulation:main"
 kq-backtest = "kr_quant.strategies.backtest:main"
 kq-pead = "kr_quant.strategies.pead:main"

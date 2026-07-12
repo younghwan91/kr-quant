@@ -2,9 +2,9 @@
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
-코스피·코스닥 종목의 **투자자별 수급(개인·외국인·기관 순매수)** 을 수집해 SQLite에 적재하고, 이를 바탕으로 **매집(accumulation) 후보 스크리닝**과 시각화를 수행하는 퀀트 분석 툴킷입니다.
+코스피·코스닥 종목의 투자자별 수급·시세·실적 데이터를 바탕으로 **매집(accumulation) 스크리닝, PEAD, SEPA, minervini 등 전략/피처 분석**을 수행하는 퀀트 리서치 라이브러리입니다.
 
-키움증권 REST API 클라이언트 [`kiwoom-client`](https://github.com/younghwan91/kiwoom-rest-api)를 기반으로 동작합니다.
+**데이터 수집은 이 레포에 없습니다.** 수집 로직(DART/키움/KRX/네이버 콜렉터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 이전되어 그쪽에서 자체 보유합니다 — 분석 세션에서 실수로 수집기를 실행해 DB 정합성이 깨지는 사고를 막고, 수집 로직을 오픈소스로 공유하기 위함입니다. 이 레포는 TimescaleDB(또는 로컬 SQLite)를 **읽기 전용**으로 사용해 전략을 검증합니다(`kr_quant/storage.py`의 `connect()`/`market_cap_asof()` 등).
 
 ---
 
@@ -30,25 +30,24 @@
 
 ## 핵심 기능
 
-- **전 종목 수급 수집** — 코스피·코스닥 보통주(~2,600개)의 최근 N일 투자주체별 순매수를 SQLite DB로 적재 (재실행 안전, 이어받기 지원)
 - **매집 스크리너** — *주가는 횡보하는데 외국인·기관이 순매수하고 개인이 순매도*하는 와이코프식 매집 패턴을 점수화·랭킹
+- **전략 라이브러리** — PEAD, SEPA, supply_wave, multi_signal, minervini 등 시세/수급/실적 기반 알파 검증
 - **시각화** — 종목별 종가 + 누적 순매수 차트 생성 (헤드리스 환경 지원, 한글 폰트)
 
 ## 아키텍처
 
 ```
 kr_quant/
-├── config.py          # 자격증명 로딩 + 인증 클라이언트 생성
-├── storage.py         # SQLite 스키마 / 멱등 upsert
-├── collectors/        # 데이터셋별 수집기 (확장 지점)
-│   └── supply_demand.py
-├── strategies/        # 수집 데이터 위의 전략/스크리너
+├── storage.py         # 읽기 전용: connect()/market_cap_asof() — 쓰기는 kr-quant-airflow/collectors/storage.py
+├── price_adjust.py     # 백조정 로직 (kr-quant-airflow의 weekly_price_adjust DAG가 in-place로 실행)
+├── strategies/         # 전략/스크리너
 │   └── accumulation.py
-└── viz/               # 시각화
+├── features/           # 피처 엔지니어링
+└── viz/                 # 시각화
     └── supply_demand_chart.py
 ```
 
-설계 원칙: **모듈러 모놀리식** — 라이브러리(`kiwoom-client`)는 순수 API 클라이언트로 분리하고, 데이터 수집·전략·시각화는 이 레포의 내부 모듈로 둡니다. 새 데이터셋은 `collectors/`에, 새 전략은 `strategies/`에 모듈을 추가하면 됩니다.
+설계 원칙: **모듈러 모놀리식** — 라이브러리(`kiwoom-client`)는 순수 API 클라이언트로 분리하고, 전략·피처·시각화는 이 레포의 내부 모듈로 둡니다. 데이터 수집(`collectors/`)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)에 있습니다. 새 전략은 `strategies/`에 모듈을 추가하면 됩니다.
 
 ## 설치
 
@@ -56,29 +55,22 @@ kr_quant/
 git clone https://github.com/younghwan91/kr-quant
 cd kr-quant
 uv venv && uv pip install -e ".[viz,dev]"
-cp .env.example .env          # 발급받은 키움 앱키/시크릿 입력
+cp .env.example .env          # TimescaleDB/SQLite 접속 정보 (필요시)
 ```
-
-> **개발 설정**: `kiwoom-client` 의 로그인 수정(secretkey)이 포함된 `0.1.14` 이상이 필요합니다. PyPI 배포 전이라면 로컬 클라이언트를 editable 로 설치하세요:
-> `uv pip install -e ../kiwoom-rest-api`
 
 ## 사용법
 
-```bash
-# 1) 수급 수집 (모의서버, 최근 30일) — 전수 ~45분
-kq-collect --market all --days 30
-kq-collect --market all --days 30 --prod      # 실데이터
-kq-collect --resume                            # 중단 후 이어받기
-kq-collect --limit 5                           # 동작 확인
+데이터 수집은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)의 Airflow DAG가 담당합니다(`python -m collectors.X`). 아래는 이미 채워진 DB(TimescaleDB 또는 로컬 SQLite)를 대상으로 한 분석 명령입니다.
 
-# 2) 매집 후보 스크리닝
+```bash
+# 매집 후보 스크리닝
 kq-screen --top 30
 kq-screen --max-range 0.10 --csv candidates.csv
 
-# 3) 신호 검증 (형성구간 스크리닝 → 보유구간 수익률)
+# 신호 검증 (형성구간 스크리닝 → 보유구간 수익률)
 kq-backtest --formation-days 12
 
-# 4) 종목 수급 차트
+# 종목 수급 차트
 kq-chart --code 005930
 ```
 

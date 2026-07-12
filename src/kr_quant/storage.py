@@ -1,8 +1,11 @@
-"""Storage layer for collected Kiwoom datasets — sqlite or Postgres/TimescaleDB.
+"""Storage layer (read side) — sqlite or Postgres/TimescaleDB.
 
-Defines the schema and small helpers used by collectors and strategies.
-Collectors produce plain records; this module persists them idempotently on
-natural keys. ``connect()`` dispatches on the connection string: a
+Collectors (and their write-side upsert helpers) now live in
+kr-quant-airflow/collectors/storage.py — an intentionally independent copy,
+not a shared package. This module keeps only what strategies/features read:
+``connect()``/``default_db_path()`` (also used for the local sqlite dev
+fallback) and ``market_cap_asof()``/``market_cap_asof_bulk()``.
+``connect()`` dispatches on the connection string: a
 ``postgresql://``/``postgres://`` DSN opens Postgres (psycopg2, imported
 lazily so sqlite-only use never needs it installed); anything else opens a
 local sqlite file exactly as before.
@@ -31,27 +34,6 @@ INVESTOR_COLUMNS: dict[str, str] = {
     "natn": "natn",              # 국가
     "etc_corp": "etc_corp",      # 기타법인
 }
-
-SUPPLY_DEMAND_COLUMNS: list[str] = [
-    "code",
-    "date",
-    "close",
-    "flu_rt",
-    "acc_trde_qty",
-    *INVESTOR_COLUMNS.keys(),
-]
-
-# ka10081 (주식일봉차트) candle fields → DB columns. Order defines insert order.
-DAILY_BAR_COLUMNS: list[str] = [
-    "code",
-    "date",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "trade_value",
-]
 
 _INVESTOR_COL_DDL = ",\n            ".join(f"{c} INTEGER" for c in INVESTOR_COLUMNS)
 
@@ -234,6 +216,18 @@ def _is_pg(con: Any) -> bool:
     return not isinstance(con, sqlite3.Connection)
 
 
+# kr_quant.price_adjust.rebuild_adjusted_table() writes daily_bars_adjusted —
+# the one write path kept here (not moved to kr-quant-airflow) because
+# price_adjust.py's split-detection logic is also imported in-process by
+# strategies/sepa_experiment.py, so the module as a whole stays in kr-quant;
+# weekly_price_adjust.py's DAG task still invokes it via
+# `python -m kr_quant.price_adjust --rebuild-db` (PYTHONPATH-based, no pip
+# install needed) rather than through kr-quant-airflow/collectors.
+DAILY_BAR_COLUMNS: list[str] = [
+    "code", "date", "open", "high", "low", "close", "volume", "trade_value",
+]
+
+
 def _upsert(
     con: Any,
     table: str,
@@ -242,11 +236,6 @@ def _upsert(
     *,
     pk_cols: tuple[str, ...] = ("code", "date"),
 ) -> int:
-    """Insert/replace ``records`` (tuples ordered by ``cols``) into ``table``.
-
-    sqlite: ``INSERT OR REPLACE``. Postgres: ``INSERT ... ON CONFLICT DO
-    UPDATE`` on ``pk_cols`` — same natural-key upsert semantics either way.
-    """
     if not records:
         return 0
     if _is_pg(con):
@@ -261,10 +250,6 @@ def _upsert(
             with con.cursor() as cur:
                 cur.executemany(sql, records)
         except Exception:
-            # A failed statement leaves the whole Postgres transaction aborted
-            # until rolled back — without this, every later upsert on this
-            # connection fails with InFailedSqlTransaction even for unrelated,
-            # valid records (cascading one bad row into the entire run).
             con.rollback()
             raise
     else:
@@ -275,129 +260,9 @@ def _upsert(
     return len(records)
 
 
-def to_int(s: object) -> int:
-    """Kiwoom numeric strings (``'+322500'``, ``'-1979879'``, ``''``) → int."""
-    text = str(s or "").replace("+", "").strip()
-    try:
-        return int(text)
-    except ValueError:
-        return 0
-
-
-def to_float(s: object) -> float:
-    text = str(s or "").replace("+", "").strip()
-    try:
-        return float(text)
-    except ValueError:
-        return 0.0
-
-
-_STOCKS_COLS = ["code", "name", "market", "sector", "kind"]
-
-
-def upsert_stocks(con: Any, stocks: list[dict]) -> int:
-    """Insert/replace stock master rows. Returns the number written."""
-    records = [tuple(s.get(c) for c in _STOCKS_COLS) for s in stocks]
-    return _upsert(con, "stocks", _STOCKS_COLS, records, pk_cols=("code",))
-
-
-def upsert_supply_demand(con: Any, records: list[tuple]) -> int:
-    """Insert/replace supply_demand rows (tuples ordered by SUPPLY_DEMAND_COLUMNS)."""
-    return _upsert(con, "supply_demand", SUPPLY_DEMAND_COLUMNS, records)
-
-
-def upsert_daily_bars(con: Any, records: list[tuple]) -> int:
-    """Insert/replace daily_bars rows (tuples ordered by DAILY_BAR_COLUMNS)."""
-    return _upsert(con, "daily_bars", DAILY_BAR_COLUMNS, records)
-
-
-_SHORT_SELLING_COLS = [
-    "code", "date", "close", "volume",
-    "short_qty", "short_balance", "short_ratio", "short_avg_price", "short_value",
-]
-
-_CREDIT_BALANCE_COLS = [
-    "code", "date", "close",
-    "new_qty", "repay_qty", "balance_qty", "balance_amt", "balance_rt", "credit_rt",
-]
-
-
-def upsert_short_selling(con: Any, records: list[tuple]) -> int:
-    """Insert/replace short_selling rows."""
-    return _upsert(con, "short_selling", _SHORT_SELLING_COLS, records)
-
-
-def upsert_credit_balance(con: Any, records: list[tuple]) -> int:
-    """Insert/replace credit_balance rows."""
-    return _upsert(con, "credit_balance", _CREDIT_BALANCE_COLS, records)
-
-
-_SECTOR_INDEX_COLS = [
-    "code", "name", "date", "open", "high", "low", "close", "volume", "trade_value",
-]
-
-
-def upsert_sector_index(con: Any, records: list[tuple]) -> int:
-    """Insert/replace sector_index rows."""
-    return _upsert(con, "sector_index", _SECTOR_INDEX_COLS, records)
-
-
-_SHARES_OUTSTANDING_COLS = ["code", "date", "shares_outstanding"]
-
-
-def upsert_shares_outstanding(con: Any, records: list[tuple]) -> int:
-    """Insert/replace shares_outstanding_history rows."""
-    return _upsert(con, "shares_outstanding_history", _SHARES_OUTSTANDING_COLS, records)
-
-
-_EARNINGS_COLS = [
-    "code", "period", "avail_date",
-    "netinc", "netinc_prior", "revenue", "revenue_prior", "op_income", "op_income_prior",
-]
-
-
-def upsert_earnings(con: Any, records: list[tuple]) -> int:
-    """Insert/replace earnings rows (tuples ordered by _EARNINGS_COLS)."""
-    return _upsert(con, "earnings", _EARNINGS_COLS, records, pk_cols=("code", "period"))
-
-
-_CONSENSUS_COLS = [
-    "code", "date", "target_mean", "recomm_mean", "base_date", "fwd_eps", "prev_eps", "est_year",
-]
-
-
-def upsert_consensus(con: Any, records: list[tuple]) -> int:
-    """Insert/replace consensus rows (tuples ordered by _CONSENSUS_COLS)."""
-    return _upsert(con, "consensus", _CONSENSUS_COLS, records)
-
-
-_MINERVINI_SCAN_COLS = ["date", "breadth", "regime", "n_candidates", "codes"]
-
-
-def upsert_minervini_scan(con: Any, records: list[tuple]) -> int:
-    """Insert/replace minervini_scan rows (tuples ordered by _MINERVINI_SCAN_COLS)."""
-    return _upsert(con, "minervini_scan", _MINERVINI_SCAN_COLS, records, pk_cols=("date",))
-
-
 def upsert_daily_bars_adjusted(con: Any, records: list[tuple]) -> int:
     """Insert/replace daily_bars_adjusted rows (tuples ordered by DAILY_BAR_COLUMNS)."""
     return _upsert(con, "daily_bars_adjusted", DAILY_BAR_COLUMNS, records)
-
-
-_DELISTED_STOCKS_COLS = ["code", "name", "market", "last_trade_date"]
-
-
-def upsert_delisted_stocks(con: Any, records: list[tuple]) -> int:
-    """Insert/replace delisted_stocks rows (tuples ordered by _DELISTED_STOCKS_COLS)."""
-    return _upsert(con, "delisted_stocks", _DELISTED_STOCKS_COLS, records, pk_cols=("code",))
-
-
-_MINERVINI_RBA_COLS = ["pick_date", "code", "entry", "exit_px", "outcome", "ret_pct", "days"]
-
-
-def upsert_minervini_rba(con: Any, records: list[tuple]) -> int:
-    """Insert/replace minervini_rba rows (tuples ordered by _MINERVINI_RBA_COLS)."""
-    return _upsert(con, "minervini_rba", _MINERVINI_RBA_COLS, records, pk_cols=("pick_date", "code"))
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:

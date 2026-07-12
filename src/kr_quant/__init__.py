@@ -1,9 +1,10 @@
-"""kr-quant — Korean equity supply/demand collection and quant analysis.
+"""kr-quant — Korean equity strategy/feature analysis library.
 
-Built on the `kiwoom-client` REST API library. Layers:
-    collectors/  — fetch Kiwoom datasets into SQLite
-    storage      — schema and persistence helpers
-    strategies/  — screeners/strategies over the collected data
+Data collection lives in the kr-quant-airflow repo (collectors/), not here.
+Layers:
+    storage      — read-side schema helpers (connect, market_cap_asof)
+    strategies/  — screeners/strategies over collected data
+    features/    — feature engineering
     viz/         — charts
 """
 
