@@ -1,6 +1,9 @@
 # build artifacts / data dumps
 sim
 sim2_oos
+minervini/sim3_wf
+minervini/sim_mnv_exit
+minervini/sim_pyramid
 *.o
 btm/
 bt/
