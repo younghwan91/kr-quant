@@ -45,7 +45,7 @@ def build_chart(con: sqlite3.Connection, code: str, out_path: str | Path) -> Pat
     """Build and save the supply/demand chart. Returns the output path."""
     name, rows = fetch_series(con, code)
     if not rows:
-        raise ValueError(f"{code}: DB에 데이터가 없습니다. 먼저 kq-collect 로 수집하세요.")
+        raise ValueError(f"{code}: DB에 데이터가 없습니다. kr-quant-airflow가 수집한 DB를 가리키는지 확인하세요.")
 
     dates = [r["date"] for r in rows]
     price = [abs(r["close"]) for r in rows]
