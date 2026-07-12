@@ -1,18 +1,20 @@
 """RBA 추적기 — 스캐너 픽의 실제 실현 결과를 기록 (미너비니 최종 조언).
 
 미너비니: "이론적 가정(TBA)이 아니라 실제 매매 결과 데이터(RBA)로 리스크를 설계하라."
-daily_minervini_scan DAG가 쌓은 minervini_scan.csv(날짜별 진입후보)를 읽고, 각 픽에 대해
-진입 다음 거래일 시가 기준 5% 손절 / +10%(2R) 목표 / 20일 이내 결과를 판정해
-minervini_rba.csv에 누적한다. 축적되면 실전 승률·기대값이 백테스트와 일치하는지 검증 가능.
+daily_minervini_scan DAG가 DB에 쌓은 minervini_scan 테이블(날짜별 진입후보)을 읽고,
+각 픽에 대해 진입 다음 거래일 시가 기준 5% 손절 / +10%(2R) 목표 / 20일 이내 결과를
+판정해 minervini_rba 테이블에 누적한다. 축적되면 실전 승률·기대값이 백테스트와
+일치하는지 검증 가능.
 
-CLI: python rba_tracker.py --db <DSN> --scan-csv <path> --out <path>
+CSV가 아니라 DB만 쓴다 — CSV 시절엔 rba_tracker.py 자신만의 소비자였고 다른 코드가
+minervini_scan.csv/minervini_rba.csv를 읽지 않았으므로 이관에 하위호환 부담이 없었다.
+
+CLI: python rba_tracker.py --db <DSN>
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 
 import numpy as np
 import pandas as pd
@@ -74,37 +76,29 @@ def evaluate(con, picks_by_date: dict[str, list[str]], already: set) -> list[lis
 def main() -> int:
     ap = argparse.ArgumentParser(description="RBA 추적기 — 스캐너 픽 실현결과 기록")
     ap.add_argument("--db", default=None)
-    ap.add_argument("--scan-csv", default="/opt/kr-quant/data/minervini_scan.csv")
-    ap.add_argument("--out", default="/opt/kr-quant/data/minervini_rba.csv")
     args = ap.parse_args()
-    if not os.path.exists(args.scan_csv):
-        print("스캔 로그 없음(DAG 미실행) — RBA 축적 대기"); return 0
-    picks = {}
-    for row in csv.reader(open(args.scan_csv)):
-        if len(row) >= 5 and row[2] == "risk_on" and row[4]:
-            picks[row[0]] = row[4].split(",")
-    already = set()
-    if os.path.exists(args.out):
-        for r in csv.reader(open(args.out)):
-            if len(r) >= 2:
-                already.add(f"{r[0]}:{r[1]}")
-    from kr_quant.storage import connect, default_db_path
+    from kr_quant.storage import connect, default_db_path, upsert_minervini_rba
     con = connect(args.db or str(default_db_path()))
+    scanned = pd.read_sql_query(
+        "SELECT date, codes FROM minervini_scan WHERE regime = 'risk_on' AND codes <> ''", con)
+    if scanned.empty:
+        print("risk_on 픽 없음(DAG 미실행 또는 전부 risk_off) — RBA 축적 대기")
+        con.close()
+        return 0
+    picks = {row["date"]: row["codes"].split(",") for _, row in scanned.iterrows()}
+    already_df = pd.read_sql_query("SELECT pick_date, code FROM minervini_rba", con)
+    already = {f"{r.pick_date}:{r.code}" for r in already_df.itertuples()}
     rows = evaluate(con, picks, already)
-    con.close()
     if rows:
-        with open(args.out, "a", newline="") as f:
-            w = csv.writer(f)
-            for r in rows:
-                w.writerow(r)
+        upsert_minervini_rba(con, [tuple(r) for r in rows])
     # 누적 RBA 요약
-    if os.path.exists(args.out):
-        df = pd.read_csv(args.out, header=None,
-                         names=["date", "code", "entry", "exit", "outcome", "ret%", "days"])
+    df = pd.read_sql_query("SELECT * FROM minervini_rba", con)
+    con.close()
+    if not df.empty:
         wins = (df["outcome"] == "target_2R").sum(); n = len(df)
         if n:
             wr = wins / n
-            print(f"RBA 누적: {n}건, 2R승률 {wr:.0%}, 평균수익 {df['ret%'].mean():+.1f}%, "
+            print(f"RBA 누적: {n}건, 2R승률 {wr:.0%}, 평균수익 {df['ret_pct'].mean():+.1f}%, "
                   f"기대값 {3*wr-1:+.2f}R (백테스트 base 43% 대조)")
     print(f"신규 판정 {len(rows)}건 기록")
     return 0

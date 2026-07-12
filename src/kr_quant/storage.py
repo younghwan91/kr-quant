@@ -183,6 +183,16 @@ CREATE TABLE IF NOT EXISTS delisted_stocks (
     last_trade_date TEXT,   -- daily_bars 기준 마지막 거래일(상장폐지일 근사), 이력 없으면 NULL
     PRIMARY KEY (code)
 );
+CREATE TABLE IF NOT EXISTS minervini_rba (
+    pick_date TEXT NOT NULL,  -- 스캐너가 진입후보로 뽑은 날짜
+    code      TEXT NOT NULL,
+    entry     REAL,
+    exit_px   REAL,
+    outcome   TEXT,   -- 'stop' / 'target_2R' / 'open'(20일 경과, 미확정 종료)
+    ret_pct   REAL,
+    days      INTEGER,
+    PRIMARY KEY (pick_date, code)
+);
 """
 
 
@@ -380,6 +390,14 @@ _DELISTED_STOCKS_COLS = ["code", "name", "market", "last_trade_date"]
 def upsert_delisted_stocks(con: Any, records: list[tuple]) -> int:
     """Insert/replace delisted_stocks rows (tuples ordered by _DELISTED_STOCKS_COLS)."""
     return _upsert(con, "delisted_stocks", _DELISTED_STOCKS_COLS, records, pk_cols=("code",))
+
+
+_MINERVINI_RBA_COLS = ["pick_date", "code", "entry", "exit_px", "outcome", "ret_pct", "days"]
+
+
+def upsert_minervini_rba(con: Any, records: list[tuple]) -> int:
+    """Insert/replace minervini_rba rows (tuples ordered by _MINERVINI_RBA_COLS)."""
+    return _upsert(con, "minervini_rba", _MINERVINI_RBA_COLS, records, pk_cols=("pick_date", "code"))
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
