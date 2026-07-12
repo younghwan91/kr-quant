@@ -11,6 +11,7 @@ from kr_quant.collectors.dart_earnings import (
     _recent_quarters,
     _universe_query,
     collect_keys,
+    load_corp_map_with_rotation,
     parse_financials,
     parse_net_income,
     yoy_growth,
@@ -250,3 +251,45 @@ def test_new_stock_with_no_prior_earnings_is_never_skipped():
     new_code = "999999"
     assert not any(code == new_code for code, _ in done_periods)
     assert (new_code, "2023Q1") not in done_periods  # 스킵 대상 아님 → fetch 진행
+
+
+def test_load_corp_map_rotates_past_key_with_daily_limit(monkeypatch):
+    # 키1이 020(한도초과)이면 키2로 넘어가서 정상 로드되어야 한다 — 실제 장애 재현:
+    # 14.5시간 백필 중 키1이 한도에 걸려 정상 종료됐는데, 바로 재트리거하니
+    # load_corp_map(keys[0])이 로테이션 없이 키1만 써서 즉시 죽었던 버그.
+    calls = []
+
+    def fake_load_corp_map(api_key):
+        calls.append(api_key)
+        if api_key == "k1":
+            raise RuntimeError("DART corpCode 오류 (status='020') — 한도초과(020)/키오류(010) 등 확인")
+        return {"005930": "00126380"}
+
+    monkeypatch.setattr(dart_earnings, "load_corp_map", fake_load_corp_map)
+    result = load_corp_map_with_rotation(["k1", "k2"])
+    assert calls == ["k1", "k2"]
+    assert result == {"005930": "00126380"}
+
+
+def test_load_corp_map_rotation_reraises_non_020_errors_without_trying_next_key(monkeypatch):
+    calls = []
+
+    def fake_load_corp_map(api_key):
+        calls.append(api_key)
+        raise RuntimeError("DART corpCode 오류 (status='010') — 한도초과(020)/키오류(010) 등 확인")
+
+    monkeypatch.setattr(dart_earnings, "load_corp_map", fake_load_corp_map)
+    import pytest
+    with pytest.raises(RuntimeError, match="010"):
+        load_corp_map_with_rotation(["bad_key", "k2"])
+    assert calls == ["bad_key"]  # 010(키오류)은 로테이션 대상 아님 — 즉시 재발생, k2 시도 안 함
+
+
+def test_load_corp_map_rotation_raises_after_all_keys_exhausted(monkeypatch):
+    def fake_load_corp_map(api_key):
+        raise RuntimeError("DART corpCode 오류 (status='020') — 한도초과(020)/키오류(010) 등 확인")
+
+    monkeypatch.setattr(dart_earnings, "load_corp_map", fake_load_corp_map)
+    import pytest
+    with pytest.raises(RuntimeError, match="020"):
+        load_corp_map_with_rotation(["k1", "k2"])

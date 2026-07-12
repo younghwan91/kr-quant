@@ -162,6 +162,29 @@ def load_corp_map(api_key: str) -> dict[str, str]:
     return out
 
 
+def load_corp_map_with_rotation(keys: list[str]) -> dict[str, str]:
+    """``load_corp_map`` with key rotation on daily-limit (020) — same rotation
+    ``_fetch_with_rotation`` already does for the per-quarter fetches, but for
+    the one-time corp_code map load at startup. Without this, a single
+    exhausted key[0] kills the whole run even when key[1..] still have quota
+    (real incident: a 14.5h overnight backfill run legitimately stopped for
+    the day via 020 mid-run, and the very next retry died instantly on
+    ``load_corp_map(keys[0])`` alone despite a second key being available).
+    """
+    last_err: Exception | None = None
+    for key in keys:
+        try:
+            return load_corp_map(key)
+        except RuntimeError as e:
+            # 에러 메시지 템플릿 자체에 "한도초과(020)/키오류(010)" 안내문구가 항상
+            # 박혀있어 "020" in str(e)는 010 에러에도 항상 참이 된다 — status='020'
+            # 형태로 실제 값만 정확히 매칭해야 함(실측 버그).
+            if "status='020'" not in str(e):
+                raise
+            last_err = e
+    raise last_err if last_err else RuntimeError("DART 키 없음")
+
+
 def fetch_net_income(api_key: str, corp_code: str, year: int, quarter: int) -> tuple[float | None, float | None]:
     """Fetch (current, prior) net income for one corp/year/quarter from DART."""
     return parse_net_income(_fetch_payload(api_key, corp_code, year, quarter))
@@ -294,7 +317,7 @@ def main() -> int:
         for r in csv.reader(open(args.out)):
             if r:
                 done.add(r[0])
-    corp = load_corp_map(keys[0])
+    corp = load_corp_map_with_rotation(keys)
     print(f"corp_map {len(corp)} | universe {len(codes)} | keys {len(keys)} | already done {len(done)}", flush=True)
 
     today = datetime.now().strftime("%Y%m%d")
