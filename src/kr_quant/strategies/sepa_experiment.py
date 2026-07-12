@@ -290,19 +290,32 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="미너비니 SEPA 충실 재현 — 다-arm 비교 판정")
     ap.add_argument("--db", default=str(default_db_path()))
-    ap.add_argument("--earnings-csv", required=True,
-                    help="DART 실적 CSV: code,period,avail_date,netinc,netinc_prior,"
-                         "revenue,revenue_prior,op_income,op_income_prior")
+    ap.add_argument("--earnings-csv", default=None,
+                    help="DART 실적 CSV(dart_earnings.main() 산출물, 10컬럼): code,period,"
+                         "avail_date,netinc,netinc_prior,yoy,revenue,revenue_prior,op_income,"
+                         "op_income_prior. --earnings-table과 상호배타.")
+    ap.add_argument("--earnings-table", default=None,
+                    help="실적을 DB 테이블(예: earnings)에서 직접 조회 — 파이프라인 DB화 이후 "
+                         "권장 경로(임시 스크립트 불필요). 스키마: code,period,avail_date,"
+                         "netinc,netinc_prior,revenue,revenue_prior,op_income,op_income_prior.")
     ap.add_argument("--no-adjust", action="store_true", help="분할조정 생략(디버그용)")
     ap.add_argument("--verdict-out", default=None, help="사전등록 판정 markdown 저장 경로")
     args = ap.parse_args()
+    if bool(args.earnings_csv) == bool(args.earnings_table):
+        raise SystemExit("--earnings-csv 또는 --earnings-table 중 정확히 하나를 지정하세요")
 
-    # dart_earnings.main() CSV 스키마 (10칸, 헤더 없음): yoy가 6번째 — code33_panel엔
-    # 불필요하나 위치 정렬을 위해 이름을 준다. (실적 DB 테이블로 이관되면 여기만 교체.)
-    cols = ["code", "period", "avail_date", "netinc", "netinc_prior", "yoy",
-            "revenue", "revenue_prior", "op_income", "op_income_prior"]
-    ea = _pd.read_csv(args.earnings_csv, names=cols, dtype={"code": str, "avail_date": str, "period": str})
     con = connect(args.db)
+    if args.earnings_table:
+        ea = _pd.read_sql_query(f"SELECT * FROM {args.earnings_table}", con)  # noqa: S608 — trusted local config, not user input
+        ea["code"] = ea["code"].astype(str)
+        ea["period"] = ea["period"].astype(str)
+        ea["avail_date"] = ea["avail_date"].astype(str)
+    else:
+        # dart_earnings.main() CSV 스키마 (10칸, 헤더 없음): yoy가 6번째 — code33_panel엔
+        # 불필요하나 위치 정렬을 위해 이름을 준다.
+        cols = ["code", "period", "avail_date", "netinc", "netinc_prior", "yoy",
+                "revenue", "revenue_prior", "op_income", "op_income_prior"]
+        ea = _pd.read_csv(args.earnings_csv, names=cols, dtype={"code": str, "avail_date": str, "period": str})
     codes = sorted(ea["code"].unique())
     prices = _pd.read_sql_query(
         "SELECT code,date,open,high,low,close,volume,trade_value FROM daily_bars "
