@@ -28,6 +28,11 @@ from .panels import (
     resolve_signal,
     yoy_panels,
 )
+from .sim_crosssectional import (
+    rank_ic,
+    rank_tilt_backtest,
+    staggered_tranche_backtest,
+)
 
 __all__ = [
     # metrics
@@ -49,4 +54,8 @@ __all__ = [
     "cached_panel_pivot",
     "PanelCache",
     "PANEL_CACHE",
+    # cross-sectional simulation
+    "rank_tilt_backtest",
+    "staggered_tranche_backtest",
+    "rank_ic",
 ]

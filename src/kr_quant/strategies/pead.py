@@ -27,41 +27,17 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..engine.metrics import newey_west_t, summarize_periods
+from ..engine.panels import panel_pivot, resolve_signal
+from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest, staggered_tranche_backtest
 
-def _panel(prices: pd.DataFrame, value: str) -> pd.DataFrame:
-    """Pivot a long price frame to a code × date panel (abs — close is signed)."""
-    return prices.pivot_table(index="code", columns="date", values=value, aggfunc="first").abs()
-
-
-def _yoy_panels(earnings_panel, codes, dates):
-    """Pivot the long earnings panel to code×date ``yoy`` and ``age_days`` arrays."""
-    yoy = (
-        earnings_panel.pivot_table(index="code", columns="date", values="yoy", aggfunc="first")
-        .reindex(index=codes, columns=dates).to_numpy(float)
-    )
-    if "age_days" in earnings_panel.columns:
-        age = (
-            earnings_panel.pivot_table(index="code", columns="date", values="age_days", aggfunc="first")
-            .reindex(index=codes, columns=dates).to_numpy(float)
-        )
-    else:
-        age = np.full_like(yoy, np.nan)
-    return yoy, age
-
-
-def _resolve_signal(earnings_panel, signal_panel, codes, dates):
-    """Return ``(sig, age)`` code×date arrays from the YoY panel or a precomputed
-    ``signal_panel`` (long ``code``/``date``/``signal`` — e.g. a PEAD+value blend
-    from :func:`kr_quant.features.fundamentals.blend_rank`). Freshness (``age``)
-    only applies to the raw YoY path; it is ``NaN`` for a precomputed signal.
-    """
-    if signal_panel is not None:
-        sig = (
-            signal_panel.pivot_table(index="code", columns="date", values="signal", aggfunc="first")
-            .reindex(index=codes, columns=dates).to_numpy(float)
-        )
-        return sig, np.full_like(sig, np.nan)
-    return _yoy_panels(earnings_panel, codes, dates)
+# Backward-compat re-exports (the metric/panel logic now lives in the engine).
+# `research/pead_refinement.py` and the engine parity tests still import these
+# private names; keep them as thin aliases so nothing re-derives the accounting.
+_panel = panel_pivot
+_resolve_signal = resolve_signal
+_summarize = summarize_periods
+_newey_west_t = newey_west_t
 
 
 def pead_backtest(
@@ -122,68 +98,18 @@ def pead_backtest(
         ``sharpe`` (annualized, net), ``t_stat`` (full-sample net), ``mean_net``,
         ``hit_rate``, ``cum_net`` and ``avg_turnover``.
     """
-    close = _panel(prices, "close")
-    tval = _panel(prices, "trade_value")
+    close = panel_pivot(prices, "close")
+    tval = panel_pivot(prices, "trade_value")
     dates = list(close.columns)
     codes = list(close.index)
     C = close.to_numpy(float)
     V = tval.reindex(index=codes, columns=dates).to_numpy(float)
-    nD = len(dates)
-
-    adv = np.full_like(C, np.nan)
-    for j in range(adv_window, nD):
-        adv[:, j] = np.nanmean(V[:, j - adv_window:j], axis=1)
-
-    yoy, age = _resolve_signal(earnings_panel, signal_panel, codes, dates)
-
-    def fwd(t: int, h: int) -> np.ndarray:
-        return C[:, t + h] / C[:, t] - 1.0 if t + h < nD else np.full(C.shape[0], np.nan)
-
-    rows: list[dict] = []
-    prev_w = np.zeros(C.shape[0])
-    t = start_index
-    while t < nD - horizon - 1:
-        sig = yoy[:, t].copy()
-        if fresh_days > 0:
-            sig = np.where(age[:, t] <= fresh_days, sig, np.nan)
-        ok = np.isfinite(sig)
-        ret = fwd(t + 1, horizon)  # t+1 entry avoids same-close look-ahead
-        ok &= np.isfinite(ret)
-        if adv_floor > 0:
-            ok &= adv[:, t] >= adv_floor
-        if ok.sum() < min_names:
-            t += horizon
-            continue
-        idx = np.where(ok)[0]
-        pct = pd.Series(sig[ok]).rank(pct=True).to_numpy()
-        w = np.zeros(C.shape[0])
-        if long_only:
-            # Long the top, fully invested; alpha is EXCESS over the eligible
-            # universe (the implementable form when shorting is barred).
-            if top_n > 0:
-                # Concentrated equal-weight top-N: fewer, bigger asymmetric bets —
-                # low win-rate, high payoff-ratio (fat right tail from earnings drift).
-                sel = idx[np.argsort(-sig[ok])[:top_n]]
-                w[sel] = 1.0 / len(sel)
-            else:
-                lw = np.clip(pct - 0.5, 0, None)  # rank tilt across the book
-                w[idx] = lw / lw.sum() if lw.sum() > 0 else 0.0
-            bench = float(np.nanmean(ret[idx]))
-            gross = float(np.nansum(w * np.nan_to_num(ret))) - bench
-            short_gross = 0.0
-        else:
-            w[idx] = (pct - 0.5) / np.abs(pct - 0.5).sum()  # dollar-neutral, gross=1
-            gross = float(np.nansum(w * np.nan_to_num(ret)))
-            short_gross = float(np.abs(w[w < 0]).sum())  # ~0.5 for a neutral book
-        turnover = float(np.abs(w - prev_w).sum())
-        borrow = borrow_cost_annual * (horizon / 252.0) * short_gross
-        rows.append({"date": dates[t], "gross": gross, "turnover": turnover,
-                     "net": gross - turnover * cost_one_way - borrow})
-        prev_w = w
-        t += horizon
-
-    periods = pd.DataFrame(rows)
-    return periods, _summarize(periods, horizon)
+    yoy, age = resolve_signal(earnings_panel, signal_panel, codes, dates)
+    return rank_tilt_backtest(
+        C, V, yoy, dates, horizon=horizon, adv_floor=adv_floor, adv_window=adv_window,
+        cost_one_way=cost_one_way, min_names=min_names, start_index=start_index,
+        fresh_days=fresh_days, long_only=long_only, borrow_cost_annual=borrow_cost_annual,
+        top_n=top_n, age=age)
 
 
 def staggered_backtest(
@@ -220,81 +146,22 @@ def staggered_backtest(
     (``summary`` includes ``payoff_ratio``); ``turnover``/``best``/``worst`` are on
     the ``step``-period excess series.
     """
-    close = _panel(prices, "close")
-    tval = _panel(prices, "trade_value")
+    close = panel_pivot(prices, "close")
+    tval = panel_pivot(prices, "trade_value")
     dates = list(close.columns)
     codes = list(close.index)
     C = close.to_numpy(float)
     V = tval.reindex(index=codes, columns=dates).to_numpy(float)
-    nD = len(dates)
-    adv = np.full_like(C, np.nan)
-    for j in range(adv_window, nD):
-        adv[:, j] = np.nanmean(V[:, j - adv_window:j], axis=1)
-    sig_m, _ = _resolve_signal(earnings_panel, signal_panel, codes, dates)
-    n_tranches = max(1, horizon // step)
+    sig_m, _ = resolve_signal(earnings_panel, signal_panel, codes, dates)
     capm = (
         cap_panel.pivot_table(index="code", columns="date", values="market_cap", aggfunc="first")
         .reindex(index=codes, columns=dates).to_numpy(float)
         if cap_panel is not None else None
     )
-
-    def eligible(t: int) -> np.ndarray:
-        ok = np.isfinite(sig_m[:, t]) & (adv[:, t] >= adv_floor)
-        if capm is not None and cap_rank is not None:
-            liq = np.where(ok & np.isfinite(capm[:, t]))[0]
-            order = liq[np.argsort(-capm[liq, t])]  # descending market cap
-            tier = order[cap_rank[0]:cap_rank[1]]
-            mask = np.zeros(C.shape[0], bool)
-            mask[tier] = True
-            ok = ok & mask
-        return ok
-
-    def book(t: int) -> np.ndarray | None:
-        ok = eligible(t)
-        if ok.sum() < min_names:
-            return None
-        idx = np.where(ok)[0]
-        return idx[np.argsort(-sig_m[idx, t])[:top_n]]
-
-    rows: list[dict] = []
-    for t in range(start_index, nD - step - 1):
-        if (t - start_index) % step != 0:
-            continue
-        uni = np.where(eligible(t))[0]
-        if uni.size < min_names:
-            continue
-        ret = C[:, t + step] / C[:, t] - 1.0
-        bench = float(np.nanmean(ret[uni]))
-        tranche_excess = []
-        for k in range(n_tranches):
-            b = book(t - k * step)
-            if b is not None:
-                tranche_excess.append(float(np.nanmean(ret[b])) - bench)
-        if tranche_excess:
-            rows.append({"date": dates[t], "gross": float(np.mean(tranche_excess)),
-                         "turnover": 1.0 / n_tranches, "net": float(np.mean(tranche_excess))})
-    periods = pd.DataFrame(rows)
-    return periods, _summarize(periods, step)
-
-
-def _newey_west_t(x: np.ndarray, lag: int) -> tuple[float, float]:
-    """Mean and Newey-West (HAC) t-stat of ``x``, robust to serial correlation.
-
-    Overlapping horizon returns are autocorrelated; a plain t overstates
-    significance. The Bartlett-kernel HAC variance with ``lag`` corrects it.
-    """
-    x = np.asarray(x, float)
-    x = x[np.isfinite(x)]
-    n = len(x)
-    if n < lag + 2:
-        return float("nan"), float("nan")
-    mu = x.mean()
-    d = x - mu
-    var = (d @ d) / n
-    for k in range(1, lag + 1):
-        var += 2 * (1 - k / (lag + 1)) * ((d[k:] @ d[:-k]) / n)
-    se = np.sqrt(var / n)
-    return float(mu), float(mu / se) if se > 0 else float("nan")
+    return staggered_tranche_backtest(
+        C, V, sig_m, dates, horizon=horizon, step=step, top_n=top_n, adv_floor=adv_floor,
+        adv_window=adv_window, start_index=start_index, min_names=min_names,
+        cap_array=capm, cap_rank=cap_rank)
 
 
 def pead_rank_ic(
@@ -327,85 +194,16 @@ def pead_rank_ic(
         ``{"ic_mean", "ic_nw_t", "n_days", "frac_positive", "regimes"}`` where
         ``regimes`` is a list of ``{"start", "end", "ic_mean", "nw_t"}`` dicts.
     """
-    close = _panel(prices, "close")
-    tval = _panel(prices, "trade_value")
+    close = panel_pivot(prices, "close")
+    tval = panel_pivot(prices, "trade_value")
     dates = list(close.columns)
     codes = list(close.index)
     C = close.to_numpy(float)
     V = tval.reindex(index=codes, columns=dates).to_numpy(float)
-    nD = len(dates)
-    adv = np.full_like(C, np.nan)
-    for j in range(adv_window, nD):
-        adv[:, j] = np.nanmean(V[:, j - adv_window:j], axis=1)
-    yoy, age = _resolve_signal(earnings_panel, signal_panel, codes, dates)
-
-    ics: list[float] = []
-    ic_dates: list[str] = []
-    for t in range(start_index, nD - horizon - 1):
-        sig = yoy[:, t].copy()
-        if fresh_days > 0:
-            sig = np.where(age[:, t] <= fresh_days, sig, np.nan)
-        ok = np.isfinite(sig)
-        if adv_floor > 0:
-            ok &= adv[:, t] >= adv_floor
-        ret = C[:, t + 1 + horizon] / C[:, t + 1] - 1.0
-        ok &= np.isfinite(ret)
-        if ok.sum() < 20:
-            continue
-        a = pd.Series(sig[ok]).rank().to_numpy()
-        b = pd.Series(ret[ok]).rank().to_numpy()
-        if a.std() > 0 and b.std() > 0:
-            ics.append(float(np.corrcoef(a, b)[0, 1]))
-            ic_dates.append(dates[t])
-
-    ic = np.array(ics)
-    mean_ic, nw_t = _newey_west_t(ic, horizon)
-    regimes: list[dict] = []
-    if len(ic) >= n_regimes:
-        b = len(ic) // n_regimes
-        for k in range(n_regimes):
-            s0 = k * b
-            s1 = (k + 1) * b if k < n_regimes - 1 else len(ic)
-            m, tt = _newey_west_t(ic[s0:s1], horizon)
-            regimes.append({"start": ic_dates[s0][:7], "end": ic_dates[s1 - 1][:7],
-                            "ic_mean": m, "nw_t": tt})
-    return {
-        "ic_mean": mean_ic, "ic_nw_t": nw_t, "n_days": len(ic),
-        "frac_positive": float((ic > 0).mean()) if len(ic) else float("nan"),
-        "regimes": regimes,
-    }
-
-
-def _summarize(periods: pd.DataFrame, horizon: int) -> dict:
-    """Annualized net Sharpe, full-sample t-stat and cumulative return."""
-    if periods.empty:
-        return {"n": 0, "sharpe": float("nan"), "t_stat": float("nan"),
-                "mean_net": float("nan"), "hit_rate": float("nan"),
-                "cum_net": float("nan"), "avg_turnover": float("nan")}
-    net = periods["net"].to_numpy()
-    per_year = 252 / horizon
-    std = net.std()
-    ann = (1 + net.mean()) ** per_year - 1
-    wins = net[net > 0]
-    losses = net[net < 0]
-    avg_win = float(wins.mean()) if wins.size else 0.0
-    avg_loss = float(-losses.mean()) if losses.size else 0.0
-    return {
-        "n": len(net),
-        "sharpe": float(ann / (std * np.sqrt(per_year))) if std > 0 else float("nan"),
-        "t_stat": float(net.mean() / (std / np.sqrt(len(net)))) if std > 0 else float("nan"),
-        "mean_net": float(net.mean()),
-        "hit_rate": float((net > 0).mean()),
-        "cum_net": float((1 + net).prod() - 1),
-        "avg_turnover": float(periods["turnover"].mean()),
-        # payoff profile (a quant cares about this more than win rate): a low
-        # hit_rate with payoff_ratio > 1 is an asymmetric, convex strategy.
-        "avg_win": avg_win,
-        "avg_loss": avg_loss,
-        "payoff_ratio": float(avg_win / avg_loss) if avg_loss > 0 else float("nan"),
-        "best": float(net.max()),
-        "worst": float(net.min()),
-    }
+    yoy, age = resolve_signal(earnings_panel, signal_panel, codes, dates)
+    return rank_ic(
+        C, V, yoy, dates, horizon=horizon, adv_floor=adv_floor, adv_window=adv_window,
+        start_index=start_index, fresh_days=fresh_days, n_regimes=n_regimes, age=age)
 
 
 def market_cap_panel(prices: pd.DataFrame, shares: pd.DataFrame) -> pd.DataFrame:
@@ -456,8 +254,8 @@ def recommend_holdings(
         DataFrame (``code``, ``yoy``, ``cap_rank``, ``adv``) of the recommended
         equal-weight book, best signal first.
     """
-    close = _panel(prices, "close")
-    tval = _panel(prices, "trade_value")
+    close = panel_pivot(prices, "close")
+    tval = panel_pivot(prices, "trade_value")
     dates = list(close.columns)
     t = dates.index(asof) if asof else len(dates) - 1
     codes = list(close.index)
