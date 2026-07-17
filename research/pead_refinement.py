@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""PEAD refinement research (HANDOFF #2) — surprise-magnitude filter, horizon
+"""PEAD refinement research — surprise-magnitude filter, horizon
 sweep, per-position trailing stop.
 
 Scratch research only. Nothing here touches ``src/kr_quant/`` (production
@@ -14,13 +14,13 @@ never CSV.
 Price table — IMPORTANT deviation from the plan's literal SQL, forced by the
 data:
     The plan's Step 1 SQL names ``daily_bars``. That table is corporate-action
-    UNadjusted (storage.py / HANDOFF.md caveat #1): a stock split reads as a
-    catastrophic one-day return, which corrupts every return-based backtest.
-    Running ``staggered_backtest`` on raw ``daily_bars`` yields Sharpe 0.42 /
-    t 1.22 — it does NOT reproduce the plan's own hard acceptance gate
-    (Sharpe ~0.8-1.0, t~2.2), i.e. the validated alpha. HANDOFF.md §① states
-    outright that PEAD requires split-adjusted prices ("분할조정 가격 필수") and
-    reports the validated t as 2.16-2.97. The split-adjusted series is stored as
+    UNadjusted (storage.py / MULTI_ALPHA.md §"반드시 지킬 전제" #1): a stock split
+    reads as a catastrophic one-day return, which corrupts every return-based
+    backtest. Running ``staggered_backtest`` on raw ``daily_bars`` yields Sharpe
+    0.42 / t 1.22 — it does NOT reproduce the plan's own hard acceptance gate
+    (Sharpe ~0.8-1.0, t~2.2), i.e. the validated alpha. PEAD requires
+    split-adjusted prices ("분할조정 가격 필수"); the validated t is 2.16-2.97.
+    The split-adjusted series is stored as
     ``daily_bars_adjusted`` (the ``price_adjust.py`` output). Using it reproduces
     Sharpe ~1.09 / t ~3.12 — the validated alpha. So, exactly like a stale line
     reference, the plan's ``daily_bars`` is followed by intent, not by letter:
@@ -118,7 +118,7 @@ def run_baseline(prices=None, yoy_panel=None) -> dict:
     ok = (lo - 0.15) <= s["sharpe"] and s["t_stat"] >= 2.0
     print(
         f"  [{'OK' if ok else '!!'}] validated-alpha range: Sharpe~{lo}-{hi}, t~2.2 "
-        f"(HANDOFF §① reports t 2.16-2.97)"
+        f"(validated range: t 2.16-2.97)"
     )
     return s
 
@@ -467,7 +467,7 @@ def _table_trail(res) -> str:
 
 
 def run_all() -> None:
-    """Run Steps 1-4 sequentially, then write the results doc + update HANDOFF."""
+    """Run Steps 1-4 sequentially, then write the results doc."""
     prices, yoy_panel = load_data()
     base = run_baseline(prices, yoy_panel)
     print()
@@ -531,7 +531,7 @@ def run_all() -> None:
             "unchanged (H60, no filter, no per-position stop)."
         )
 
-    doc = f"""# PEAD Refinement Results (HANDOFF #2)
+    doc = f"""# PEAD Refinement Results
 
 **Date:** 2026-07-13  **Script:** `research/pead_refinement.py`
 **Plan:** `docs/pead-refinement.md` — 사전등록·Guardrails·회계 조화 (RALPLAN-DR consensus)
@@ -546,7 +546,7 @@ results share identical return / benchmark / annualization conventions
 expanded universe (2,629 DART codes, 2016Q1-2026). YoY is computed from
 `netinc`/`netinc_prior` via the repo's canonical `(cur-prior)/|prior|`. Prices
 are **split-adjusted** (`daily_bars_adjusted`): raw `daily_bars` is
-corporate-action unadjusted (HANDOFF caveat #1) and yields Sharpe 0.42 — it does
+corporate-action unadjusted (MULTI_ALPHA.md §"반드시 지킬 전제" #1) and yields Sharpe 0.42 — it does
 not reproduce the validated alpha; the adjusted series does (§① requires it).
 The **primary comparison is zero-cost vs zero-cost** across all experiments;
 Experiment 3 adds a **secondary cost-adjusted** column
@@ -557,7 +557,7 @@ Experiment 3 adds a **secondary cost-adjusted** column
 `staggered_backtest(H{BASELINE['horizon']}, step{BASELINE['step']}, top{BASELINE['top_n']}, adv_floor={BASELINE['adv_floor']:.0f})`:
 Sharpe **{base['sharpe']:+.3f}**, t **{base['t_stat']:+.3f}**, cum {base['cum_net']:+.3f},
 hit {base['hit_rate']:.3f}, payoff {base['payoff_ratio']:.3f}, worst {base['worst']:+.3f}
-(n={base['n']}). Reproduces the validated range (HANDOFF §① t 2.16-2.97).
+(n={base['n']}). Reproduces the validated range (t 2.16-2.97).
 
 ## Experiment 1 — YoY magnitude filter
 
@@ -611,29 +611,6 @@ are cost-adjusted (secondary). `trail_pct=1.00` is the no-trail sanity row.
     with open(out_path, "w") as f:
         f.write(doc)
     print(f"\n[wrote] {out_path}")
-    _update_handoff(rec)
-
-
-def _update_handoff(rec: str) -> None:
-    """Update RESEARCH_STATUS.md section #2 with a one-line status + pointer (Step 5)."""
-    path = "research/RESEARCH_STATUS.md"
-    with open(path) as f:
-        text = f.read()
-    old = ("2. **PEAD에 진입/청산 정교화** — 실적 서프라이즈 크기 필터, H60 지평선 최적화, "
-           "낙폭 축소용 트레일.")
-    status = "완료" if "No robust improvement" not in rec else "완료(개선 없음 결론)"
-    new = (
-        "2. **PEAD에 진입/청산 정교화 — " + status + "** (실적 서프라이즈 크기 필터·H60 지평선 "
-        "최적화·낙폭 축소용 트레일). 결과: `research/PEAD_REFINEMENT_RESULTS.md`, "
-        "스크립트: `research/pead_refinement.py`."
-    )
-    if old in text:
-        text = text.replace(old, new)
-        with open(path, "w") as f:
-            f.write(text)
-        print(f"[updated] {path} section #2")
-    else:
-        print(f"[warn] could not find RESEARCH_STATUS.md section #2 anchor; not modified")
 
 
 # ---------------------------------------------------------------------------

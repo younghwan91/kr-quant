@@ -2,7 +2,7 @@
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
-코스피·코스닥 종목의 투자자별 수급·시세·실적 데이터를 바탕으로 **PEAD, 매집(accumulation) 스크리닝, SEPA/minervini, 멀티-알파 결합** 등 전략/피처 분석을 수행하는 퀀트 리서치 라이브러리입니다. 현재까지 검증된 핵심 알파는 **PEAD**(실적 서프라이즈 드리프트)이며, 미너비니 추세추종과 결합한 멀티-알파 북이 분할조정·비용 반영 후에도 인덱스를 파레토 지배합니다 — 자세한 리서치 결론은 [research/RESEARCH_STATUS.md](research/RESEARCH_STATUS.md) 참고.
+코스피·코스닥 종목의 투자자별 수급·시세·실적 데이터를 바탕으로 **PEAD, 매집(accumulation) 스크리닝, SEPA/minervini, 멀티-알파 결합** 등 전략/피처 분석을 수행하는 퀀트 리서치 라이브러리입니다. 현재까지 검증된 핵심 알파는 **PEAD**(실적 서프라이즈 드리프트)이며, 미너비니 추세추종과 결합한 멀티-알파 북이 분할조정·비용 반영 후에도 인덱스를 파레토 지배합니다 — 자세한 리서치 결론은 [research/MULTI_ALPHA.md](research/MULTI_ALPHA.md) 참고.
 
 **데이터 수집은 이 레포에 없습니다.** 수집 로직(DART/키움/KRX/네이버 콜렉터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 이전되어 그쪽에서 자체 보유합니다 — 분석 세션에서 실수로 수집기를 실행해 DB 정합성이 깨지는 사고를 막고, 수집 로직을 오픈소스로 공유하기 위함입니다. 이 레포는 TimescaleDB(또는 로컬 SQLite)를 **읽기 전용**으로 사용해 전략을 검증합니다(`kr_quant/storage.py`의 `connect()`/`market_cap_asof()` 등).
 
@@ -37,7 +37,7 @@
 | 시총가중 KOSPI100 프록시(벤치) | +15.5% | 0.71 | −44% |
 | **멀티-알파 북 (IDX50 / PEAD25 / MNV25)** | **+19.3%** | **1.06** | **−24%** |
 
-PEAD 단독으로는 유니버스 대비 **+8%p/년, t 2.16~2.97**(2016–2026)로 세 슬리브 중 유일하게 단독 robust. 전체 규칙·caveat은 [research/RESEARCH_STATUS.md](research/RESEARCH_STATUS.md) 참고.
+PEAD 단독으로는 유니버스 대비 **+8%p/년, t 2.16~2.97**(2016–2026)로 세 슬리브 중 유일하게 단독 robust. 전체 규칙·caveat은 [research/MULTI_ALPHA.md](research/MULTI_ALPHA.md) 참고.
 
 ## 핵심 기능
 

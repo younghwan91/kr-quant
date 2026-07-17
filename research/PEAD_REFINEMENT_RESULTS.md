@@ -1,4 +1,4 @@
-# PEAD Refinement Results (HANDOFF #2)
+# PEAD Refinement Results
 
 **Date:** 2026-07-13  **Script:** `research/pead_refinement.py`
 **Plan:** `docs/pead-refinement.md` — 사전등록·Guardrails·회계 조화 (RALPLAN-DR consensus)
@@ -13,7 +13,7 @@ results share identical return / benchmark / annualization conventions
 expanded universe (2,629 DART codes, 2016Q1-2026). YoY is computed from
 `netinc`/`netinc_prior` via the repo's canonical `(cur-prior)/|prior|`. Prices
 are **split-adjusted** (`daily_bars_adjusted`): raw `daily_bars` is
-corporate-action unadjusted (HANDOFF caveat #1) and yields Sharpe 0.42 — it does
+corporate-action unadjusted (MULTI_ALPHA.md §"반드시 지킬 전제" #1) and yields Sharpe 0.42 — it does
 not reproduce the validated alpha; the adjusted series does (§① requires it).
 The **primary comparison is zero-cost vs zero-cost** across all experiments;
 Experiment 3 adds a **secondary cost-adjusted** column
@@ -24,7 +24,7 @@ Experiment 3 adds a **secondary cost-adjusted** column
 `staggered_backtest(H60, step20, top40, adv_floor=20000)`:
 Sharpe **+1.087**, t **+3.123**, cum +1.172,
 hit 0.628, payoff 1.251, worst -0.063
-(n=113). Reproduces the validated range (HANDOFF §① t 2.16-2.97).
+(n=113). Reproduces the validated range (t 2.16-2.97).
 
 ## Experiment 1 — YoY magnitude filter
 
