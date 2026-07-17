@@ -1,7 +1,7 @@
 # kr-quant 핸드오프 — 최선 결과 + 다음 에이전트 인수인계
 
 작성: GOAL 루프 세션 종료 시점. 이 문서 하나로 현재 최선 전략·규칙·데이터 상태·다음 할 일을
-전달한다. 원 로그: `.omc/progress.txt`. 상세: `research/MULTI_ALPHA.md`,
+전달한다. 상세: `research/MULTI_ALPHA.md`,
 `research/operator_flow/minervini/HONEST_VERDICT.md`.
 
 ## ⚠️ 백테스팅 엔진 사용 규칙 (필독)

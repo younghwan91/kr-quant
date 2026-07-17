@@ -534,7 +534,7 @@ def run_all() -> None:
     doc = f"""# PEAD Refinement Results (HANDOFF #2)
 
 **Date:** 2026-07-13  **Script:** `research/pead_refinement.py`
-**Plan:** `.omc/plans/pead-refinement-plan.md` (RALPLAN-DR consensus)
+**Plan:** `docs/pead-refinement.md` — 사전등록·Guardrails·회계 조화 (RALPLAN-DR consensus)
 
 ## Methodology
 

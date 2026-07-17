@@ -2,8 +2,7 @@
 features into a single per-code, per-date signal, guard against lookahead bias,
 and walk-forward evaluate the signal against forward returns.
 
-This is Phase 1 of the supply-flow prediction plan
-(``.omc/plans/20260708-supply-flow-prediction.md``). The Phase 1 gate is
+This is Phase 1 of the supply-flow prediction plan. The Phase 1 gate is
 **not** a hard-fail Sharpe threshold — it is "the fraction of walk-forward
 splits where the supply-wave signal's Spearman correlation with the forward
 return is positive." This module computes and reports that fraction; whether

@@ -1,7 +1,6 @@
 """Phase 2: graph-based propagation of the supply-wave signal across stocks.
 
-This is deliberately **not** a deep GNN. The consensus plan
-(``.omc/plans/20260708-supply-flow-prediction.md``, Phase 2) picked a
+This is deliberately **not** a deep GNN. The consensus plan (Phase 2) picked a
 parameter-free graph-diffusion model over GCN/GraphSAGE because the real
 data history is only ~95 trading days per stock — a GNN with thousands of
 learned parameters trained on that little data would overfit long before it
