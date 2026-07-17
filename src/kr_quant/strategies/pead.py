@@ -305,8 +305,11 @@ def main() -> int:
     ea = _pd.read_csv(args.earnings_csv, dtype={"code": str, "avail_date": str, "period": str})
     con = connect(args.db)
     codes = sorted(ea["code"].unique())
+    # 분할조정 필수: 미조정 daily_bars로는 분할이 가짜 −68% 손실로 잡혀 검증된 알파가
+    # 재현되지 않는다(Sharpe 0.42). daily_bars_adjusted는 weekly_price_adjust DAG가
+    # 재생성한다 — 비어 있으면 그 DAG가 아직 안 돈 것.
     prices = _pd.read_sql_query(
-        "SELECT code,date,close,trade_value FROM daily_bars WHERE code = ANY(%(c)s)",
+        "SELECT code,date,close,trade_value FROM daily_bars_adjusted WHERE code = ANY(%(c)s)",
         con, params={"c": codes})
     shares = None if args.no_value else _pd.read_sql_query(
         "SELECT code,date,shares_outstanding FROM shares_outstanding_history WHERE code = ANY(%(c)s)",
