@@ -1,5 +1,19 @@
 # Minervini-style ML swing — 통계적 글로벌맥시마 + 청산 + 피라미딩 + 하프켈리 포트폴리오
 
+> ⚠️ **이 디렉터리 경로는 고정이다 — 옮기거나 이름을 바꾸면 프로덕션이 죽는다.**
+> `kr-quant-airflow`의 `daily_minervini_scan` DAG(평일 18:40 KST)가 절대경로로 하드코딩해
+> 스캐너를 import한다: `sys.path.insert(0, '/opt/kr-quant/research/operator_flow/minervini')`
+> → `from scanner_final import scan`. `research/` 아래 있지만 **스크래치가 아니라 살아있는 배포
+> 코드**다. 정리하려면 두 저장소를 함께 바꾸고 배포 순서를 맞춰야 한다.
+> 마찬가지로 `SEPA_FAITHFUL_DESIGN.md`는 `src/`가 17곳에서 인용하며, 특히 §"사전등록 동결표"가
+> `features/{base_count,universe,vcp}.py`·`strategies/minervini_{exits,sizing}.py`의 동결 상수
+> 근거다 — 지우면 그 상수들의 정당성이 사라진다.
+
+> **정리 이력 (2026-07-17):** 실행 스크래치 23개(`prep_*`/`feat_*`/`sim_*.c`/
+> `portfolio_halfkelly.py`/`ml/*` 등)를 삭제했다. **아래 절 제목의 스크립트 이름은 그 결론을
+> 만든 출처 표시일 뿐, 파일은 더 이상 없다**(원본은 git 히스토리). 결론 자체는 여기 그대로 남아
+> 있으며, 전체 맥락은 `research/MULTI_ALPHA.md`(단일 리서치 레퍼런스) 참고.
+
 > **이 문서와 `SEPA_VERDICT.md`는 서로 다른 실험입니다 — 혼동 주의.** 여기(+32.9% CAGR)는
 > 미너비니 요소(VCP·집중·피라미딩)를 **개별로 볼트온해서 기각**하고, 대신 유니버스정화+
 > 추세템플릿+레짐+초분산 하이브리드로 수렴한 결과입니다(아래 "격차 좁히기"~"수렴 판정" 참고 —
