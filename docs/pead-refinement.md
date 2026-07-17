@@ -47,26 +47,33 @@ import 불가 → ~20줄 일회성 복사, 감사용 줄 참조 명시.
 
 세 실험이 직접 비교 가능하려면 아래를 따라야 한다. **어떤 이탈도 버그다.**
 
-**(a) 1차 비교는 무비용.** `staggered_backtest`는 `net = gross`(`pead.py:275` — 비용 미부과).
-세 실험 모두 1차 스윕 표를 무비용으로 보고해 이에 맞춘다.
+> **줄 참조 주의:** 실험 당시 회계 로직은 `pead.py`에 있었으나, 이후 백테스팅 엔진
+> 마이그레이션(Step 3, `88aff84`)으로 `engine/sim_crosssectional.py`의 `staggered_backtest`
+> 시뮬레이션으로 이전됐다. 아래는 **현재 위치** 기준이다. 공개 진입점은
+> `pead.py:114`(엔진으로 얇게 위임). 수치는 패리티 테스트로 불변이 확인됐다.
+
+**(a) 1차 비교는 무비용.** `staggered_backtest`는 `gross`와 `net`에 **같은 값**을 넣는다
+(`sim_crosssectional.py:187~188` — 비용 미부과). 세 실험 모두 1차 스윕 표를 무비용으로 보고해
+이에 맞춘다.
 
 **(b) 2차 비용조정 컬럼(실험 3 한정).** 트레일 조기청산마다 `cost_one_way = 0.0023`을 부과한
 `Sharpe_cost`/`t_cost`/`cum_net_cost`를 별도 보고. 잦은 트레일 청산의 실제 비용 영향을
 1차 무비용 비교를 오염시키지 않고 드러내기 위함.
 
-**(c) 진입가 = `close[t]`.** `staggered_backtest`는 `C[:, t+step] / C[:, t] − 1.0`(`pead.py:266`).
-진입은 리밸런스일 **종가**이지 익일 종가가 아니다. 트레일링 일봉 워크도 `close[t_entry]`를 진입가로
-써야 한다.
+**(c) 진입가 = `close[t]`.** `staggered_backtest`는 `C[:, t+step] / C[:, t] − 1.0`
+(`sim_crosssectional.py:179`). 진입은 리밸런스일 **종가**이지 익일 종가가 아니다. 트레일링 일봉
+워크도 `close[t_entry]`를 진입가로 써야 한다.
 
 **(d) 조기청산 수익률 회계.** 트레일이 `d`일(`d < step`)에 발화하면:
 - 포지션 수익률은 `close[t+d] / close[t] − 1.0` (진입가 대비 부분기간 수익률).
 - 나머지 기간(`d+1`~`step`)은 **현금 보유**로 처리 — 재투자·추가 노출 없음.
 - **트랜치 벤치마크는 줄이지 않는다** — `staggered_backtest`와 동일한 전체 step 윈도
-  유니버스 평균(`pead.py:266~267`)을 쓴다. 그래야 초과수익이 비교 가능하다: 조기청산으로 후반
-  낙폭을 피했으면 초과수익↑, 후반 랠리를 놓쳤으면 초과수익↓로 정직하게 나타난다.
+  유니버스 평균(`sim_crosssectional.py:179~180`, `bench = nanmean(ret[uni])`)을 쓴다. 그래야
+  초과수익이 비교 가능하다: 조기청산으로 후반 낙폭을 피했으면 초과수익↑, 후반 랠리를 놓쳤으면
+  초과수익↓로 정직하게 나타난다.
 
-**(e) 연율화 분모.** `_summarize()`는 항상 `step`으로 호출한다(`horizon`/`max_horizon` 아님) —
-`staggered_backtest`와 동일(`pead.py:277`). `per_year = 252 / step`.
+**(e) 연율화 분모.** `summarize_periods()`는 항상 `step`으로 호출한다(`horizon`/`max_horizon`
+아님) — `staggered_backtest`와 동일(`sim_crosssectional.py:190`). `per_year = 252 / step`.
 
 ## 결론
 
