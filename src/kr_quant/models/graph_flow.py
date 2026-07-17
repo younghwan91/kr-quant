@@ -122,7 +122,6 @@ def propagate_signal(
     """
     if not 0.0 <= alpha <= 1.0:
         raise ValueError(f"alpha must be in [0, 1], got {alpha}")
-    present = signal.notna()
     vec = signal.reindex(codes).fillna(0.0).to_numpy()
     known_mask = signal.reindex(codes).notna().to_numpy()
 

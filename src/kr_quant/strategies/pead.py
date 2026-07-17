@@ -24,7 +24,6 @@ Pure DataFrame in → DataFrame out (no DB), so the backtest is unit-testable.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from ..engine.metrics import newey_west_t, summarize_periods

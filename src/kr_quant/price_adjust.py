@@ -57,8 +57,10 @@ def _split_factors(close: np.ndarray) -> np.ndarray:
             continue
         # 새 레벨(c1)이 이후에 유지되고 AND 이전 레벨(c0)이 그 앞 며칠과 일관되어야
         # 진짜 분할. 하루만 튀는 스파이크는 되돌림 지점에서 c0(스파이크)이 직전과 어긋나 걸러짐.
-        fwd = close[t + 1:t + 1 + PERSIST_DAYS]; fwd = fwd[np.isfinite(fwd)]
-        bwd = close[max(0, t - 1 - PERSIST_DAYS):t - 1]; bwd = bwd[np.isfinite(bwd)]
+        fwd = close[t + 1:t + 1 + PERSIST_DAYS]
+        fwd = fwd[np.isfinite(fwd)]
+        bwd = close[max(0, t - 1 - PERSIST_DAYS):t - 1]
+        bwd = bwd[np.isfinite(bwd)]
         fwd_ok = fwd.size > 0 and abs(np.median(fwd) / close[t] - 1) < PERSIST_TOL
         bwd_ok = bwd.size == 0 or abs(np.median(bwd) / close[t - 1] - 1) < PERSIST_TOL
         if fwd_ok and bwd_ok:
