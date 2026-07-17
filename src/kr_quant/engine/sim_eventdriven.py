@@ -17,9 +17,9 @@ Provenance (Step 4 of the backtest-engine migration — logic preserved verbatim
     position_walk <- minervini_sepa.sepa_trades._walk (closure)
     trade_runner  <- minervini_sepa.sepa_trades (fill loop)
 
-The 6 `_walk` closure invariants documented in the migration plan
-(``.omc/plans/backtest-engine-plan.md`` §"Behavioral Specification") are preserved
-here; each is flagged with an inline ``# INVARIANT N`` comment at its site.
+The 6 `_walk` closure invariants documented in ``docs/backtest-engine.md``
+§"`position_walk` 불변식 6개" are preserved here; each is flagged with an inline
+``# INVARIANT N`` comment at its site.
 """
 
 from __future__ import annotations

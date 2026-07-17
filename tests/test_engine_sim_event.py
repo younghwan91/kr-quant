@@ -1,8 +1,8 @@
 """Engine event-driven walk — generic coverage + the 6 `_walk` closure invariants.
 
-The 6 invariant tests pin the subtle behaviors documented in the migration plan
-(``.omc/plans/backtest-engine-plan.md`` §"Behavioral Specification: `_walk` Closure
-Invariants"); each would be silently broken by a naive reimplementation.
+The 6 invariant tests pin the subtle behaviors documented in
+``docs/backtest-engine.md`` §"`position_walk` 불변식 6개"; each would be silently
+broken by a naive reimplementation.
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ def _walk(close, *, open_=None, high=None, low=None, volume=None, ma50=None,
     """Call position_walk on per-code 1D arrays, deriving sane OHLCV defaults."""
     C = _arr(close)
     n = C.shape[0]
-    O = _arr(open_) if open_ is not None else C.copy()
+    OPN = _arr(open_) if open_ is not None else C.copy()
     H = _arr(high) if high is not None else C.copy()
     L = _arr(low) if low is not None else C.copy()
     V = _arr(volume) if volume is not None else np.full(n, 1000.0)
     M = _arr(ma50) if ma50 is not None else np.full(n, 100.0)
-    return position_walk(C, O, H, L, V, M, entry_idx, entry_price,
+    return position_walk(C, OPN, H, L, V, M, entry_idx, entry_price,
                          stop_price=stop_price, **kw)
 
 

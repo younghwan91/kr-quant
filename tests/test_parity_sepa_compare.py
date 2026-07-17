@@ -1,6 +1,6 @@
 """Parity pins: old ``sepa_compare`` metric fns == new ``engine.metrics`` fns.
 
-Step 1 of the backtest-engine migration (`.omc/plans/backtest-engine-plan.md`).
+Step 1 of the backtest-engine migration (`docs/backtest-engine.md`).
 These assert **exact** float equality (atol=0, rtol=0 / direct ==) between the
 private metric helpers in :mod:`kr_quant.strategies.sepa_compare` and their
 :mod:`kr_quant.engine.metrics` equivalents, using the same synthetic fixtures as

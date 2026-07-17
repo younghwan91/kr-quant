@@ -9,7 +9,7 @@
 성과지표(Sharpe/CAGR/MDD/t-stat/Newey-West/부트스트랩)와 시뮬레이션 루프(횡단면
 랭크틸트·스태거드 트랜치, 이벤트드리븐 트레이드워크)는 전부 `src/kr_quant/engine/`에
 통일돼있다(`metrics.py`/`panels.py`/`sim_crosssectional.py`/`sim_eventdriven.py`/
-`recipe.py` — RALPLAN-DR 2회 컨센서스 검증 완료, `.omc/plans/backtest-engine-plan.md`).
+`recipe.py` — RALPLAN-DR 2회 컨센서스 검증 완료). 설계 결정·ADR: `docs/backtest-engine.md`.
 
 **새 백테스트 실험은 반드시 `kr_quant.engine`의 지표/시뮬레이션 함수를 재사용하고,
 회계 로직(진입가·벤치마크·비용·연율화)을 새로 구현하지 않는다.** 새 실험을 짤 땐
