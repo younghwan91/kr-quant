@@ -91,7 +91,7 @@
      (`adjust=True` 기본) ✅ 경로는 다르나 결과는 조정됨
    - `storage.py:291`·`:347` — 시총 계산용 종가 조회. **원자료가 맞다**(시점 주식수 × 그 시점의
      실제 거래가). 조정가를 쓰면 오히려 틀림 — 건드리지 말 것 ✅
-   - `strategies/pead.py:311` — 원자료 직독 + 조정 없음이라 caveat #1("PEAD는 분할조정 필수",
+   - `strategies/pead.py:312` — 원자료 직독 + 조정 없음이라 caveat #1("PEAD는 분할조정 필수",
      미조정 시 Sharpe 0.42)과 충돌했으나 **2026-07-17 `daily_bars_adjusted`로 수정** ✅
    - `research/operator_flow/**` 다수 — 미조정 직독. 죽은 리서치 스크립트라 우선순위 낮음.
 
