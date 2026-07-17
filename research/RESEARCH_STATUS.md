@@ -81,8 +81,20 @@
    휩소(승률 15%)에서 발생. **미너비니식 집중 능동매매는 한국 돌파 유니버스에선 분산 북을 못
    이긴다는 결론 확정.** (`scratchpad/kalman_*.py`, `opt_regime.txt` 참고.)
 2. **PEAD에 진입/청산 정교화 — 완료(개선 없음 결론)** (실적 서프라이즈 크기 필터·H60 지평선 최적화·낙폭 축소용 트레일). 결과: `research/PEAD_REFINEMENT_RESULTS.md`, 스크립트: `research/pead_refinement.py`.
-3. **데이터 파이프라인 기업행동 조정 영구 통합** — `price_adjust`를 ingestion 단계에 붙여 모든 미래
-   백테스트가 깨끗하게. 프로덕션 변경이라 사용자 승인 필요.
+3. **데이터 파이프라인 기업행동 조정 — 파이프라인은 이미 완료, "소비자 이전"만 남음.**
+   `weekly_price_adjust` DAG(kr-quant-airflow, 토 05:00 KST)가 `daily_bars_adjusted`를 매주 **전체**
+   재생성한다(새로 감지된 분할이 그 종목의 과거 조정값을 전부 바꾸므로 증분 불가). 원자료
+   `daily_bars`는 보존 — ingestion을 직접 바꾸는 대신 조정 테이블을 병행하는 설계라 더 안전하다.
+   **남은 건 소비자가 실제로 그 테이블을 읽게 하는 것.** 2026-07-17 감사 결과:
+   - `research/pead_refinement.py:61` — `PRICE_TABLE = "daily_bars_adjusted"` ✅ 조정본 사용
+   - `strategies/sepa_experiment.py:249` — 원자료를 읽되 인프로세스 `adjust_prices()` 적용
+     (`adjust=True` 기본) ✅ 경로는 다르나 결과는 조정됨
+   - `storage.py:291`·`:347` — 시총 계산용 종가 조회. **원자료가 맞다**(시점 주식수 × 그 시점의
+     실제 거래가). 조정가를 쓰면 오히려 틀림 — 건드리지 말 것 ✅
+   - `strategies/pead.py:309` — 원자료를 읽고 **조정을 전혀 안 함** ⚠️ caveat #1("PEAD는 분할조정
+     필수", 미조정 시 Sharpe 0.42)과 정면 충돌. 단 `--earnings-csv` 레거시 경로이고 CSV는 DB
+     이관으로 사라져 현재 실행 불가에 가깝다. 고치면 CLI 출력이 바뀌므로 승인 필요.
+   - `research/operator_flow/**` 다수 — 미조정 직독. 죽은 리서치 스크립트라 우선순위 낮음.
 4. **컨센서스·수급세부 축적 대기** — 시간 축적 후 4번째 무상관 슬리브(파도타기) 검증.
 5. **미구현 미너비니 마스터키 2개** (능동매매 재개 시 우선):
    - **#3 유동성 하한 상향** — 현재 breakout 유니버스 거래대금 ≥100억. ≥200~500억으로 올리면
