@@ -32,6 +32,17 @@ import pandas as pd
 
 # 형제 모듈(같은 research/experiments) — 스크립트 실행시 그 디렉터리가 sys.path[0].
 from prop_gate import prop_gate, random_entry_control
+from prop_swing_common import (
+    dedup_gap,
+    gate_sim,
+    load_env_db,
+    regime_split,
+    render_control,
+    render_dist_fragility,
+    render_gate_core,
+    render_gate_report,
+    render_untouched,
+)
 
 from kr_quant.storage import connect, db_default
 
@@ -70,19 +81,9 @@ RS_WEIGHTS = (2.0, 1.0, 1.0, 1.0)
 RS_LOOKBACKS = (63, 126, 189, 252)
 
 
-def _load_env_db() -> None:
-    """.env 의 KR_QUANT_DB 를 환경에 실어줌(다른 러너와 동일 관용)."""
-    if os.environ.get("KR_QUANT_DB") or not os.path.exists(".env"):
-        return
-    for line in open(".env"):
-        if line.startswith("KR_QUANT_DB"):
-            os.environ["KR_QUANT_DB"] = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
-
-
 def load_prices() -> pd.DataFrame:
     """split-adjusted OHLC + volume + trade_value 를 long 으로 로드."""
-    _load_env_db()
+    load_env_db()
     con = connect(db_default())
     prices = pd.read_sql_query(
         f"SELECT code, date, open, high, low, close, volume, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — 신뢰 상수
@@ -163,15 +164,7 @@ def dedup_entries(mask: pd.DataFrame, date_pos: dict[str, int]) -> list[tuple[st
     for d, row in zip(mask.index, mask.to_numpy(), strict=True):
         for c in codes[row]:
             raw.append((str(d), str(c)))
-    kept: list[tuple[str, str]] = []
-    last: dict[str, int] = {}
-    for d, c in sorted(raw):                          # 시간순
-        pos = date_pos[d]
-        if c in last and pos - last[c] < MIN_GAP:
-            continue
-        kept.append((d, c))
-        last[c] = pos
-    return kept
+    return dedup_gap(raw, date_pos, MIN_GAP)
 
 
 # ---------------------------------------------------------------------------
@@ -241,24 +234,6 @@ def simulate_trades(
 # ---------------------------------------------------------------------------
 # 리포트 조립
 # ---------------------------------------------------------------------------
-def _regime_split(fill_dates: np.ndarray, rets: np.ndarray, cost: float, stop: float) -> dict:
-    """레짐 정직성(플랜 Step 1): 2018-2022 vs 2023-2026 건당 기대값(gross·R)."""
-    out = {}
-    for name, lo, hi in [("2018-2022", "2018-01-01", "2023-01-01"),
-                         ("2023-2026", "2023-01-01", "2027-01-01")]:
-        m = (fill_dates >= lo) & (fill_dates < hi)
-        r = rets[m]
-        r = r[np.isfinite(r)]
-        R = (r - cost) / stop
-        out[name] = {
-            "n": int(len(r)),
-            "gross_mean": float(r.mean()) if len(r) else float("nan"),
-            "expectancy_R": float(R.mean()) if len(R) else float("nan"),
-            "win_rate": float((R > 0).mean()) if len(R) else float("nan"),
-        }
-    return out
-
-
 def _sensitivity(entries: list[tuple[str, str]], p: dict) -> list[dict]:
     """탐색적 민감도(2차, R1) — stop×hold_max 격자 + 트레일링 변형. plateau 확인용.
 
@@ -269,9 +244,7 @@ def _sensitivity(entries: list[tuple[str, str]], p: dict) -> list[dict]:
     grid += [(0.07, 10, "trail")]                    # 트레일링 변형 1개(비교용)
     for s, h, mode in grid:
         fd, rr = simulate_trades(entries, p, stop=s, hold_max=h, exit_mode=mode)
-        rep = prop_gate(fd, rr, s, label=f"sens_{s}_{h}_{mode}", verbose=False)
-        cs0 = rep["cost_sweep"][0]
-        fb = rep["folds"]
+        rep, cs0, fb, _ = gate_sim(fd, rr, s, f"sens_{s}_{h}_{mode}")
         rows.append({
             "stop": s, "hold": h, "mode": mode, "n": rep["n_total"],
             "oos_expR": cs0["oos_expectancy_R"],
@@ -315,82 +288,18 @@ def _fmt_verdict(
     L.append("---")
     L.append("")
 
-    # --- 게이트 결과 ---
-    L.append("## 게이트 결과 (prop_gate, 사전등록 config)")
-    L.append("")
-    L.append(f"- **총 트레이드 n = {rep['n_total']}**, 손절폭 stop = {rep['stop']:.0%}, "
-             f"기준비용 {int(round(rep['primary_cost'] * 1e4))}bp")
-    edies = rep["cost_edge_dies"]
-    L.append(f"- **비용 스윕 — 엣지 사망 비용:** "
-             f"{'전 구간 생존' if edies is None else f'{int(round(edies * 1e4))}bp 에서 OOS expR ≤ 0'}")
-    L.append("")
-    L.append("### [1] 슬리피지 스윕 (비용별 OOS 진입≥2022 기대값 R + 폴드 일관성)")
-    L.append("")
-    L.append("| cost | oos_n | oos_expR | raw k/6 | clean-OOS k/N |")
-    L.append("|---|---|---|---|---|")
-    for cs in rep["cost_sweep"]:
-        bp = int(round(cs["cost"] * 1e4))
-        L.append(f"| {bp}bp | {cs['oos_n']} | {cs['oos_expectancy_R']:+.3f} | "
-                 f"{cs['raw_fold_positive']}/{cs['raw_fold_valid']} | "
-                 f"{cs['clean_fold_positive']}/{cs['clean_fold_valid']} |")
-    L.append("")
-    fb = rep["folds"]
-    L.append("### [2] 폴드 재현성 (R2 — raw k/6 과 clean-OOS k/N 둘 다)")
-    L.append("")
-    L.append("| TEST 창 | n | expR | 양수? | 구분 |")
-    L.append("|---|---|---|---|---|")
-    for row in fb["rows"]:
-        tag = "INSIDE-TRAIN" if row["inside_train"] else "clean OOS"
-        L.append(f"| {row['test_window']} | {row['n']} | {row['expectancy_R']:+.3f} | "
-                 f"{'●' if row['positive'] else '○'} | {tag} |")
-    L.append("")
-    L.append(f"- **raw {fb['raw_positive']}/{fb['raw_valid']}  |  "
-             f"clean-OOS {fb['clean_oos_positive']}/{fb['clean_oos_valid']}** "
-             f"(inside-train {fb['inside_train_windows']} 제외 — 6클린폴드 주장 금지, R2)")
-    L.append("")
-    d = rep["distribution"]
-    fr = rep["fragility"]
-    tr = fr["tail_removal"]
-    L.append("### [3] 분포 모양 + 취약성 (기준비용, OOS 트레이드)")
-    L.append("")
-    L.append(f"- n={d['n']}  기대값R={d['expectancy_R']:+.3f}  승률={d['win_rate']:.0%}  "
-             f"손익비={d['payoff']:.2f}  왜도={d['skew']:+.2f}  왼꼬리비중={d['left_tail_share']:.0%}")
-    L.append(f"- monster top5={fr['monster_share_top5']:.0%}  top20={fr['monster_share_top20']:.0%}  "
-             f"최장연패={fr['max_loss_streak']}  중앙값R={fr['median_trade']:+.3f}")
-    L.append(f"- 꼬리제거(상위20): 기대값 {tr['expectancy_full']:+.3f} → {tr['expectancy_ex']:+.3f} "
-             f"({'생존' if tr['expectancy_ex'] > 0 else '붕괴'})")
-    L.append("")
-    u = rep["untouched"]
-    L.append(f"### [4] 미접촉 최종창 (R1 held-out) [{u['lo']}~{u['hi']}) — 폴드와 별개")
-    L.append("")
-    L.append(f"- n={u['n']}  기대값R={u['expectancy_R']:+.3f}  "
-             f"승률={u['dist']['win_rate']:.0%}  왜도={u['dist']['skew']:+.2f}")
-    L.append("")
-    gr = rep["gate_report"]
-    ci = gr["expectancy_ci"]
-    fc = gr["fold_consistency"]
-    L.append("### [5] gate_report 배포신호 (REPORTER)")
-    L.append("")
-    L.append(f"- OOS n={gr['n']}  기대값R={gr['expectancy_R']:+.3f}  "
-             f"95%CI=[{ci[0]:+.3f}, {ci[1]:+.3f}]")
-    L.append(f"- 폴드 {fc['n_positive']}/{fc['n_folds']} 양수  monster={gr['monster_share']:.0%}  "
-             f"최장연패={gr['max_loss_streak']}")
-    L.append("")
+    # --- 게이트 결과 (공통 렌더) ---
+    L.extend(render_gate_core(rep))
+    L.extend(render_dist_fragility(rep))
+    L.extend(render_untouched(rep))
+    L.extend(render_gate_report(rep))
 
-    # --- 음성대조 ---
-    L.append("## vs 랜덤 음성대조 (R1 — 게이트 자체 위양성률 보정)")
-    L.append("")
-    L.append("같은 유니버스/타이밍의 marginal 을 흉내낸 무작위 진입↔수익 페어링을 "
-             "동일 게이트에 태운 것. 무작위가 이 바를 실제 셋업만큼 자주 넘으면 바가 느슨.")
-    L.append("")
-    L.append(f"- 무작위 raw ≥5/6 폴드 도달: **{ctrl['raw_ge5_frac']:.1%}** of draws")
-    L.append(f"- 무작위 clean-OOS 전폴드(≥{ctrl['clean_fold_valid_median']}/"
-             f"{ctrl['clean_fold_valid_median']}) 양수: **{ctrl['clean_all_positive_frac']:.1%}** of draws")
-    L.append(f"- 무작위 OOS 기대값R: 평균 {ctrl['oos_expectancy_R_mean']:+.3f}  "
-             f"p95 {ctrl['oos_expectancy_R_p95']:+.3f}")
-    L.append(f"- **실제 Minervini clean-OOS = {fb['clean_oos_positive']}/{fb['clean_oos_valid']}, "
-             f"OOS expR = {gr['expectancy_R']:+.3f}** — 위 무작위 분포 대비 어디에 서 있나(사람 판단).")
-    L.append("")
+    # --- 음성대조 (공통 렌더, 서론·라벨만 전략별) ---
+    L.extend(render_control(
+        rep, ctrl,
+        intro=("같은 유니버스/타이밍의 marginal 을 흉내낸 무작위 진입↔수익 페어링을 "
+               "동일 게이트에 태운 것. 무작위가 이 바를 실제 셋업만큼 자주 넘으면 바가 느슨."),
+        actual_label="Minervini"))
 
     # --- 레짐 ---
     L.append("## 레짐 정직성 (플랜 Step 1 — 건당 기대값 레짐별)")
@@ -456,7 +365,7 @@ def run() -> None:
         fill_dates, rets, PRE_STOP, n_per_draw=len(rets), n_draws=200, seed=7)
 
     # 레짐 정직성.
-    regime = _regime_split(fill_dates, rets, rep["primary_cost"], PRE_STOP)
+    regime = regime_split(fill_dates, rets, rep["primary_cost"], PRE_STOP)
 
     # 탐색적 민감도(2차).
     sens = _sensitivity(entries, p)

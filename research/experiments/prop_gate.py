@@ -35,19 +35,12 @@ import numpy as np
 from kr_quant.diagnostics.fragility import fragility_report, monster_share
 from kr_quant.diagnostics.gate_report import gate_report
 from kr_quant.diagnostics.r_distribution import dist_shape, r_multiples
-from kr_quant.validation.walkforward import FOLDS, entry_mask, slice_by_entry
+from kr_quant.validation.walkforward import FOLDS, _expectancy, entry_mask, slice_by_entry
 
 COSTS = (0.0046, 0.008, 0.010, 0.015)   # 왕복비용 스윕: 46 / 80 / 100 / 150 bp
 TRAIN_HI = "2022-01-01"                  # no-lookahead 경계 (진입 < 이 날짜 = TRAIN)
 UNTOUCHED_LO = "2025-07-01"              # R1 held-out 최종창 하한 (탐색 중 미접촉)
 UNTOUCHED_HI = "2026-07-01"              # R1 held-out 최종창 상한
-
-
-def _expectancy(R: np.ndarray) -> float:
-    """유한 R 의 건당 기대값(=평균). 비면 NaN. 표본 분포의 헤드라인 숫자."""
-    R = np.asarray(R, float)
-    R = R[np.isfinite(R)]
-    return float(R.mean()) if len(R) else float("nan")
 
 
 def _fold_rows(entry: np.ndarray, R: np.ndarray, folds, train_hi: str) -> list[dict]:
@@ -58,7 +51,7 @@ def _fold_rows(entry: np.ndarray, R: np.ndarray, folds, train_hi: str) -> list[d
     """
     rows: list[dict] = []
     for f in folds:
-        tl, _th, sl, sh = f
+        sl, sh = f.test_lo, f.test_hi
         r = slice_by_entry(R, entry, sl, sh)
         r = r[np.isfinite(r)]
         rows.append({

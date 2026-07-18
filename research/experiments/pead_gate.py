@@ -25,6 +25,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from prop_swing_common import load_env_db  # noqa: E402 — sys.path 부트스트랩 뒤
+
 from kr_quant.validation.walkforward import FOLDS  # noqa: E402
 from research.experiments.pead_refinement import (  # noqa: E402
     BASELINE,
@@ -70,7 +72,8 @@ def fold_reproducibility(ent, exc):
     print("\n=== 관문 1: 폴드-재현성 (개별트레이드, contrarian과 동일 테스트창) ===")
     print(f"  {'테스트창':>12} {'n':>5} {'평균초과':>9} {'t':>7} {'승률':>5} {'양수?':>5}")
     k = valid = 0
-    for _tl, _th, lo, hi in FOLDS:
+    for f in FOLDS:
+        lo, hi = f.test_lo, f.test_hi
         m = (ent >= lo) & (ent < hi)
         r = exc[m]
         if len(r) < 5:
@@ -101,10 +104,7 @@ def distribution(exc):
 
 
 def main() -> int:
-    if not os.environ.get("KR_QUANT_DB") and os.path.exists(".env"):
-        for line in open(".env"):
-            if line.startswith("KR_QUANT_DB"):
-                os.environ["KR_QUANT_DB"] = line.split("=", 1)[1].strip().strip('"').strip("'")
+    load_env_db()
     print("=== 데이터 로드 (TimescaleDB, 분할조정) ===")
     prices, yoy = load_data()
     ctx = _context(prices, yoy)

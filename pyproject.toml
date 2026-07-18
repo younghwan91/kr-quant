@@ -5,11 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "kr-quant"
 version = "0.1.0"
-description = "코스피·코스닥 수급·시세·실적 기반 전략/피처 분석 라이브러리 (데이터 수집은 kr-quant-airflow)"
+description = "코스피·코스닥 알파 리서치 라이브러리 — 개별 트레이드 분포·walk-forward·음성대조를 강제하는 검증 가드레일과 정직한 부정 결과 (데이터 수집은 kr-quant-airflow)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-keywords = ["kiwoom", "키움", "quant", "퀀트", "supply-demand", "수급", "kospi", "kosdaq"]
+keywords = [
+    "quant", "퀀트", "alpha-research", "backtesting", "walk-forward",
+    "overfitting", "pead", "supply-demand", "수급", "kospi", "kosdaq", "kiwoom", "키움",
+]
 authors = [{ name = "Younghwan Chae", email = "chyohw97@gmail.com" }]
 dependencies = [
     "pandas>=2.0",
@@ -40,3 +43,6 @@ packages = ["src/kr_quant"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# repo 루트를 sys.path에 추가 → bare `pytest`도 research/ 모듈을 찾음(CI가 `python -m pytest`
+# 없이도 통과). numba/optuna는 옵셔널이라 미설치 환경에선 해당 테스트가 importorskip으로 스킵됨.
+pythonpath = ["."]

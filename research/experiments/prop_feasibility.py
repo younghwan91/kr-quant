@@ -40,6 +40,8 @@ import os
 import numpy as np
 import pandas as pd
 
+from prop_swing_common import dedup_gap, load_env_db, weekly_count
+
 from kr_quant.engine.panels import panel_pivot
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
 from kr_quant.storage import connect, db_default
@@ -60,23 +62,13 @@ PEAD_TOP_N = 3
 OUT_DIR = "research/logs/prop_feasibility"
 
 
-def _load_env_db() -> None:
-    """Export KR_QUANT_DB from .env if the shell hasn't (mirrors contrarian_retail)."""
-    if os.environ.get("KR_QUANT_DB") or not os.path.exists(".env"):
-        return
-    for line in open(".env"):
-        if line.startswith("KR_QUANT_DB"):
-            os.environ["KR_QUANT_DB"] = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
-
-
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load split-adjusted OHLC + trade_value and earnings from TimescaleDB.
 
     Returns ``(prices, earnings)`` where ``prices`` is long code/date/open/high/
     low/close/trade_value and ``earnings`` carries the canonical ``yoy`` column.
     """
-    _load_env_db()
+    load_env_db()
     con = connect(db_default())
     prices = pd.read_sql_query(
         f"SELECT code, date, open, high, low, close, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — trusted constant
@@ -127,24 +119,6 @@ def _time_panels(prices: pd.DataFrame) -> dict:
         "hi252": hi252, "prior_hi50": prior_hi50, "rsi": rsi,
         "dates": list(close.index),
     }
-
-
-def _dedup_entries(entries: list[tuple[str, str]], date_pos: dict[str, int]) -> list[tuple[str, str]]:
-    """Enforce a MIN_GAP trading-day gap between same-code entries.
-
-    ``entries`` = list of (date, code). One stock cannot re-enter while a
-    hypothetical MIN_GAP-day position is still open → approximates independent
-    swing trades. Keeps the earliest, then the next entry ≥MIN_GAP days later.
-    """
-    kept: list[tuple[str, str]] = []
-    last_pos: dict[str, int] = {}
-    for d, c in sorted(entries):                      # chronological
-        p = date_pos[d]
-        if c in last_pos and p - last_pos[c] < MIN_GAP:
-            continue
-        kept.append((d, c))
-        last_pos[c] = p
-    return kept
 
 
 def _entries_from_mask(mask: pd.DataFrame, adv: pd.DataFrame, floor: float) -> list[tuple[str, str]]:
@@ -231,15 +205,6 @@ def _count_window(entries: list[tuple[str, str]], lo: str, hi: str) -> int:
     return sum(1 for d, _ in entries if lo <= d < hi)
 
 
-def _weekly_counts(entries: list[tuple[str, str]]) -> pd.Series:
-    if not entries:
-        return pd.Series(dtype=int)
-    s = pd.to_datetime([d for d, _ in entries])
-    # ISO year-week bucket
-    wk = pd.Series(1, index=s).groupby([s.isocalendar().year, s.isocalendar().week]).sum()
-    return wk
-
-
 def analyze(name: str, entries: list[tuple[str, str]]) -> dict:
     """Fold/untouched/weekly breakdown + measurability verdict for one family."""
     per_fold = []
@@ -247,7 +212,7 @@ def analyze(name: str, entries: list[tuple[str, str]]) -> dict:
         n = _count_window(entries, f.test_lo, f.test_hi)
         per_fold.append({"fold": f, "n": n, "clean_oos": _fold_is_clean_oos(f)})
     untouched_n = _count_window(entries, UNTOUCHED_LO, UNTOUCHED_HI)
-    wk = _weekly_counts(entries)
+    wk = weekly_count(entries)
     clean = [r for r in per_fold if r["clean_oos"]]
     clean_ns = [r["n"] for r in clean]
     # HUMAN-READ measurability: rule of thumb ≥30 entries per clean-OOS fold.
@@ -371,9 +336,9 @@ def run() -> None:
     universe_med = int(elig_counts[elig_counts > 0].median())
 
     families = {
-        "breakout": _dedup_entries(breakout_entries(p), date_pos),
-        "pullback": _dedup_entries(pullback_entries(p), date_pos),
-        "pead_top3": _dedup_entries(pead_entries(prices, earnings, p), date_pos),
+        "breakout": dedup_gap(breakout_entries(p), date_pos, MIN_GAP),
+        "pullback": dedup_gap(pullback_entries(p), date_pos, MIN_GAP),
+        "pead_top3": dedup_gap(pead_entries(prices, earnings, p), date_pos, MIN_GAP),
     }
     results = [analyze(name, ent) for name, ent in families.items()]
 

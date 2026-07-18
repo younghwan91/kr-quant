@@ -4,6 +4,8 @@
 
 코스피·코스닥 종목의 투자자별 수급·시세·실적 데이터를 바탕으로 **PEAD, 매집(accumulation) 스크리닝, SEPA/minervini, 멀티-알파 결합** 등 전략/피처 분석을 수행하는 퀀트 리서치 라이브러리입니다. 현재까지 검증된 핵심 알파는 **PEAD**(실적 서프라이즈 드리프트)이며, 미너비니 추세추종과 결합한 멀티-알파 북이 분할조정·비용 반영 후에도 인덱스를 파레토 지배합니다 — 자세한 리서치 결론은 [research/MULTI_ALPHA.md](research/MULTI_ALPHA.md) 참고.
 
+무엇보다 이 레포는 **정직한 알파 리서치 방법론**을 지향합니다. 개별 트레이드를 하나의 표본으로 보는 분포 관점, walk-forward 재현성, 랜덤 진입 음성대조, 손 안 댄 최종 구간, 비용 스트레스, 취약성 진단을 하나의 게이트로 강제하고 — 통과 못 한 전략은 **정직한 부정**으로 기록합니다. 규칙은 [docs/GUARDRAILS.md](docs/GUARDRAILS.md)에 코드로 강제되어 있고, 기각된 전략들의 부검 기록은 그 자체로 "가짜 알파에 속지 않는 법"의 교보재입니다([research/logs/](research/logs/)).
+
 **데이터 수집은 이 레포에 없습니다.** 수집 로직(DART/키움/KRX/네이버 콜렉터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 이전되어 그쪽에서 자체 보유합니다 — 분석 세션에서 실수로 수집기를 실행해 DB 정합성이 깨지는 사고를 막고, 수집 로직을 오픈소스로 공유하기 위함입니다. 이 레포는 TimescaleDB(또는 로컬 SQLite)를 **읽기 전용**으로 사용해 전략을 검증합니다(`kr_quant/storage.py`의 `connect()`/`market_cap_asof()` 등).
 
 ---
@@ -47,6 +49,20 @@ PEAD 단독으로는 유니버스 대비 **+8%p/년, t 2.16~2.97**(2016–2026)�
 - **수급 신호 리서치** (`kq-supply-wave`, `kq-multi-signal`, `kq-ensemble-signal`, `kq-graph-flow`) — EWMA/랭크 기반 수급 신호, 다채널 결합, 릿지 앙상블, 그래프 확산 실험
 - **시각화** — 종목별 종가 + 누적 순매수 차트 생성 (헤드리스 환경 지원, 한글 폰트)
 
+## 리서치 방법론 & 가드레일
+
+이 레포의 진짜 차별점은 특정 전략이 아니라 **스스로를 속이지 않는 검증 규율**입니다. 백테스트는 거의 언제나 예쁜 곡선을 그립니다. 다만 그 아름다움의 대부분은 과거에 맞춰 깎아낸 과최적일 뿐입니다. 그래서 모든 후보 알파는 예외 없이 같은 게이트를 통과해야 합니다.
+
+- **개별 트레이드 = 표본** — 평균·복리 자본곡선이 아니라 개별 트레이드의 R-멀티플 분포로 본다 (`kr_quant.diagnostics.r_distribution`).
+- **walk-forward 재현성** — 여러 시기에서 반복되는가. TRAIN(진입<2022) 학습, 손 안 댄 최종 구간 별도 확인 (`kr_quant.validation.walkforward`).
+- **랜덤 음성대조** — 신호를 랜덤으로 망가뜨린 널을 이기는가. 폴드 수만 보면 순수 노이즈도 절반은 통과한다 (`prop_gate.random_entry_control`).
+- **비용 스트레스·취약성** — 현실 비용 2배에도 사는가, 상위 몇 건을 빼도 사는가 (`kr_quant.diagnostics.fragility`).
+- **리포터, 판정기 아님** — 게이트는 숫자만 내고 배포 판단은 사람이 한다. 하드코딩된 합격선은 그 자체가 과최적이다 (`kr_quant.diagnostics.gate_report`).
+
+정석 개념(Deflated Sharpe·PBO·Harvey-Liu t-haircut·purged/embargo CV)과 완전한 규칙집은 **[docs/GUARDRAILS.md](docs/GUARDRAILS.md)** 에 있으며, `scripts/check_guardrails.py`가 CI에서 경계 위반·판정기화를 차단합니다.
+
+**정직한 부정 기록** — 여러 그럴듯한 전략이 이 게이트에서 죽었습니다. 개미 투매 역발상, 미너비니식 돌파, 눌림목 반등, 실적 서프라이즈 집중 스윙 — 전부 개별 트레이드 관점에서 재현되지 않았고, 그 부검은 [research/logs/](research/logs/)에 근거 숫자와 함께 남아 있습니다. 살아남은 진짜 엣지(PEAD)는 소수 대박이 아니라 넓게 분산된 기관형 알파입니다.
+
 ## 아키텍처
 
 ```
@@ -63,8 +79,16 @@ kr_quant/
 │   └── multi_signal.py        # 다채널 수급 신호 결합
 ├── models/               # graph_flow.py(그래프 확산), ensemble_signal.py(릿지 앙상블)
 ├── features/             # 피처 엔지니어링 (fundamentals, rs_rating, vcp, short_flow, sector_flow 등)
+├── engine/               # 백테스트 엔진 (cross-sectional·event-driven sim, 패널, 메트릭, recipe)
+├── validation/           # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
+├── diagnostics/          # R-멀티플 분포·취약성·gate_report(리포터, 판정 아님)
 └── viz/                  # 시각화
     └── supply_demand_chart.py
+
+research/                 # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
+├── signals/              # 신호 정의 (contrarian_retail, operator_flow/minervini 등)
+├── experiments/          # 실험 러너 — prop_gate 게이트 하버스로 심사
+└── logs/                 # VERDICT·SUMMARY (정직한 부정 기록)
 ```
 
 설계 원칙: **모듈러 모놀리식** — 라이브러리(`kiwoom-client`)는 순수 API 클라이언트로 분리하고, 전략·피처·시각화는 이 레포의 내부 모듈로 둡니다. 데이터 수집(`collectors/`)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)에 있습니다. 새 전략은 `strategies/`에 모듈을 추가하면 됩니다.

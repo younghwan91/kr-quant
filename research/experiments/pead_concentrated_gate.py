@@ -48,6 +48,15 @@ import numpy as np
 from pead_gate import extract_trades as diversified_extract
 from pead_refinement import BASELINE, START_INDEX, _context, load_data
 from prop_gate import prop_gate, random_entry_control
+from prop_swing_common import (
+    gate_sim,
+    load_env_db,
+    render_control,
+    render_dist_fragility,
+    render_gate_core,
+    render_gate_report,
+    render_untouched,
+)
 
 from kr_quant.diagnostics.fragility import monster_share
 from kr_quant.diagnostics.r_distribution import dist_shape
@@ -77,16 +86,6 @@ REBALANCE_STEP = BASELINE["step"]           # 20 — pead BASELINE 과 동일 �
 ADV_FLOOR = BASELINE["adv_floor"]           # 20000 (~20B KRW) — 동일 유니버스
 TRAIN_HI = "2022-01-01"                      # no-lookahead 경계(진입<이 날짜 = TRAIN)
 OUT_DIR = "research/logs/pead_concentrated"
-
-
-def _load_env_db() -> None:
-    """.env 의 KR_QUANT_DB 를 환경에 실어줌(다른 러너와 동일 관용)."""
-    if os.environ.get("KR_QUANT_DB") or not os.path.exists(".env"):
-        return
-    for line in open(".env"):
-        if line.startswith("KR_QUANT_DB"):
-            os.environ["KR_QUANT_DB"] = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
 
 
 def _rebalance_ts(nD: int, step: int, hold: int) -> list[int]:
@@ -209,9 +208,7 @@ def _sensitivity(ctx: dict, floor: float) -> list[dict]:
         ent, ret, _ = extract_concentrated(
             ctx, top_n=tn, hold=h, stop=s, step=REBALANCE_STEP,
             adv_floor=ADV_FLOOR, surprise_floor=floor)
-        rep = prop_gate(ent, ret, s, label=f"sens_{tn}_{h}_{s}", verbose=False)
-        cs0 = rep["cost_sweep"][0]
-        fb = rep["folds"]
+        rep, cs0, fb, _ = gate_sim(ent, ret, s, f"sens_{tn}_{h}_{s}")
         rows.append({
             "top_n": tn, "hold": h, "stop": s, "n": rep["n_total"],
             "oos_expR": cs0["oos_expectancy_R"],
@@ -276,80 +273,23 @@ def _fmt_verdict(rep, ctrl, div, sens, floor, meta) -> str:
     L.append("---")
     L.append("")
 
-    # --- 게이트 결과 ---
-    L.append("## 게이트 결과 (prop_gate, 사전등록 config)")
-    L.append("")
-    L.append(f"- **총 트레이드 n = {rep['n_total']}**, 손절폭 stop = {rep['stop']:.0%}, "
-             f"기준비용 {int(round(rep['primary_cost'] * 1e4))}bp")
-    edies = rep["cost_edge_dies"]
-    L.append(f"- **비용 스윕 — 엣지 사망 비용:** "
-             f"{'전 구간 생존' if edies is None else f'{int(round(edies * 1e4))}bp 에서 OOS expR ≤ 0'}")
-    L.append("")
-    L.append("### [1] 슬리피지 스윕 (비용별 OOS 진입≥2022 기대값 R + 폴드 일관성)")
-    L.append("")
-    L.append("| cost | oos_n | oos_expR | raw k/6 | clean-OOS k/N |")
-    L.append("|---|---|---|---|---|")
-    for cs in rep["cost_sweep"]:
-        bp = int(round(cs["cost"] * 1e4))
-        L.append(f"| {bp}bp | {cs['oos_n']} | {cs['oos_expectancy_R']:+.3f} | "
-                 f"{cs['raw_fold_positive']}/{cs['raw_fold_valid']} | "
-                 f"{cs['clean_fold_positive']}/{cs['clean_fold_valid']} |")
-    L.append("")
-    L.append("### [2] 폴드 재현성 (R2 — raw k/6 과 clean-OOS k/N 둘 다)")
-    L.append("")
-    L.append("| TEST 창 | n | expR | 양수? | 구분 |")
-    L.append("|---|---|---|---|---|")
-    for row in fb["rows"]:
-        tag = "INSIDE-TRAIN" if row["inside_train"] else "clean OOS"
-        L.append(f"| {row['test_window']} | {row['n']} | {row['expectancy_R']:+.3f} | "
-                 f"{'●' if row['positive'] else '○'} | {tag} |")
-    L.append("")
-    L.append(f"- **raw {fb['raw_positive']}/{fb['raw_valid']}  |  "
-             f"clean-OOS {fb['clean_oos_positive']}/{fb['clean_oos_valid']}** "
-             f"(inside-train {fb['inside_train_windows']} 제외 — 6클린폴드 주장 금지, R2)")
-    L.append("")
+    # --- 게이트 결과 (공통 렌더) ---
+    L.extend(render_gate_core(rep))
+    L.extend(render_dist_fragility(rep))
+    L.extend(render_untouched(
+        rep, extra_note="  (Step -1: 미접촉창은 12 distinct 일에 36건 — 이 창 하나로 확정 판단 금물)"))
+    L.extend(render_gate_report(rep, ci_width=True))
+
+    # --- 음성대조 (공통 렌더, 서론·라벨만 전략별) ---
+    L.extend(render_control(
+        rep, ctrl,
+        intro=("같은 유니버스/타이밍의 marginal 을 흉내낸 무작위 진입↔수익 페어링을 동일 게이트에 "
+               "태운 것. 무작위가 이 바를 실제 셋업만큼 자주 넘으면 바가 느슨(thin 표본에선 특히 중요)."),
+        actual_label="PEAD집중"))
+
+    # 아래 분산형 대조 표가 참조하는 집중형 분포·취약성 조각.
     d = rep["distribution"]
     fr = rep["fragility"]
-    tr = fr["tail_removal"]
-    L.append("### [3] 분포 모양 + 취약성 (기준비용, OOS 트레이드)")
-    L.append("")
-    L.append(f"- n={d['n']}  기대값R={d['expectancy_R']:+.3f}  승률={d['win_rate']:.0%}  "
-             f"손익비={d['payoff']:.2f}  왜도={d['skew']:+.2f}  왼꼬리비중={d['left_tail_share']:.0%}")
-    L.append(f"- monster top5={fr['monster_share_top5']:.0%}  top20={fr['monster_share_top20']:.0%}  "
-             f"최장연패={fr['max_loss_streak']}  중앙값R={fr['median_trade']:+.3f}")
-    L.append(f"- 꼬리제거(상위20): 기대값 {tr['expectancy_full']:+.3f} → {tr['expectancy_ex']:+.3f} "
-             f"({'생존' if tr['expectancy_ex'] > 0 else '붕괴'})")
-    L.append("")
-    u = rep["untouched"]
-    L.append(f"### [4] 미접촉 최종창 (R1 held-out) [{u['lo']}~{u['hi']}) — 폴드와 별개")
-    L.append("")
-    L.append(f"- n={u['n']}  기대값R={u['expectancy_R']:+.3f}  "
-             f"승률={u['dist']['win_rate']:.0%}  왜도={u['dist']['skew']:+.2f}")
-    L.append("  (Step -1: 미접촉창은 12 distinct 일에 36건 — 이 창 하나로 확정 판단 금물)")
-    L.append("")
-    L.append("### [5] gate_report 배포신호 (REPORTER)")
-    L.append("")
-    fc = gr["fold_consistency"]
-    L.append(f"- OOS n={gr['n']}  기대값R={gr['expectancy_R']:+.3f}  "
-             f"95%CI=[{ci[0]:+.3f}, {ci[1]:+.3f}]  (**CI 폭 {ci[1] - ci[0]:.3f} R** — thin 표본)")
-    L.append(f"- 폴드 {fc['n_positive']}/{fc['n_folds']} 양수  monster={gr['monster_share']:.0%}  "
-             f"최장연패={gr['max_loss_streak']}")
-    L.append("")
-
-    # --- 음성대조 ---
-    L.append("## vs 랜덤 음성대조 (R1 — 게이트 자체 위양성률 보정)")
-    L.append("")
-    L.append("같은 유니버스/타이밍의 marginal 을 흉내낸 무작위 진입↔수익 페어링을 동일 게이트에 "
-             "태운 것. 무작위가 이 바를 실제 셋업만큼 자주 넘으면 바가 느슨(thin 표본에선 특히 중요).")
-    L.append("")
-    L.append(f"- 무작위 raw ≥5/6 폴드 도달: **{ctrl['raw_ge5_frac']:.1%}** of draws")
-    L.append(f"- 무작위 clean-OOS 전폴드(≥{ctrl['clean_fold_valid_median']}/"
-             f"{ctrl['clean_fold_valid_median']}) 양수: **{ctrl['clean_all_positive_frac']:.1%}** of draws")
-    L.append(f"- 무작위 OOS 기대값R: 평균 {ctrl['oos_expectancy_R_mean']:+.3f}  "
-             f"p95 {ctrl['oos_expectancy_R_p95']:+.3f}")
-    L.append(f"- **실제 PEAD집중 clean-OOS = {fb['clean_oos_positive']}/{fb['clean_oos_valid']}, "
-             f"OOS expR = {gr['expectancy_R']:+.3f}** — 위 무작위 분포 대비 어디에 서 있나(사람 판단).")
-    L.append("")
 
     # --- 분산형 대조 ---
     L.append("## vs pead_gate.py 분산형 베이스라인 (집중이 분포 모양을 무엇으로 바꿨나)")
@@ -405,7 +345,7 @@ def _fmt_verdict(rep, ctrl, div, sens, floor, meta) -> str:
 
 
 def run() -> None:
-    _load_env_db()
+    load_env_db()
     print("=== 데이터 로드 (TimescaleDB, 분할조정) ===")
     prices, yoy = load_data()
     ctx = _context(prices, yoy)

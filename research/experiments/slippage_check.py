@@ -57,7 +57,8 @@ def _rsummary(R: np.ndarray) -> dict:
 def _base_fold_consistency(entry: np.ndarray, R: np.ndarray) -> tuple[int, int]:
     """고정 PARAMS를 6폴드 각 TEST에서 재최적화 없이 평가 → (기대값R>0 폴드, 유효폴드)."""
     pos = valid = 0
-    for _tl, _th, sl, sh in FOLDS:
+    for f in FOLDS:
+        sl, sh = f.test_lo, f.test_hi
         te = (entry >= sl) & (entry < sh) & np.isfinite(R)
         if te.sum() < 1:
             continue
@@ -133,7 +134,8 @@ def main() -> int:
     # === 폴드별 상세 — 집계 양수가 한 레짐(2025~26) 아티팩트인지 폭로 ===
     print("\n=== 폴드별 base expR (재최적화 없음) — 46/100/150bp, IS=진입<2022 ===")
     print(f"  {'TEST창':>16} {'n':>5} {'46bp':>8} {'100bp':>8} {'150bp':>8}  구분")
-    for tl, _th, sl, sh in FOLDS:
+    for f in FOLDS:
+        sl, sh = f.test_lo, f.test_hi
         te = (entry >= sl) & (entry < sh) & np.isfinite(ret0)
         vals = [((ret0[te] - c) / STOP).mean() if te.sum() else float("nan")
                 for c in (0.0046, 0.010, 0.015)]
@@ -150,7 +152,7 @@ def main() -> int:
               f"{s['expR']:>+9.3f} {f'{spos}/{sval}':>8} {s['monster']:>8.0%}")
 
     # 엣지가 죽는 비용: OOS expR ≤ 0 이 되는 첫 비용, 또는 폴드일관이 과반 이하로
-    def _dies_at(rows, exp_key, k_key, n_key):
+    def _dies_at(rows, exp_key):
         for bp, b, bpos, bval, s, spos, sval in rows:
             summ = (b, bpos, bval) if exp_key == "base" else (s, spos, sval)
             st, pos, val = summ
@@ -158,8 +160,8 @@ def main() -> int:
                 return bp
         return None
 
-    base_die = _dies_at(verdict_rows, "base", None, None)
-    sel_die = _dies_at(verdict_rows, "sel", None, None)
+    base_die = _dies_at(verdict_rows, "base")
+    sel_die = _dies_at(verdict_rows, "sel")
     print("\n  판독: expR>0 이고 폴드일관 k>유효/2 를 둘 다 만족하는 최대 비용까지 엣지 생존.")
     print(f"    base  → {'전 구간(≤150bp) 생존' if base_die is None else f'~{base_die}bp에서 사망'}")
     print(f"    선별  → {'전 구간(≤150bp) 생존' if sel_die is None else f'~{sel_die}bp에서 사망'}")
