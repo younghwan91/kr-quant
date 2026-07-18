@@ -61,10 +61,12 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
     db = pd.read_sql(
         f"SELECT code,date,open,high,low,close,volume,trade_value FROM daily_bars "
         f"WHERE date > (SELECT MAX(date) FROM daily_bars) - INTERVAL '{lookback} days'", con)
-    sd["date"] = sd["date"].astype(str); db["date"] = db["date"].astype(str)
+    sd["date"] = sd["date"].astype(str)
+    db["date"] = db["date"].astype(str)
     df = db.merge(sd, on=["code", "date"], how="inner").sort_values(["code", "date"])
     dates = sorted(df["date"].unique())
-    asof = dates[-1]; ti = len(dates) - 1
+    asof = dates[-1]
+    ti = len(dates) - 1
     if ti < 252:
         raise ValueError("need >=252 trading days of history")
 
@@ -75,8 +77,10 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         c = sub["close"].to_numpy(float)
         if not np.isfinite(c[ti]):
             continue
-        vol = sub["volume"].to_numpy(float); tval = sub["trade_value"].to_numpy(float)
-        high = sub["high"].to_numpy(float); low = sub["low"].to_numpy(float)
+        vol = sub["volume"].to_numpy(float)
+        tval = sub["trade_value"].to_numpy(float)
+        high = sub["high"].to_numpy(float)
+        low = sub["low"].to_numpy(float)
         op = sub["open"].to_numpy(float)
         # 기업행동(분할) 백조정 — MA/추세템플릿이 최근 window 내 분할에 깨지지 않도록
         c, high, low, op = _backadjust(c, high, low, op)
@@ -86,9 +90,11 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
             liq_above50.append(1.0 if c[ti] > ma50 else 0.0)
         if not np.isfinite(adv) or adv < adv_floor:  # 100억 주도주만 진입후보
             continue
-        ma150 = np.nanmean(c[ti - 149:ti + 1]); ma200 = np.nanmean(c[ti - 199:ti + 1])
+        ma150 = np.nanmean(c[ti - 149:ti + 1])
+        ma200 = np.nanmean(c[ti - 199:ti + 1])
         ma200_prev = np.nanmean(c[ti - 220:ti - 20])
-        hh252 = np.nanmax(high[ti - 251:ti + 1]); ll252 = np.nanmin(low[ti - 251:ti + 1])
+        hh252 = np.nanmax(high[ti - 251:ti + 1])
+        ll252 = np.nanmin(low[ti - 251:ti + 1])
         # 추세템플릿
         tt = (c[ti] > ma50 > ma150 > ma200 and ma200 > ma200_prev
               and c[ti] >= 1.25 * ll252 and c[ti] >= 0.75 * hh252)
@@ -97,7 +103,8 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         # 돌파 + 거래량 수축
         prior_high = np.nanmax(high[ti - 20:ti])
         breakout = np.isfinite(prior_high) and c[ti] > prior_high
-        vol20 = np.nansum(vol[ti - 20:ti]); vol60 = np.nansum(vol[ti - 60:ti])
+        vol20 = np.nansum(vol[ti - 20:ti])
+        vol60 = np.nansum(vol[ti - 60:ti])
         vprior = (vol60 - vol20) / 40.0
         vc = (vol20 / 20.0) / vprior if vprior > 0 else np.nan
         if not (breakout and np.isfinite(vc) and vc < 1.0):
@@ -105,7 +112,8 @@ def scan(con, *, adv_floor=10000.0, top_frac=0.70, lookback=450):
         # 시리얼 갭퍼 배제 (GOAL 루프48-49): 최근 120일 내 -10% 이상 갭다운 이력이 있으면 제외.
         # 잡주(배제군 평균 -0.84%)를 걸러 포트폴리오 CAGR/Sharpe 개선(+18.1%→+20.9%/0.63→0.69).
         # 파국적 갭 꼬리(-68%)는 못 막음(그건 분산 사이징의 몫) — 잡주 제거 효과.
-        prev_c = c[ti - 120:ti]; day_o = op[ti - 119:ti + 1]
+        prev_c = c[ti - 120:ti]
+        day_o = op[ti - 119:ti + 1]
         with np.errstate(invalid="ignore", divide="ignore"):
             gaps = day_o / prev_c - 1.0
         if np.any(np.isfinite(gaps) & (gaps <= -0.10)):

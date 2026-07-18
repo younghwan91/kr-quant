@@ -654,6 +654,10 @@ try:
         max_tr = nC * (nD // 5 + 1)
         rets = np.empty(max_tr)
         edays = np.empty(max_tr, np.int64)
+        emom = np.empty(max_tr)       # 진입 모멘텀 강도(PR)
+        edump = np.empty(max_tr)      # 개미 투매 강도(-RI, 클수록 개미가 많이 던짐)
+        ebars = np.empty(max_tr, np.int64)
+        ereason = np.empty(max_tr, np.int64)  # 0 time,1 stop,2 trail,3 target
         nt = 0
         prbuf = np.empty(nC)
         ribuf = np.empty(nC)
@@ -689,6 +693,7 @@ try:
                 entry = C[i, t]
                 cap_t = t + hold if t + hold < nD - 1 else nD - 1
                 ex_t = cap_t
+                reason = 0
                 peak = entry
                 uu = t + 1
                 while uu <= cap_t:
@@ -697,22 +702,29 @@ try:
                         rr = cu / entry - 1.0
                         if rr <= -stop:
                             ex_t = uu
+                            reason = 1
                             break
                         if cu > peak:
                             peak = cu
                         if trail > 0 and cu > entry and cu <= peak * (1.0 - trail):
                             ex_t = uu
+                            reason = 2
                             break
                         if target > 0 and rr >= target:
                             ex_t = uu
+                            reason = 3
                             break
                     uu += 1
                 if nt < max_tr:
                     rets[nt] = (C[i, ex_t] / entry - 1.0) - cost_rt
                     edays[nt] = t
+                    emom[nt] = PR[i, t]
+                    edump[nt] = -RI[i, t]
+                    ebars[nt] = ex_t - t
+                    ereason[nt] = reason
                     nt += 1
                 busy[i] = ex_t
-        return rets[:nt], edays[:nt]
+        return rets[:nt], edays[:nt], emom[:nt], edump[:nt], ebars[:nt], ereason[:nt]
 
     _HAS_NUMBA = True
 except ImportError:  # pragma: no cover
@@ -737,10 +749,40 @@ def simulate_fast(prices, flow, *, window=5, lag=1, hold=20, stop=0.10, target=0
         if _cache is not None:
             _cache[key] = (C, ADV, RI, PR, dates)
     rets, edays = _sim_core(C, ADV, RI, PR, start_index, adv_floor, top_mom, ext_q,
-                            stop, target, trail, hold, cost_roundtrip)
+                            stop, target, trail, hold, cost_roundtrip)[:2]
     di = np.array([str(d) for d in dates])
     entry_dates = di[edays] if len(edays) else np.array([], dtype=object)
     return np.asarray(rets), entry_dates
+
+
+def simulate_detailed(prices, flow, *, window=8, lag=1, hold=60, stop=0.10, target=0.0,
+                      trail=0.20, top_mom=0.8, ext_q=0.85, adv_floor=20000.0, adv_window=20,
+                      start_index=130, cost_roundtrip=0.0046, _cache=None):
+    """분포 분석용 상세 시뮬 → 트레이드별 (수익·진입일·모멘텀강도·투매강도·보유일·청산사유).
+
+    ret: 비용후 수익, mom: 진입 5일수익(모멘텀 강도), dump: 개미 투매 강도(-ri),
+    bars: 보유일, reason: 0 time/1 stop/2 trail/3 target. 확신 사이징·꼬리 예측 분석에 사용.
+    """
+    key = (window, lag, adv_window)
+    if _cache is not None and key in _cache:
+        C, ADV, RI, PR, dates = _cache[key]
+    else:
+        C, V, RI, PR, dates = _signal_panels(prices, flow, window, lag)
+        ADV = _adv_panel(V, adv_window)
+        if _cache is not None:
+            _cache[key] = (C, ADV, RI, PR, dates)
+    rets, edays, emom, edump, ebars, ereason = _sim_core(
+        C, ADV, RI, PR, start_index, adv_floor, top_mom, ext_q,
+        stop, target, trail, hold, cost_roundtrip)
+    di = np.array([str(d) for d in dates])
+    return {
+        "ret": np.asarray(rets),
+        "entry": di[edays] if len(edays) else np.array([], dtype=object),
+        "mom": np.asarray(emom),
+        "dump": np.asarray(edump),
+        "bars": np.asarray(ebars),
+        "reason": np.asarray(ereason),
+    }
 
 
 def fast_stats(rets: np.ndarray, entry_dates: np.ndarray, *, date_lo=None, date_hi=None) -> dict:

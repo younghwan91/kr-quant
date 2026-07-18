@@ -1,0 +1,205 @@
+"""Walk-forward validation — folds, no-lookahead slicing, fold-consistency.
+
+Signal-agnostic extraction from ``research/bo_validate.py`` (FOLDS, _wf_oos,
+run_walkforward) and ``research/selective_walkforward.py`` (_fold_slices, _rdist,
+fold-consistency). Everything here takes GENERIC inputs: returns/entry-date arrays
+and a ``simulate(params) -> (returns, entry_dates)`` callable. No research imports.
+
+Two design rules encode the "no-lookahead is sacred" principle:
+
+1. **Folds are a frozen default, not a per-experiment knob.** ``FOLDS`` is produced
+   once by ``rolling_folds()`` and shared. Handing each experiment a mutable fold
+   config invites fold-shopping — silently widening/shifting windows until the OOS
+   number looks good, which is a lookahead violation. Regenerate with different
+   arguments only for a *documented* reason, never per run.
+2. **TRAIN-only fit, OOS-only eval.** ``walk_forward`` fits on ``[train_lo, train_hi)``
+   via a caller-supplied ``fit`` callable and evaluates on ``[test_lo, test_hi)``.
+   Each fold's ``train_hi <= test_lo``, so the fit never sees its own test window.
+   Default TRAIN boundary: entry < 2022-01-01.
+"""
+
+from __future__ import annotations
+
+from typing import Callable, NamedTuple
+
+import numpy as np
+
+Simulate = Callable[[dict], "tuple[np.ndarray, np.ndarray]"]
+
+
+class Fold(NamedTuple):
+    """하나의 walk-forward fold. TRAIN[lo,hi)에서 학습, TEST[lo,hi)에서 평가.
+
+    NamedTuple이라 평범한 4-튜플과 == 비교된다(기존 FOLDS 튜플과 호환)."""
+
+    train_lo: str
+    train_hi: str
+    test_lo: str
+    test_hi: str
+
+
+def rolling_folds(
+    *,
+    first_test_year: int = 2020,
+    last_test_year: int = 2025,
+    train_years: int = 3,
+    test_years: int = 1,
+    final_test_hi: str | None = "2027-01-01",
+) -> "tuple[Fold, ...]":
+    """롤링 fold 생성기: train ``train_years``년 → test ``test_years``년, test 연도 이동.
+
+    기본 인자는 기존 연구 스크립트의 frozen 6-fold와 정확히 일치한다(회귀 고정).
+    마지막 fold는 잔여(부분 연도) 데이터를 모두 담도록 test 상한을 ``final_test_hi``로
+    연장한다 — 마지막 test 연도의 이후 데이터가 dangling partial fold로 새지 않게."""
+    folds = []
+    for y in range(first_test_year, last_test_year + 1):
+        folds.append(
+            Fold(f"{y - train_years}-01-01", f"{y}-01-01",
+                 f"{y}-01-01", f"{y + test_years}-01-01")
+        )
+    if final_test_hi is not None and folds:
+        f = folds[-1]
+        folds[-1] = Fold(f.train_lo, f.train_hi, f.test_lo, final_test_hi)
+    return tuple(folds)
+
+
+# frozen 기본 fold 세트(fold-shopping 방지). 실험마다 새로 만들지 말 것.
+FOLDS: "tuple[Fold, ...]" = rolling_folds()
+
+
+def _expectancy(rets: np.ndarray) -> float:
+    """유한수익의 건당 기대값(=평균). 비어있으면 NaN. 기본 fold 통계."""
+    r = rets[np.isfinite(rets)] if len(rets) else rets
+    return float(r.mean()) if len(r) else float("nan")
+
+
+def entry_mask(edates: np.ndarray, lo=None, hi=None) -> np.ndarray:
+    """[lo, hi) 진입일 마스크. lo/hi는 ISO 날짜 문자열(사전식 비교 = 시간 비교)."""
+    m = np.ones(len(edates), bool)
+    if lo is not None:
+        m &= edates >= lo
+    if hi is not None:
+        m &= edates < hi
+    return m
+
+
+def slice_by_entry(rets: np.ndarray, edates: np.ndarray, lo=None, hi=None) -> np.ndarray:
+    """진입일이 [lo, hi)인 수익만 반환. no-lookahead fold 슬라이스의 기본 연산."""
+    return rets[entry_mask(edates, lo, hi)]
+
+
+def oos_fixed(
+    folds,
+    simulate: Simulate,
+    params: dict,
+    *,
+    stat: Callable[[np.ndarray], float] = _expectancy,
+) -> np.ndarray:
+    """고정 params를 각 fold의 TEST 구간에서 평가(재최적화 없음) → OOS 지표 배열.
+
+    ``research.bo_validate._wf_oos`` 일반화. params가 고정이라 sim은 한 번만 돌리고
+    fold별로 슬라이스한다(결과 동일, 재실행 절약)."""
+    rets, edates = simulate(params)
+    return np.array([stat(slice_by_entry(rets, edates, f.test_lo, f.test_hi))
+                     for f in folds])
+
+
+def walk_forward(
+    folds,
+    simulate: Simulate,
+    fit: Callable[[str, str], dict],
+    *,
+    stat: Callable[[np.ndarray], float] = _expectancy,
+) -> list:
+    """fold마다 TRAIN서 fit → TEST서 평가. no-lookahead 롤링 검증.
+
+    ``fit(train_lo, train_hi) -> params`` 는 TRAIN 경계만 본다(예: optimization.mini_bo
+    래퍼). optuna 의존은 fit 콜러블에 있어 이 모듈에는 없다. IS≫OOS 반복이면 과최적.
+
+    반환: fold별 ``{"fold", "params", "is", "oos"}`` 레코드 리스트."""
+    records = []
+    for f in folds:
+        params = fit(f.train_lo, f.train_hi)  # TRAIN-only fit
+        rets, edates = simulate(params)
+        records.append({
+            "fold": f,
+            "params": params,
+            "is": stat(slice_by_entry(rets, edates, f.train_lo, f.train_hi)),
+            "oos": stat(slice_by_entry(rets, edates, f.test_lo, f.test_hi)),
+        })
+    return records
+
+
+def rdist(R: np.ndarray) -> dict:
+    """개별표본 R-분포 요약: n·기대값R·≥3R빈도·손익비. R = 수익 ÷ 하드손절폭.
+
+    ``selective_walkforward._rdist`` 이식. 복리 없음 — 개별 트레이드가 표본."""
+    if len(R) == 0:
+        return dict(n=0, expR=float("nan"), tail3=float("nan"), payoff=float("nan"))
+    wins, losses = R[R > 0], R[R < 0]
+    payoff = (wins.mean() / -losses.mean()) if len(wins) and len(losses) else float("nan")
+    return dict(n=len(R), expR=float(R.mean()), tail3=float(np.mean(R >= 3.0)), payoff=payoff)
+
+
+def fold_slices(
+    entry: np.ndarray,
+    feature: np.ndarray,
+    value: np.ndarray,
+    fold,
+    frac: float,
+    *,
+    min_train: int = 40,
+):
+    """TRAIN에서 feature의 (1-frac) 분위 θ 학습 → TEST에 그대로 적용. look-ahead 없음.
+
+    진입시점에 이미 아는 θ로 "잡을지 말지"를 정하므로 배포 가능. ``value``는 보통
+    R-멀티플(수익÷손절폭). ``selective_walkforward._fold_slices`` 일반화(시그널 무관).
+
+    반환: ``(theta, base_values, selected_values)`` 또는 TRAIN 부족시 ``None``."""
+    fin = np.isfinite(feature) & np.isfinite(value)
+    tr = (entry >= fold.train_lo) & (entry < fold.train_hi) & fin
+    te = (entry >= fold.test_lo) & (entry < fold.test_hi) & fin
+    if tr.sum() < min_train:
+        return None
+    theta = np.quantile(feature[tr], 1.0 - frac)  # TRAIN 분위 = 고정 임계값
+    base = value[te]
+    sel = value[te & (feature >= theta)]  # TEST에 θ 적용(진입시점 결정 가능)
+    return theta, base, sel
+
+
+def fold_consistency(
+    entry: np.ndarray,
+    feature: np.ndarray,
+    value: np.ndarray,
+    folds,
+    frac: float,
+    *,
+    min_train: int = 40,
+    min_sel: int = 15,
+) -> dict:
+    """여러 fold에서 "선별이 R-분포를 굽히나"를 재현성으로 판정(결정론 아님).
+
+    fold마다 base(전부) vs 선별(feature≥θ) R-분포를 비교. 굽힘 = 선별 기대값R >
+    베이스 기대값R. 유효폴드 중 몇 폴드에서 재현되나(부호검정 서술). 선별표본<min_sel
+    이면 폴드 무효(희소성 정직 처리).
+
+    반환: ``{"valid", "bent", "rows"}`` — rows는 fold별 상세 dict."""
+    valid = bent = 0
+    rows = []
+    for f in folds:
+        fs = fold_slices(entry, feature, value, f, frac, min_train=min_train)
+        if fs is None:
+            rows.append({"fold": f, "status": "train_short"})
+            continue
+        theta, base, sel = fs
+        if len(sel) < min_sel:
+            rows.append({"fold": f, "status": "sparse", "theta": float(theta),
+                         "base": rdist(base)})
+            continue
+        valid += 1
+        b, s = rdist(base), rdist(sel)
+        up = s["expR"] > b["expR"]
+        bent += int(up)
+        rows.append({"fold": f, "status": "ok", "theta": float(theta),
+                     "base": b, "sel": s, "bent": bool(up)})
+    return {"valid": valid, "bent": bent, "rows": rows}
