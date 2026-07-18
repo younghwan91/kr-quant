@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from research.contrarian_retail import (
+from research.signals.contrarian_retail import (
     _mdd,
     _spearman,
     build_behavior_signals,
@@ -217,7 +217,7 @@ def test_numba_fast_parity_exact_on_clean_data():
     NaN 경계에서 ~0.6% 연쇄차 — BO는 numba 엔진을 일관 사용하므로 무관.)
     """
     pytest.importorskip("numba")
-    from research.contrarian_retail import fast_stats, simulate_fast
+    from research.signals.contrarian_retail import fast_stats, simulate_fast
     rng = np.random.default_rng(11)
     dates = pd.bdate_range("2020-01-01", periods=260).strftime("%Y-%m-%d").tolist()
     codes = [f"C{i:02d}" for i in range(80)]
