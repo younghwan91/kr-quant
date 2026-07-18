@@ -24,5 +24,6 @@ dist/
 # oh-my-claudecode local session/tool state
 .omc/
 
-# BO 생성 산물(과최적 파라미터 — 커밋 안 함)
+# BO 생성 산물(과최적 파라미터 — 커밋 안 함). 중첩 경로 포함.
+research/**/bo_best_params.json
 research/bo_best_params.json
