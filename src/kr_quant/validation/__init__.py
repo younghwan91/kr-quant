@@ -35,14 +35,21 @@ from .sensitivity import (
     oos_sensitivity,
     sensitivity_table,
 )
+from .universe_hygiene import (
+    assert_point_in_time,
+    survivorship_report,
+)
 from .walkforward import (
     FOLDS,
     Fold,
+    FoldMask,
     entry_mask,
     fold_consistency,
     fold_slices,
     oos_fixed,
+    purge_embargo,
     rdist,
+    resolve_exit_dates,
     rolling_folds,
     slice_by_entry,
     walk_forward,
@@ -57,6 +64,10 @@ __all__ = [
     "slice_by_entry",
     "oos_fixed",
     "walk_forward",
+    # purge + embargo (AFML §7.4 — 인접-누출 차단, opt-in)
+    "FoldMask",
+    "resolve_exit_dates",
+    "purge_embargo",
     # fold-consistency (selective walk-forward)
     "rdist",
     "fold_slices",
@@ -64,6 +75,9 @@ __all__ = [
     # sensitivity sweeps
     "sensitivity_table",
     "oos_sensitivity",
+    # survivorship / PIT hygiene (reporter + strict smell gate)
+    "survivorship_report",
+    "assert_point_in_time",
     # robust Bayesian optimization
     "TRAIN_HI",
     "TRADE_FLOOR",

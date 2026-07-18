@@ -88,6 +88,93 @@ def slice_by_entry(rets: np.ndarray, edates: np.ndarray, lo=None, hi=None) -> np
     return rets[entry_mask(edates, lo, hi)]
 
 
+class FoldMask(NamedTuple):
+    """한 fold의 최종 TRAIN/TEST 소속 마스크(트레이드 배열에 대한 bool).
+
+    ``purge_embargo``의 반환형. ``rets[mask.train]`` / ``rets[mask.test]`` 로 슬라이스한다.
+    기본(purge/embargo 미적용) 시 각각 ``entry_mask(edates, train_lo, train_hi)`` /
+    ``entry_mask(edates, test_lo, test_hi)`` 와 정확히 동일하다(회귀 고정)."""
+
+    train: np.ndarray
+    test: np.ndarray
+
+
+def resolve_exit_dates(entry_dates, *, exit_dates=None, max_hold=None) -> np.ndarray:
+    """트레이드의 실현(청산)일을 ``datetime64[D]`` 로 정한다 — purge의 라벨 종료시점.
+
+    실현시점을 두 방식으로 받는다(둘 중 하나만):
+      - ``exit_dates``: 명시적 청산일 배열(우리 트레이드는 ``exit_date`` 컬럼을 가진다).
+      - ``max_hold``: 보유 상한 → 청산 ≈ 진입 + ``max_hold`` **달력일**. 트레이딩일 상한을
+        쓰는 호출자는 넉넉히(예: 주말 포함) 올린 값을 넣거나 명시적 ``exit_dates``를 쓴다.
+        (달력일 근사는 트레이딩일보다 짧게 잡힐 수 있으니 상향 근사로 보수적으로 쓰라.)
+
+    둘 다 없으면 청산=진입(보유 0 근사) → purge가 진입일 기준으로 퇴화(=미적용).
+    둘 다 주면 ``ValueError``."""
+    if exit_dates is not None and max_hold is not None:
+        raise ValueError("exit_dates 와 max_hold 는 동시 지정 불가 — 하나만.")
+    if exit_dates is not None:
+        return np.asarray(exit_dates, dtype="datetime64[D]")
+    entry = np.asarray(entry_dates, dtype="datetime64[D]")
+    if max_hold is not None:
+        if int(max_hold) < 0:
+            raise ValueError("max_hold 는 음수 불가.")
+        return entry + np.timedelta64(int(max_hold), "D")
+    return entry
+
+
+def purge_embargo(
+    entry_dates,
+    fold,
+    *,
+    exit_dates=None,
+    max_hold=None,
+    embargo_days: int = 0,
+) -> FoldMask:
+    """Purged K-fold + Embargo (López de Prado, *AFML* §7.4) — 보유기간 라벨 인접-누출 차단.
+
+    frozen fold는 ``train_hi == test_lo`` 로 인접한다. 경계 직전 진입해 며칠 보유한
+    스윙 트레이드는 진입일로는 TRAIN이지만 **실현은 TEST 창 안**이라 라벨이 겹친다
+    (§4 최우선 공백 #1). 이 함수가 그 겹치는 라벨을 TRAIN에서 걷어낸다.
+
+    우리 walk-forward는 TRAIN이 시간상 TEST **앞**에 온다(``train_hi <= test_lo``)이라
+    AFML을 이 기하에 맞춰 구현한다:
+
+      - **PURGE(라벨 겹침)**: 실현(청산)이 TEST 창으로 넘어가는 TRAIN 트레이드 제거 —
+        즉 ``exit_date >= test_lo`` 이면 (진입이 TRAIN이라도) TRAIN에서 뺀다. AFML의
+        "테스트창과 겹치는 라벨을 TRAIN에서 purge"를 진입-앞-테스트 기하로 특수화한 것.
+      - **EMBARGO(직렬상관 완충)**: TEST 시작(``test_lo``) 직전 ``embargo_days`` 달력일에
+        진입한 TRAIN 트레이드 제거 — 명시적 라벨 종료가 test_lo 전이어도 직렬상관으로
+        새는 경계-인접 표본을 버린다. AFML의 embargo(테스트셋 **뒤** 완충을 이후 TRAIN에서
+        purge)를 TRAIN-앞-TEST 기하의 대칭형(테스트셋 **앞** 완충)으로 옮긴 것.
+
+    embargo는 **TRAIN에서만** 제거하고 TEST 평가창은 절대 줄이지 않는다(OOS 지표 불변).
+
+    실현시점은 ``resolve_exit_dates`` 로 정한다 — 명시적 ``exit_dates`` 또는 ``max_hold``
+    (달력일) 중 하나. 둘 다 없으면 청산=진입 → PURGE는 no-op.
+
+    **기본값은 무개입**: ``exit_dates``/``max_hold`` 없고 ``embargo_days=0`` 이면 반환 마스크는
+    ``entry_mask`` 소속과 **정확히 동일**하다(회귀 고정). purge/embargo는 opt-in.
+
+    반환: ``FoldMask(train, test)`` — 트레이드 배열에 대한 bool 마스크."""
+    if int(embargo_days) < 0:
+        raise ValueError("embargo_days 는 음수 불가.")
+    train = entry_mask(entry_dates, fold.train_lo, fold.train_hi)
+    test = entry_mask(entry_dates, fold.test_lo, fold.test_hi)
+    test_lo = np.datetime64(fold.test_lo, "D")
+
+    # PURGE: 실현이 TEST 창으로 넘어가는(exit >= test_lo) TRAIN 트레이드 제거.
+    exits = resolve_exit_dates(entry_dates, exit_dates=exit_dates, max_hold=max_hold)
+    train = train & ~(exits >= test_lo)
+
+    # EMBARGO: [test_lo - embargo_days, test_lo) 진입 TRAIN 제거(테스트셋 앞 완충).
+    if int(embargo_days) > 0:
+        entry_dt = np.asarray(entry_dates, dtype="datetime64[D]")
+        embargo_lo = test_lo - np.timedelta64(int(embargo_days), "D")
+        train = train & ~(entry_dt >= embargo_lo)
+
+    return FoldMask(train, test)
+
+
 def oos_fixed(
     folds,
     simulate: Simulate,
