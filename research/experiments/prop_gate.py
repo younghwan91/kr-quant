@@ -99,6 +99,7 @@ def prop_gate(
     train_hi: str = TRAIN_HI,
     untouched_lo: str = UNTOUCHED_LO,
     untouched_hi: str = UNTOUCHED_HI,
+    n_trials: int | None = None,
     n_boot: int = 2000,
     seed: int = 0,
     verbose: bool = True,
@@ -119,6 +120,8 @@ def prop_gate(
         folds: 워크포워드 fold 세트(기본 frozen FOLDS). fold-shopping 금지.
         train_hi: no-lookahead 경계. 진입 < train_hi = TRAIN(=OOS 아님). R2 clean 판별에도 사용.
         untouched_lo/untouched_hi: R1 held-out 최종 확인창 [lo, hi).
+        n_trials: 이 알파에 시도한 config 수(옵션). 주어지면 gate_report 가 Deflated
+            Sharpe·t-haircut 로 선택편향을 깎아 보고한다(§11 다중검정 보정). None 이면 생략.
         n_boot, seed: gate_report 부트스트랩 파라미터.
         verbose: True 면 사람이 읽는 요약을 print(판정줄 없음). 음성대조는 False.
 
@@ -201,6 +204,7 @@ def prop_gate(
         entry=oos_entry_prim,
         monster_k=5,
         cost_curve=cost_curve,
+        n_trials=n_trials,
         n_boot=n_boot,
         seed=seed,
     )
@@ -281,6 +285,16 @@ def _print_summary(rep: dict) -> None:
     fc = gr["fold_consistency"]
     print(f"  폴드 {fc['n_positive']}/{fc['n_folds']} 양수  monster={gr['monster_share']:.0%}  "
           f"최장연패={gr['max_loss_streak']}")
+    df = gr.get("deflation")
+    if df is not None:
+        th = df["t_haircut"]
+        print(f"  [다중검정 보정 — 시도 config N={df['n_trials']}] (선택편향 깎기, 판정 아님)")
+        print(f"    건당 Sharpe={df['observed_sharpe']:+.3f}  "
+              f"E[maxSharpe|H0]={df['expected_max_sharpe_h0']:.3f}  "
+              f"deflated={df['deflated_sharpe']:+.3f}")
+        print(f"    P(Sharpe>0)={df['prob_sharpe_gt0']:.1%}  "
+              f"P(Sharpe>SR0)={df['prob_deflated_sharpe']:.1%}  "
+              f"t-haircut ×{th['haircut_multiple']:.2f} (문턱 t {th['base_hurdle_t']:.2f}→{th['adjusted_hurdle_t']:.2f})")
 
 
 def random_entry_control(

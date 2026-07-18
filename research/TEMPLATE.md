@@ -69,15 +69,38 @@ from kr_quant.diagnostics.gate_report import gate_report
   monster-share, 연패, 엣지가 죽는 비용). **PASS/FAIL을 emit하지 않는다** — 하드코딩된 임계값
   자체가 결정론적 과최적(Principle 1). 숫자를 읽고 사람이 판단.
 
-## 5단계 — go/no-go & 로그 (research/logs/<alpha>/)
+## 5단계 — 표준 심사 배터리 (research/experiments/*_gate.py)
+
+새 알파는 **반드시** 아래 배터리를 통과해야 한다. 이건 문화적 관례가 아니라 규약이다 —
+공용 하버스 [`experiments/prop_gate.py`](experiments/prop_gate.py)가 한 번에 다 낸다.
+새 게이트는 이 하버스를 재사용해 **동일 잣대**로 심사한다(자체 배터리 재발명 금지).
+
+- **사전등록 헤더** — VERDICT.md 맨 위에 결과 보기 전 config 1개·합격 바를 확정·커밋
+  (GUARDRAILS §6 템플릿). 깃 히스토리가 증인. 결과 본 뒤 수정 금지.
+- **건당 R-분포** — 자본곡선·복리 프레이밍이 아니라 `dist_shape(R)` + `fragility_report`.
+  각 트레이드가 표본(원칙 2).
+- **음성 대조 > 널** — 신호를 랜덤으로 망가뜨린 널(`random_entry_control`)을 같은 관문에
+  태워 실제가 자기 널을 명확히 이기는지 본다. **폴드 수 단독 신뢰 금지** — 순수 노이즈도
+  5/6을 46% 통과한다. 널 대조가 진짜 판별기다(§7 워크드 예제 미너비니 참고).
+- **비용 스윕 + 2배 스트레스** — 왕복비용·2배 비용에도 엣지가 사는지(`cost_edge_dies`).
+  특히 한국 급등주는 슬리피지가 모델치를 초과할 수 있다.
+- **손 안 댄 창** — 탐색에 한 번도 안 쓴 held-out 최종 구간에서도 양수인지(walk-forward와 별개).
+
+## 6단계 — go/no-go & 로그 (research/logs/<alpha>/)
 
 `gate_report`의 분포를 읽고 판단한다:
 - OOS 부트스트랩 하단 > 0 인가? 폴드 재현(≥과반)인가? monster-share가 낮은가?
-- 현실 비용까지 엣지가 사는가? — 아니면 배포하지 않는다.
+- 음성대조를 이겼는가? 비용 2배·손 안 댄 창에서도 사는가? — 아니면 배포하지 않는다.
 
 결과를 `research/logs/<alpha>/VERDICT.md`에 기록(가설·파라미터·판정·날짜·재현 커맨드).
 정직한 부정 결과도 산출물이다 — 예: [`logs/contrarian_retail/VERDICT.md`](logs/contrarian_retail/VERDICT.md)
 (엣지가 fold-재현되지 않아 NO-GO, sim 추출 취소).
+
+> **경계·판정 린트(CI 강제).** `scripts/check_guardrails.py`가 (a) src→research import,
+> (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL" 판정 문자열을 CI 에서 막는다.
+> 유니버스는 PIT·상장폐지 포함이어야 한다 — `kr_quant.validation.survivorship_report`
+> 로 생존편향 스멜을 리포트하고, 명백한 생존필터는 `assert_point_in_time`이 잡는다
+> (스멜테스트지 보증 아님 — 폐지수익 정합성은 별도).
 
 ## 참고 실험 (얇은 러너 예시)
 

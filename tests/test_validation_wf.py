@@ -17,6 +17,7 @@ from kr_quant.validation import (
     entry_mask,
     fold_slices,
     oos_fixed,
+    purge_embargo,
     rolling_folds,
     sensitivity_table,
     slice_by_entry,
@@ -122,6 +123,58 @@ def test_oos_fixed_evaluates_each_fold_test_window():
     assert len(arr) == len(FOLDS)
     # 각 fold TEST에 진입 1건 → 그 수익이 기대값(마지막 fold는 2025~2027, 2025건만)
     assert np.allclose(arr, [0.1, 0.2, -0.3, 0.4, -0.5, 0.6])
+
+
+def test_purge_removes_boundary_straddling_train_trade():
+    """경계를 걸친 트레이드(진입 TRAIN·실현 TEST)는 TRAIN에서 purge, TEST는 불변."""
+    fold = FOLDS[2]  # train 2019~2022, test 2022~2023 (train_hi == test_lo == 2022-01-01)
+    entry = np.array([
+        "2021-06-01",   # 0 TRAIN, 잘 앞선 실현 → 유지
+        "2021-12-20",   # 1 TRAIN 진입인데 실현이 TEST로 넘어감 → purge
+        "2022-06-01",   # 2 TEST
+    ], dtype=object)
+    # (a) 명시적 exit_dates
+    exit_dates = np.array(["2021-06-10", "2022-01-10", "2022-06-20"], dtype=object)
+    m = purge_embargo(entry, fold, exit_dates=exit_dates)
+    assert list(m.train) == [True, False, False]  # 0 유지·1 purge·2 는 TEST(TRAIN 아님)
+    assert list(m.test) == [False, False, True]  # TEST 창은 그대로
+    # (b) max_hold 로도 동일: 진입 2021-12-20 + 30달력일 = 2022-01-19 >= test_lo
+    m2 = purge_embargo(entry, fold, max_hold=30)
+    assert list(m2.train) == [True, False, False]
+    assert list(m2.test) == [False, False, True]
+    # 실현이 경계 못 넘으면(짧은 보유) purge 안 함
+    m3 = purge_embargo(entry, fold, max_hold=1)
+    assert list(m3.train) == [True, True, False]
+
+
+def test_embargo_drops_train_trades_in_pre_test_buffer():
+    """embargo_days>0 이면 test_lo 직전 완충구간 진입 TRAIN 제거(실현이 경계 전이어도)."""
+    fold = FOLDS[2]  # test_lo == 2022-01-01
+    entry = np.array([
+        "2021-06-01",   # 0 완충 밖 → 유지
+        "2021-12-20",   # 1 [2021-12-02, 2022-01-01) 완충 안 → 제거
+        "2022-06-01",   # 2 TEST(embargo는 TRAIN만 건드림)
+    ], dtype=object)
+    # 실현이 전부 경계 이전이라 purge 단독으론 아무것도 안 빠진다.
+    exit_dates = np.array(["2021-06-05", "2021-12-25", "2022-06-10"], dtype=object)
+    base = purge_embargo(entry, fold, exit_dates=exit_dates, embargo_days=0)
+    assert list(base.train) == [True, True, False]  # embargo 0 → 완충 없음
+    m = purge_embargo(entry, fold, exit_dates=exit_dates, embargo_days=30)
+    # embargo_lo = 2022-01-01 - 30d = 2021-12-02; 진입 2021-12-20 >= 그것 → 제거
+    assert list(m.train) == [True, False, False]
+    assert list(m.test) == [False, False, True]  # TEST 평가창 불변
+
+
+def test_purge_embargo_default_reproduces_entry_mask():
+    """기본(exit/max_hold 없음·embargo 0)은 entry_mask 소속을 정확히 재현(회귀 고정)."""
+    edates = np.array([
+        "2019-06-01", "2021-12-31", "2022-01-01", "2022-06-01", "2024-01-01",
+        "2025-06-01",
+    ], dtype=object)
+    for f in FOLDS:
+        m = purge_embargo(edates, f)
+        assert list(m.train) == list(entry_mask(edates, f.train_lo, f.train_hi))
+        assert list(m.test) == list(entry_mask(edates, f.test_lo, f.test_hi))
 
 
 def test_sensitivity_table_shape():
