@@ -1,173 +1,155 @@
 # kr-quant
 
+[![CI](https://github.com/younghwan91/kr-quant/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/kr-quant/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
-코스피·코스닥 종목의 투자자별 수급·시세·실적 데이터를 바탕으로 **PEAD, 매집(accumulation) 스크리닝, SEPA/minervini, 멀티-알파 결합** 등 전략/피처 분석을 수행하는 퀀트 리서치 라이브러리입니다. 현재까지 검증된 핵심 알파는 **PEAD**(실적 서프라이즈 드리프트)이며, 미너비니 추세추종과 결합한 멀티-알파 북이 분할조정·비용 반영 후에도 인덱스를 파레토 지배합니다 — 자세한 리서치 결론은 [research/MULTI_ALPHA.md](research/MULTI_ALPHA.md) 참고.
+**한국 주식(KOSPI·KOSDAQ)에 대한 반증 중심(falsification-first) 알파 리서치 프레임워크.**
 
-무엇보다 이 레포는 **정직한 알파 리서치 방법론**을 지향합니다. 개별 트레이드를 하나의 표본으로 보는 분포 관점, walk-forward 재현성, 랜덤 진입 음성대조, 손 안 댄 최종 구간, 비용 스트레스, 취약성 진단을 하나의 게이트로 강제하고 — 통과 못 한 전략은 **정직한 부정**으로 기록합니다. 규칙은 [docs/GUARDRAILS.md](docs/GUARDRAILS.md)에 코드로 강제되어 있고, 기각된 전략들의 부검 기록은 그 자체로 "가짜 알파에 속지 않는 법"의 교보재입니다([research/logs/](research/logs/)).
+이 저장소의 목적은 "돈 버는 전략"의 나열이 아니라, **가설을 엄격히 기각하는 검증 절차**를 코드로 강제하는 데 있다. 백테스트는 거의 언제나 우상향 곡선을 만들어낸다. 문제는 그 대부분이 과거 표본에 맞춰 깎아낸 과최적(overfitting)이라는 점이다. 따라서 이 프로젝트는 확증(confirmation)이 아니라 **반증**을 1차 목표로 삼고, 반증에 살아남은 소수의 알파만을 "검증됨"으로 인정하며, 기각된 가설은 근거와 함께 **정직한 부정 결과(negative result)**로 공개한다.
 
-**데이터 수집은 이 레포에 없습니다.** 수집 로직(DART/키움/KRX/네이버 콜렉터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 이전되어 그쪽에서 자체 보유합니다 — 분석 세션에서 실수로 수집기를 실행해 DB 정합성이 깨지는 사고를 막고, 수집 로직을 오픈소스로 공유하기 위함입니다. 이 레포는 TimescaleDB(또는 로컬 SQLite)를 **읽기 전용**으로 사용해 전략을 검증합니다(`kr_quant/storage.py`의 `connect()`/`market_cap_asof()` 등).
+- **검증된 알파:** PEAD(실적 서프라이즈 후 드리프트)가 단독 robust한 유일한 수익원이며, 무상관 슬리브와 결합한 멀티-알파 북이 비용·분할조정 후 시총가중 인덱스를 파레토 지배한다(§3).
+- **기각된 알파:** 개미 투매 역발상, 미너비니식 돌파, 눌림목 평균회귀, 실적 서프라이즈 집중 스윙 — 개별 트레이드 관점에서 재현되지 않아 전부 기각(§4).
+- **방법론:** 개별 트레이드 분포·walk-forward 재현성·랜덤 음성대조·손 안 댄 최종 구간·비용 스트레스·취약성 진단을 하나의 게이트로 강제([`docs/GUARDRAILS.md`](docs/GUARDRAILS.md), §2).
 
----
-
-## 결과 미리보기
-
-**전 종목 스크리닝 → 매집 후보 랭킹**
-
-![매집 후보 상위 종목](docs/images/ranking.png)
-
-**신호 검증 — 매집 점수가 후속 수익률과 정렬되는가**
-
-형성구간(12거래일)에서 점수화한 후보를, 보유구간(이후 거래일)의 실제 수익률로 평가했습니다. 점수 상위 분위(Q1)일수록 평균 수익률이 높고 하위(Q5)는 음(–)으로, 점수가 단조적으로 수익률과 정렬됩니다.
-
-![매집 점수 vs 후속 수익률](docs/images/backtest.png)
-
-**종목 수급 차트 — 횡보 속 외국인·기관 누적 순매수**
-
-![종목별 투자자 수급](docs/images/candidate.png)
-
-> 위 그림은 2026-05-15~06-12 수집분(19거래일)으로 생성한 **in-sample 예시**입니다. 단일 짧은 윈도우라 롤링 아웃오브샘플·거래비용·생존편향을 통제한 정식 백테스트가 아니며, 스크리너가 신호를 담고 있음을 보이는 용도입니다. 재현은 [개발](#개발) 참고.
+> **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 분리되어 있다. 본 저장소는 TimescaleDB(또는 로컬 SQLite)를 **읽기 전용**으로 사용해 전략을 검증한다. 분석 세션에서 수집기를 오작동시켜 DB 정합성을 훼손하는 사고를 구조적으로 차단하기 위함이다.
 
 ---
 
-## 핵심 결과 요약 (배포형 확정: 멀티-알파 북)
+## 1. 연구 원칙
 
-서로 무상관인 세 수익원 — **PEAD**(실적 서프라이즈 롱숏), **미너비니**(추세추종 리더주), **인덱스**(시총가중 베타) — 를 결합한 북이 개별 슬리브보다 우수합니다.
+1. **확률론적 최적화, 결정론이 아니다.** 한 번의 백테스트 경로는 분포에서 뽑은 하나의 표본이다. 그 경로의 극값(파라미터 미니마)을 추구하는 것은 곧 표본 노이즈에 과최적하는 것이다. 판정은 효과가 여러 폴드·표본에서 같은 방향으로 재현되는지로 내린다.
+2. **분석 단위는 개별 트레이드다.** 평균이나 복리 자본곡선이 아니라 개별 트레이드의 R-멀티플 분포로 본다. 한 종목에서 발생한 복수의 매매는 각각 독립 표본이다.
+3. **취약성은 1급 지표다.** 양(+)의 기대값이 소수의 꼬리 사건에 의존한다면 통계적 신뢰는 낮다. 상위 k건 제거 생존·최장 연패·집중도를 함께 본다.
+4. **룩어헤드는 절대 금기다.** 지표는 t 시점까지의 정보로만 계산하고 진입은 t+1, 임계값은 TRAIN(진입일 < 2022-01-01)에서만 학습해 전진 적용한다.
+5. **게이트는 리포터이지 판정기가 아니다.** 검증 함수는 숫자만 산출하고 배포 결정은 사람이 내린다. 하드코딩된 합격선은 그 자체가 결정론적 과최적이다.
 
-| (분할조정·비용 반영, n=87~96개월) | CAGR | Sharpe | MaxDD |
+## 2. 검증 방법론 (Definition of Done)
+
+후보 알파는 페이퍼트레이딩으로 넘어가기 전에 동일한 게이트를 통과해야 한다. 게이트는 [`research/experiments/prop_gate.py`](research/experiments/prop_gate.py)에 하나의 하버스로 구현되어 있고, 규칙과 근거는 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md)에 정리되어 있다.
+
+| 관문 | 질문 | 라이브러리 |
+|---|---|---|
+| Walk-forward 재현성 | 여러 시기에서 반복되는가 (clean-OOS 폴드 부호) | `kr_quant.validation.walkforward` |
+| 랜덤 음성대조 | 신호를 파괴한 널(null)을 이기는가 | `prop_gate.random_entry_control` |
+| 손 안 댄 최종 구간 | 탐색에 한 번도 쓰지 않은 구간에서 사는가 | `prop_gate` (untouched window) |
+| 비용·슬리피지 | 현실 비용의 2배에도 사는가 | `prop_gate` (cost sweep) |
+| 취약성 | 상위 몇 건을 제거해도 사는가 | `kr_quant.diagnostics.fragility` |
+| 다중검정 보정 | 시도한 config 수를 반영한 Deflated Sharpe | `kr_quant.diagnostics.gate_report` |
+
+**음성대조의 중요성.** 폴드 성공 개수만으로 판정하면 순수 노이즈도 "6폴드 중 5폴드 양수"를 약 46% 확률로 통과한다. 따라서 진짜 판별 기준은 폴드 수가 아니라 "전략이 자기 자신의 랜덤 버전을 유의하게 이기는가"이다.
+
+정석 개념은 문헌을 따른다 — Deflated Sharpe Ratio 및 Probability of Backtest Overfitting(Bailey & López de Prado, 2014; Bailey et al., CSCV), 다중검정 t-haircut(Harvey & Liu, 2016), purged/embargo 교차검증(López de Prado, *Advances in Financial Machine Learning*, 2018). §7 참고.
+
+## 3. 검증된 결과 — 멀티-알파 북
+
+서로 상관이 낮은 세 수익원 — **PEAD**(실적 YoY 드리프트, 대형주 스태거드 롱온리 excess), **미너비니**(추세템플릿+VCP 돌파+breadth 레짐의 리더주), **인덱스**(시총가중 베타) — 를 고정 가중으로 결합한다. 월수익 상관은 IDX–PEAD −0.19, IDX–MNV −0.04, MNV–PEAD +0.05로, 롤링 24개월에서도 |상관| < 0.25로 안정적이다. 어느 슬리브도 단독으로 인덱스를 압도하지 못하지만(미너비니는 오히려 뒤진다), 무상관 결합의 분산 이득이 지속된다.
+
+| 분할조정·비용 반영, n≈87–96개월 | CAGR | Sharpe | MaxDD |
+|---|---:|---:|---:|
+| 시총가중 KOSPI100 프록시 (벤치마크) | +15.5% | 0.66 | −35% |
+| **멀티-알파 북 (IDX 50 / PEAD 25 / MNV 25)** | **+19.3%** | **1.06** | **−24%** |
+
+- **PEAD는 세 슬리브 중 유일하게 단독 robust**하다 — 유니버스 대비 초과수익 약 +8%p/년, t ≈ 2.16–2.97(2016–2026), 비용후 단독 Sharpe 0.65(t 2.37). 표본을 2016–2017로 확장해도 유지된다.
+- **과최적 경고(저자 명시).** in-sample 최대-Sharpe 가중(IDX25/PEAD65/MNV10, Sharpe 1.36)은 사용하지 않는다 — PEAD 과적합이다. 고정·단순 가중이 OOS에서 견고하다. LightGBM 강화판(북 Sharpe 1.37–1.57)도 표본을 확장하면 plain PEAD와 동급으로 수렴하므로 robust한 우위로 인정하지 않는다.
+- **개별 트레이드 관점의 한계.** PEAD의 높은 Sharpe는 개별 트레이드가 두꺼워서가 아니라 매 기간 다수 종목을 평균하는 **분산(diversification) 효과**에서 나온다. 개별 트레이드로 벗기면 건당 초과수익은 +0.46% 수준으로 얇다. 즉 PEAD는 집중형 트레이더 엣지가 아니라 **기관형 분산 알파**다([`research/experiments/pead_gate.py`](research/experiments/pead_gate.py)).
+
+전체 규칙·가중 근거·caveat은 [`research/logs/MULTI_ALPHA.md`](research/logs/MULTI_ALPHA.md).
+
+## 4. 기각된 결과 — 정직한 부정
+
+부정 결과는 실패가 아니라 정당한 과학적 산출이다. 아래 네 가설은 위 게이트에서 기각되었으며, 각 부검은 근거 숫자와 재현 스크립트와 함께 [`research/logs/`](research/logs/)에 있다.
+
+| 가설 | 유형 | 결정적 지표 | 기록 |
 |---|---|---|---|
-| 시총가중 KOSPI100 프록시(벤치) | +15.5% | 0.71 | −44% |
-| **멀티-알파 북 (IDX50 / PEAD25 / MNV25)** | **+19.3%** | **1.06** | **−24%** |
+| 개미 투매 역발상 | 볼록·급등주 스윙 | walk-forward 2/6 폴드; 상위 1%가 P&L의 84% | [logs](research/logs/) |
+| 미너비니식 돌파 | 추세추종 | OOS −0.029R; 랜덤 널(+0.078R)에 열위 | [VERDICT](research/logs/minervini_prop/VERDICT.md) |
+| 눌림목 평균회귀 | 고승률 가설 | OOS −0.334R; 승률 34%; 널(−0.267R)에 열위 | [VERDICT](research/logs/pullback_prop/VERDICT.md) |
+| 실적 서프라이즈 집중 | 이벤트 스윙 | OOS −0.208R; 집중+손절이 드리프트를 파괴 | [VERDICT](research/logs/pead_concentrated/VERDICT.md) |
 
-PEAD 단독으로는 유니버스 대비 **+8%p/년, t 2.16~2.97**(2016–2026)로 세 슬리브 중 유일하게 단독 robust. 전체 규칙·caveat은 [research/MULTI_ALPHA.md](research/MULTI_ALPHA.md) 참고.
+**해석.** 네 가설 모두 전 세계가 오래 차익거래해 온 가격 패턴이며, 유동 대형주에서 개별 트레이드 단위로 재현되는 롱온리 엣지를 남기지 않았다. 종합은 [`research/logs/prop_swing_search/SUMMARY.md`](research/logs/prop_swing_search/SUMMARY.md).
 
-## 핵심 기능
-
-- **PEAD** (`kq-pead`) — DART 실적 YoY 성장 랭킹 기반 롱숏/롱온리 드리프트 전략, 이 프로젝트의 유일한 단독 robust 알파
-- **매집 스크리너** (`kq-screen`) — *주가는 횡보하는데 외국인·기관이 순매수하고 개인이 순매도*하는 와이코프식 매집 패턴을 점수화·랭킹
-- **SEPA / minervini** (`kq-sepa`) — 추세템플릿 + RS + VCP 피벗 돌파 리더주 전략, 무상관 분산재로서 멀티-알파 북에 기여
-- **수급 신호 리서치** (`kq-supply-wave`, `kq-multi-signal`, `kq-ensemble-signal`, `kq-graph-flow`) — EWMA/랭크 기반 수급 신호, 다채널 결합, 릿지 앙상블, 그래프 확산 실험
-- **시각화** — 종목별 종가 + 누적 순매수 차트 생성 (헤드리스 환경 지원, 한글 폰트)
-
-## 리서치 방법론 & 가드레일
-
-이 레포의 진짜 차별점은 특정 전략이 아니라 **스스로를 속이지 않는 검증 규율**입니다. 백테스트는 거의 언제나 예쁜 곡선을 그립니다. 다만 그 아름다움의 대부분은 과거에 맞춰 깎아낸 과최적일 뿐입니다. 그래서 모든 후보 알파는 예외 없이 같은 게이트를 통과해야 합니다.
-
-- **개별 트레이드 = 표본** — 평균·복리 자본곡선이 아니라 개별 트레이드의 R-멀티플 분포로 본다 (`kr_quant.diagnostics.r_distribution`).
-- **walk-forward 재현성** — 여러 시기에서 반복되는가. TRAIN(진입<2022) 학습, 손 안 댄 최종 구간 별도 확인 (`kr_quant.validation.walkforward`).
-- **랜덤 음성대조** — 신호를 랜덤으로 망가뜨린 널을 이기는가. 폴드 수만 보면 순수 노이즈도 절반은 통과한다 (`prop_gate.random_entry_control`).
-- **비용 스트레스·취약성** — 현실 비용 2배에도 사는가, 상위 몇 건을 빼도 사는가 (`kr_quant.diagnostics.fragility`).
-- **리포터, 판정기 아님** — 게이트는 숫자만 내고 배포 판단은 사람이 한다. 하드코딩된 합격선은 그 자체가 과최적이다 (`kr_quant.diagnostics.gate_report`).
-
-정석 개념(Deflated Sharpe·PBO·Harvey-Liu t-haircut·purged/embargo CV)과 완전한 규칙집은 **[docs/GUARDRAILS.md](docs/GUARDRAILS.md)** 에 있으며, `scripts/check_guardrails.py`가 CI에서 경계 위반·판정기화를 차단합니다.
-
-**정직한 부정 기록** — 여러 그럴듯한 전략이 이 게이트에서 죽었습니다. 개미 투매 역발상, 미너비니식 돌파, 눌림목 반등, 실적 서프라이즈 집중 스윙 — 전부 개별 트레이드 관점에서 재현되지 않았고, 그 부검은 [research/logs/](research/logs/)에 근거 숫자와 함께 남아 있습니다. 살아남은 진짜 엣지(PEAD)는 소수 대박이 아니라 넓게 분산된 기관형 알파입니다.
-
-## 아키텍처
+## 5. 아키텍처
 
 ```
-kr_quant/
-├── storage.py           # 읽기 전용: connect()/market_cap_asof() — 쓰기는 kr-quant-airflow/collectors/storage.py
-├── price_adjust.py      # 백조정 로직 (kr-quant-airflow의 weekly_price_adjust DAG가 in-place로 실행)
-├── strategies/           # 전략/스크리너
-│   ├── pead.py                # PEAD — 핵심 알파
-│   ├── accumulation.py        # 매집 스크리너
-│   ├── backtest.py            # 매집 신호 검증
-│   ├── minervini_sepa.py      # SEPA 피벗 진입, minervini_exits.py / minervini_sizing.py
-│   ├── sepa_experiment.py     # SEPA 멀티암 비교 오케스트레이터, sepa_compare.py
-│   ├── supply_wave.py         # 수급 신호 Phase 1
-│   └── multi_signal.py        # 다채널 수급 신호 결합
-├── models/               # graph_flow.py(그래프 확산), ensemble_signal.py(릿지 앙상블)
-├── features/             # 피처 엔지니어링 (fundamentals, rs_rating, vcp, short_flow, sector_flow 등)
-├── engine/               # 백테스트 엔진 (cross-sectional·event-driven sim, 패널, 메트릭, recipe)
-├── validation/           # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
-├── diagnostics/          # R-멀티플 분포·취약성·gate_report(리포터, 판정 아님)
-└── viz/                  # 시각화
-    └── supply_demand_chart.py
+src/kr_quant/
+├── storage.py           # 읽기 전용 DB 접근 (connect / market_cap_asof)
+├── price_adjust.py      # 기업행동 백조정 (airflow DAG가 in-place 실행)
+├── engine/              # 백테스트 엔진: cross-sectional·event-driven sim, 패널, 메트릭, recipe
+├── validation/          # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
+├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)
+├── strategies/          # pead · accumulation · minervini_sepa · supply_wave · multi_signal
+├── models/              # graph_flow(그래프 확산) · ensemble_signal(릿지 앙상블)
+├── features/            # fundamentals · rs_rating · vcp · short_flow · sector_flow · universe
+└── viz/                 # 수급 시각화
 
-research/                 # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
-├── signals/              # 신호 정의 (contrarian_retail, operator_flow/minervini 등)
-├── experiments/          # 실험 러너 — prop_gate 게이트 하버스로 심사
-└── logs/                 # VERDICT·SUMMARY (정직한 부정 기록)
+research/                # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
+├── signals/             # 신호 정의 (contrarian_retail · operator_flow/minervini)
+├── experiments/         # 실험 러너 — prop_gate 게이트 하버스로 심사
+└── logs/                # VERDICT · SUMMARY (검증·부정 결과 기록)
 ```
 
-설계 원칙: **모듈러 모놀리식** — 라이브러리(`kiwoom-client`)는 순수 API 클라이언트로 분리하고, 전략·피처·시각화는 이 레포의 내부 모듈로 둡니다. 데이터 수집(`collectors/`)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)에 있습니다. 새 전략은 `strategies/`에 모듈을 추가하면 됩니다.
+설계 원칙: `src/kr_quant`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다(경계는 `scripts/check_guardrails.py`가 CI에서 강제). 새 알파는 `research/signals/`에 신호를 정의하고 `research/experiments/`에서 게이트로 심사한 뒤 `research/logs/`에 결과를 남긴다 — 표준 흐름은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
 
-## 설치
+## 6. 재현
 
 ```bash
 git clone https://github.com/younghwan91/kr-quant
 cd kr-quant
 uv venv && uv pip install -e ".[viz,dev]"
-cp .env.example .env          # KR_QUANT_DB에 TimescaleDB 접속정보 채우기 (아래 참고)
-export $(grep -v '^#' .env | xargs)   # 자동 로드 안 됨 — 셸에 직접 로드
+cp .env.example .env          # KR_QUANT_DB에 TimescaleDB 접속정보 (비우면 로컬 SQLite)
+
+uv run pytest                 # 네트워크 불요 — 검증·진단 라이브러리 회귀 테스트
+uv run ruff check .
+python scripts/check_guardrails.py   # 경계·리포터 규율 검사
 ```
 
-## 사용법
-
-데이터 수집은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)의 Airflow DAG가 담당합니다(`python -m collectors.X`). 이 레포는 읽기 전용이며, `KR_QUANT_DB` 환경변수(비우면 로컬 SQLite)로 접속 대상을 정합니다 — 아래는 이미 채워진 DB를 대상으로 한 분석 명령입니다.
+분석 CLI(모두 DB 읽기 전용):
 
 ```bash
-# PEAD 백테스트 (핵심 알파)
-kq-pead --earnings-csv earnings.csv --horizon 60
-
-# 매집 후보 스크리닝
-kq-screen --top 30
-kq-screen --max-range 0.10 --csv candidates.csv
-
-# 신호 검증 (형성구간 스크리닝 → 보유구간 수익률)
-kq-backtest --formation-days 12
-
-# SEPA/minervini 멀티암 비교
-kq-sepa
-
-# 수급 신호 리서치
-kq-supply-wave
-kq-multi-signal
-kq-ensemble-signal
-kq-graph-flow
-
-# 종목 수급 차트
-kq-chart --code 005930
+kq-pead --earnings-csv earnings.csv --horizon 60   # PEAD 백테스트 (핵심 알파)
+kq-sepa                                            # SEPA/minervini 멀티암 비교
+kq-screen --top 30                                 # 매집 스크리너 (§8)
+kq-chart --code 005930                             # 종목 수급 차트
 ```
 
-## 매집 스크리너 방법론
+## 7. 참고 문헌
 
-주가가 좁은 범위에서 횡보하는 동안 스마트머니(외국인·기관)가 조용히 물량을 모으는 구간은 이후 상방 돌파에 선행하는 경우가 많습니다(Wyckoff accumulation). 본 스크리너는 다음을 만족하는 종목을 후보로 선정해 점수화합니다.
+- Bailey, D. H., & López de Prado, M. (2014). *The Deflated Sharpe Ratio.* Journal of Portfolio Management.
+- Bailey, D. H., Borwein, J., López de Prado, M., & Zhu, Q. J. *The Probability of Backtest Overfitting* (CSCV).
+- Harvey, C. R., & Liu, Y. (2016). *…and the Cross-Section of Expected Returns.* Review of Financial Studies (다중검정 t-haircut).
+- López de Prado, M. (2018). *Advances in Financial Machine Learning* (purged K-fold + embargo).
 
-1. **횡보** — 기간 내 `(고가−저가)/평균종가 ≤ max_range` (기본 15%)
-2. **스마트머니 순매수** — 외국인 누적 순매수 > 0 **그리고** 기관 누적 순매수 > 0
-3. **개인 순매도** — (기본) 개인이 물량을 내주는 구도
+## 8. 부록 — 매집 스크리너
 
-**점수** = (외국인+기관 누적 순매수 ÷ 평균거래량) ÷ 변동범위 — 유동성 대비 매집 강도를 측정하고, 횡보가 좁을수록 가산합니다.
+주가가 좁은 범위에서 횡보하는 동안 외국인·기관이 순매수하고 개인이 순매도하는 와이코프식 매집 구간을 점수화하는 1차 스크리너다. 점수 = (외국인+기관 누적 순매수 ÷ 평균거래량) ÷ 변동범위. 이는 검증된 알파가 아니라 **탐색용 스크리너**이며, 아래 그림은 단일 짧은 윈도우(2026-05-15~06-12, 19거래일)에서 뽑은 **in-sample 예시**로 성과 주장이 아니다.
 
-> ⚠️ 매집 신호는 돌파를 보장하지 않습니다. 실전 활용 시 기관 세부주체(연기금·투신 vs 금융투자=프로그램), 거래량 추세, 펀더멘털을 함께 검토하세요. 본 툴은 1차 스크리닝 용도입니다.
+![매집 후보 상위 종목](docs/images/ranking.png)
+![매집 점수 vs 후속 수익률](docs/images/backtest.png)
 
-## 데이터 스키마
+> 매집 신호는 돌파를 보장하지 않는다. 실전 적용 시 기관 세부주체(연기금·투신 vs 프로그램), 거래량 추세, 펀더멘털을 함께 검토해야 하며, 롤링 아웃오브샘플·거래비용·생존편향을 통제한 정식 백테스트가 아니다. 재생성: `python scripts/make_figures.py`.
+
+## 9. 데이터 스키마 (읽기 전용)
 
 | 테이블 | 용도 |
 |---|---|
 | `stocks` | code, name, market, sector, kind |
-| `supply_demand` | 투자자별 수급 — foreign_/institution + 기관 세부 8종 (PK: code+date) |
-| `daily_bars` / `daily_bars_adjusted` | OHLCV, 분할조정본은 `price_adjust.py`가 생성 |
-| `earnings` | DART 실적 (avail_date 기준 룩어헤드 없음) — PEAD의 데이터 소스 |
+| `supply_demand` | 투자자별 수급 (foreign/institution + 기관 세부 8종, PK: code+date) |
+| `daily_bars` / `daily_bars_adjusted` | OHLCV; 분할조정본은 `price_adjust.py` 생성 |
+| `earnings` | DART 실적 (avail_date 기준 룩어헤드 없음) — PEAD 소스 |
 | `consensus` | 목표주가·투자의견·forward EPS 일별 축적 |
-| `shares_outstanding_history` | 시가총액 계산용 발행주식수 이력 |
-| `short_selling` / `credit_balance` / `sector_index` | 공매도, 신용잔고, 업종지수 |
-| `minervini_scan` / `minervini_rba` | 미너비니 스캐너 후보·회고성과 축적 |
+| `shares_outstanding_history` | 시가총액용 발행주식수 이력 |
+| `short_selling` / `credit_balance` / `sector_index` | 공매도·신용잔고·업종지수 |
 | `delisted_stocks` | 상장폐지 종목 (생존편향 보정용) |
 
-전체 정의는 `src/kr_quant/storage.py`의 `CREATE TABLE` 문 참고. 이 레포는 읽기 전용이며 테이블 소유·마이그레이션은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)가 담당합니다.
+테이블 소유·마이그레이션은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)가 담당한다.
 
-## 개발
+## 10. 범위와 한계
 
-```bash
-uv run pytest        # 네트워크 없이 통과 (storage/screener/backtest 로직)
-uv run ruff check .
-
-# README 커버 이미지 재생성 (DB 수집 후)
-python scripts/make_figures.py   # → docs/images/{ranking,backtest,candidate}.png
-```
+- **단일 시장·일봉 지평.** 결과는 한국 유동 대형·중형주와 일봉 데이터에 한정된다. 장중·틱·대체데이터는 다루지 않는다.
+- **용량(capacity).** 대형주 스태거드 롱온리 기준이며, 소형·급등주로 확장할 때의 슬리피지·용량은 별도 통제가 필요하다.
+- **생존편향.** `delisted_stocks`로 부분 보정하나, 진정한 상장폐지 수익(delisting return)의 완전성은 데이터 벤더에 의존한다(`universe_hygiene`는 스멜테스트이지 보증이 아니다).
+- **과거는 미래를 보장하지 않는다.** 모든 수치는 백테스트 결과다. 이 저장소의 목적은 수익 보장이 아니라 **자기기만을 줄이는 검증 규율의 공유**다.
 
 ## 라이선스
 
