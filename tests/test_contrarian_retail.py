@@ -210,6 +210,36 @@ def test_trade_stats_empty():
     assert trade_stats([])["n"] == 0
 
 
+def test_numba_fast_parity_exact_on_clean_data():
+    """numba simulate_fast == 순수파이썬 simulate_momentum_long (동점/NaN 없는 합성서 정확 일치).
+
+    통일된 _pctl 임계 덕에 clean 데이터에서 bit-parity. (실데이터는 2019 저유동성일의
+    NaN 경계에서 ~0.6% 연쇄차 — BO는 numba 엔진을 일관 사용하므로 무관.)
+    """
+    pytest.importorskip("numba")
+    from research.contrarian_retail import fast_stats, simulate_fast
+    rng = np.random.default_rng(11)
+    dates = pd.bdate_range("2020-01-01", periods=260).strftime("%Y-%m-%d").tolist()
+    codes = [f"C{i:02d}" for i in range(80)]
+    prows, frows = [], []
+    for ci, c in enumerate(codes):
+        price = 10000.0 + ci
+        for d in dates:
+            price *= (1 + rng.normal(0.0005, 0.02))
+            prows.append({"code": c, "date": d, "close": price * (1 + 1e-6 * ci), "trade_value": 1e9 + ci})
+            frows.append({"code": c, "date": d, "individual": rng.normal(0, 1000) + ci, "volume": 1e5})
+    prices, flow = pd.DataFrame(prows), pd.DataFrame(frows)
+    P = dict(window=5, hold=20, stop=0.10, target=0.0, trail=0.20, top_mom=0.8, ext_q=0.8,
+             adv_floor=0.0, start_index=30)
+    slow = simulate_momentum_long(prices, flow, retail_rule="dump", **P)
+    r, e = simulate_fast(prices, flow, **P)
+    sl = np.array([x["ret"] for x in slow])
+    assert len(sl) == len(r), (len(sl), len(r))
+    assert np.allclose(np.sort(sl), np.sort(r), atol=1e-9)
+    # fast_stats와 trade_stats 스키마 일치
+    assert fast_stats(r, e)["n"] == trade_stats(slow)["n"]
+
+
 def test_trailing_stop_lets_winner_run_then_exits():
     """트레일링 스탑: 상승 후 고점대비 trail% 반납 시 청산 — 수익권에서만 발동."""
     # 60종목: 대부분 강하게 상승 후 특정일 급락 → 트레일 청산 확인

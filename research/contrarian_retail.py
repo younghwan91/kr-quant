@@ -564,11 +564,12 @@ def simulate_momentum_long(prices, flow, *, window=5, lag=1, hold=20, stop=0.08,
         valid = (adv >= adv_floor) & np.isfinite(pr_t) & np.isfinite(ri_t) & np.isfinite(c_t) & (c_t > 0)
         if valid.sum() < 20:
             continue
-        cand = valid & (pr_t >= np.quantile(pr_t[valid], top_mom))
+        cand = valid & (pr_t >= _pctl(np.sort(pr_t[valid]), top_mom))
         if cand.sum() < 5:
             continue
         riw = ri_t[cand]
-        hi, lo = np.quantile(riw, ext_q), np.quantile(riw, 1 - ext_q)
+        rsrt = np.sort(riw)
+        hi, lo = _pctl(rsrt, ext_q), _pctl(rsrt, 1 - ext_q)
         if retail_rule == "all":
             entries = np.where(cand)[0]
         elif retail_rule == "ex_fomo":
@@ -605,6 +606,172 @@ def simulate_momentum_long(prices, flow, *, window=5, lag=1, hold=20, stop=0.08,
                            "ret": float(r), "reason": reason, "bars": ex_t - t})
             busy_until[idx] = ex_t
     return trades
+
+
+def _adv_panel(V: np.ndarray, adv_window: int) -> np.ndarray:
+    """거래대금 배열 → 20일 평균(ADV) 배열. t시점 값은 [t-window, t) 평균(룩어헤드 없음)."""
+    nC, nD = V.shape
+    adv = np.full((nC, nD), np.nan)
+    for t in range(adv_window, nD):
+        adv[:, t] = np.nanmean(V[:, t - adv_window:t], axis=1)
+    return adv
+
+
+def _pctl(sorted_a, q):
+    """정렬된 배열의 q분위 (np.quantile 기본 'linear' 보간과 동일 공식).
+
+    numba/순수파이썬 양쪽 경로가 **같은 함수**를 써야 임계값이 bit-identical → 트레이드
+    선택이 일치(np.quantile과 _pctl의 2e-16 차이가 임계 경계에서 종목을 뒤집어 busy상태로
+    연쇄되는 것을 방지). 아래 try에서 numba 존재 시 njit으로 감싼다.
+    """
+    n = len(sorted_a)
+    if n == 1:
+        return sorted_a[0]
+    pos = q * (n - 1)
+    lo = int(np.floor(pos))
+    hi = lo + 1
+    if hi >= n:
+        return sorted_a[n - 1]
+    frac = pos - lo
+    return sorted_a[lo] * (1.0 - frac) + sorted_a[hi] * frac
+
+
+try:
+    import numba
+
+    _pctl = numba.njit(cache=True)(_pctl)
+
+    @numba.njit(cache=True)
+    def _sim_core(C, ADV, RI, PR, start_index, adv_floor, top_mom, ext_q,
+                  stop, target, trail, hold, cost_rt):
+        """simulate_momentum_long(retail_rule='dump')의 njit 등가 — 트레이드 수익·진입일 반환.
+
+        진입: ADV통과 급등주(모멘텀 top_mom 분위↑) 중 개미강도 하위(1-ext_q 분위↓).
+        청산: 손절(−stop) > 트레일(고점−trail, 수익권) > 목표(+target) > 시간(hold). 재진입 금지.
+        """
+        nC, nD = C.shape
+        busy = np.full(nC, -1, np.int64)
+        max_tr = nC * (nD // 5 + 1)
+        rets = np.empty(max_tr)
+        edays = np.empty(max_tr, np.int64)
+        nt = 0
+        prbuf = np.empty(nC)
+        ribuf = np.empty(nC)
+        for t in range(start_index, nD - 1):
+            m = 0
+            for i in range(nC):
+                c = C[i, t]
+                if (ADV[i, t] >= adv_floor and PR[i, t] == PR[i, t]
+                        and RI[i, t] == RI[i, t] and c == c and c > 0):
+                    prbuf[m] = PR[i, t]
+                    m += 1
+            if m < 20:
+                continue
+            mom_thr = _pctl(np.sort(prbuf[:m]), top_mom)
+            w = 0
+            for i in range(nC):
+                c = C[i, t]
+                if (ADV[i, t] >= adv_floor and PR[i, t] == PR[i, t]
+                        and RI[i, t] == RI[i, t] and c == c and c > 0 and PR[i, t] >= mom_thr):
+                    ribuf[w] = RI[i, t]
+                    w += 1
+            if w < 10:
+                continue
+            lo = _pctl(np.sort(ribuf[:w]), 1.0 - ext_q)
+            for i in range(nC):
+                c = C[i, t]
+                if not (ADV[i, t] >= adv_floor and PR[i, t] == PR[i, t]
+                        and RI[i, t] == RI[i, t] and c == c and c > 0
+                        and PR[i, t] >= mom_thr and RI[i, t] <= lo):
+                    continue
+                if busy[i] > t:
+                    continue
+                entry = C[i, t]
+                cap_t = t + hold if t + hold < nD - 1 else nD - 1
+                ex_t = cap_t
+                peak = entry
+                uu = t + 1
+                while uu <= cap_t:
+                    cu = C[i, uu]
+                    if cu == cu and cu > 0:
+                        rr = cu / entry - 1.0
+                        if rr <= -stop:
+                            ex_t = uu
+                            break
+                        if cu > peak:
+                            peak = cu
+                        if trail > 0 and cu > entry and cu <= peak * (1.0 - trail):
+                            ex_t = uu
+                            break
+                        if target > 0 and rr >= target:
+                            ex_t = uu
+                            break
+                    uu += 1
+                if nt < max_tr:
+                    rets[nt] = (C[i, ex_t] / entry - 1.0) - cost_rt
+                    edays[nt] = t
+                    nt += 1
+                busy[i] = ex_t
+        return rets[:nt], edays[:nt]
+
+    _HAS_NUMBA = True
+except ImportError:  # pragma: no cover
+    _HAS_NUMBA = False
+
+
+def simulate_fast(prices, flow, *, window=5, lag=1, hold=20, stop=0.10, target=0.0,
+                  trail=0.20, top_mom=0.8, ext_q=0.8, adv_floor=20000.0, adv_window=20,
+                  start_index=130, cost_roundtrip=0.0046, _cache=None):
+    """numba 가속 dump 시뮬 → (트레이드 수익 배열, 진입일 문자열 배열).
+
+    _cache: {(window,lag,adv_window): (C, ADV, RI, PR, dates)} 딕셔너리를 넘기면 패널 빌드를
+    조합별 1회로 재사용(BO 수백 trial에서 필수). RI/PR은 (window,lag), ADV는 adv_window에
+    의존하므로 셋을 키로 잡아야 구조상수 스윕에서도 정확. None이면 매번 빌드.
+    """
+    key = (window, lag, adv_window)
+    if _cache is not None and key in _cache:
+        C, ADV, RI, PR, dates = _cache[key]
+    else:
+        C, V, RI, PR, dates = _signal_panels(prices, flow, window, lag)
+        ADV = _adv_panel(V, adv_window)
+        if _cache is not None:
+            _cache[key] = (C, ADV, RI, PR, dates)
+    rets, edays = _sim_core(C, ADV, RI, PR, start_index, adv_floor, top_mom, ext_q,
+                            stop, target, trail, hold, cost_roundtrip)
+    di = np.array([str(d) for d in dates])
+    entry_dates = di[edays] if len(edays) else np.array([], dtype=object)
+    return np.asarray(rets), entry_dates
+
+
+def fast_stats(rets: np.ndarray, entry_dates: np.ndarray, *, date_lo=None, date_hi=None) -> dict:
+    """simulate_fast 출력(수익배열)→트레이더 지표. NaN 안전(유한값만). trade_stats와 동일 스키마."""
+    r, ed = rets, entry_dates
+    if date_lo is not None or date_hi is not None:
+        mask = np.ones(len(r), bool)
+        if date_lo is not None:
+            mask &= ed >= date_lo
+        if date_hi is not None:
+            mask &= ed < date_hi
+        r, ed = r[mask], ed[mask]
+    yrs = 1
+    if len(ed):
+        yy = sorted(str(x)[:4] for x in ed)
+        yrs = max(int(yy[-1]) - int(yy[0]) + 1, 1)
+    r = r[np.isfinite(r)]
+    if len(r) < 1:
+        return {"n": 0}
+    wins, losses = r[r > 0], r[r < 0]
+    return {
+        "n": len(r),
+        "win_rate": float((r > 0).mean()),
+        "avg_win": float(wins.mean()) if len(wins) else 0.0,
+        "avg_loss": float(-losses.mean()) if len(losses) else 0.0,
+        "payoff": float(wins.mean() / -losses.mean()) if len(losses) and len(wins) else float("nan"),
+        "expectancy": float(r.mean()),
+        "expectancy_t": float(r.mean() / (r.std() / np.sqrt(len(r)))) if r.std() > 0 else float("nan"),
+        "trades_per_yr": len(r) / yrs,
+        "sum_ret": float(r.sum()),
+    }
 
 
 def trade_stats(trades: list, *, date_lo=None, date_hi=None) -> dict:
