@@ -171,7 +171,7 @@ python scripts/check_guardrails.py   # 경계·리포터 규율 검사
 | `stocks` | code, name, market, sector, kind |
 | `supply_demand` | 투자자별 수급 (foreign/institution + 기관 세부 8종, PK: code+date) |
 | `daily_bars` / `daily_bars_adjusted` | OHLCV; 분할조정본은 `price_adjust.py` 생성 |
-| `earnings` | DART 실적 (avail_date 기준 룩어헤드 없음) — PEAD 소스 |
+| `earnings` | DART 실적 (avail_date 기준 룩어헤드 없음) — PEAD 소스. PK는 `(code, period, knowledge_date)`로, 정정공시는 기존 행을 덮어쓰지 않고 새 버전으로 쌓인다 — 읽을 때 `knowledge_date <= t`로 그 시점에 알 수 있었던 값을 고른다 |
 | `consensus` | 목표주가·투자의견·forward EPS 일별 축적 |
 | `shares_outstanding_history` | 시가총액용 발행주식수 이력 |
 | `short_selling` / `credit_balance` / `sector_index` | 공매도·신용잔고·업종지수 |
