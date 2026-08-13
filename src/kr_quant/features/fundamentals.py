@@ -18,7 +18,6 @@ no DB connection, no network. Callers load the raw DART rows (see
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 # Filing lag in calendar days from period-end to public availability.
@@ -198,101 +197,3 @@ def combined_signal(
     annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
     ep = earnings_yield_panel(annual, market_cap)
     return blend_rank([yoy, ep], [1.0 - value_weight, value_weight], value_cols=["yoy", "ep"])
-
-
-def _yoy_vec(cur: pd.Series, prior: pd.Series) -> pd.Series:
-    """Vectorized YoY = (cur - prior) / |prior|; NaN where prior is 0/missing."""
-    p = prior.where(prior.notna() & (prior != 0))
-    return (cur - p) / p.abs()
-
-
-def _consec_accel(vals: "np.ndarray", i: int, steps: int) -> bool:
-    """True iff ``vals[i-steps..i]`` are all finite and strictly increasing —
-    ``steps`` consecutive quarter-on-quarter accelerations ending at quarter ``i``."""
-    if i < steps:
-        return False
-    tail = vals[i - steps:i + 1]
-    return bool(np.all(np.isfinite(tail)) and np.all(np.diff(tail) > 0))
-
-
-def code33_panel(
-    financials: pd.DataFrame,
-    trading_dates: list[str],
-    *,
-    accel_steps: int = 3,
-    avail_col: str = "avail_date",
-) -> pd.DataFrame:
-    """Lookahead-safe (code × date) Minervini **Code 33** acceleration flag.
-
-    Code 33 = EPS **and** revenue **and** margin all accelerating for the last
-    ``accel_steps`` quarters (each quarter's YoY strictly above the previous). This
-    is the faithful SEPA fundamental gate (``SEPA_FAITHFUL_DESIGN.md`` §1.3d) that
-    the deployed scanner omits. Feed ``fetch_financials`` output (net income +
-    revenue + operating income, current & prior).
-
-    Args:
-        financials: One row per (code, quarter) with ``code``, ``avail_col``
-            (public date), ``netinc``/``netinc_prior``, ``revenue``/
-            ``revenue_prior``, ``op_income``/``op_income_prior``.
-        trading_dates: Sorted trading dates to build the panel over.
-        accel_steps: Consecutive quarterly accelerations required (default 3 = the
-            "33" in Code 33 — 3 quarters of accelerating EPS/sales/margin).
-        avail_col: Availability-date column (period-end + filing lag, no look-ahead).
-
-    Returns:
-        Long ``code``/``date``/``is_code33`` (bool) plus the component quarter YoYs
-        ``yoy_eps``/``yoy_rev``/``yoy_margin`` (margin YoY = op-margin change in pp).
-        Each date carries the most recent quarter whose ``avail_col`` ≤ date (a
-        backward as-of join); dates before a code's first filing are ``is_code33``
-        False. A quarter missing revenue/op-income yields NaN component YoYs → that
-        quarter (and any window touching it) is ``is_code33`` False, never a crash.
-    """
-    f = financials.copy()
-    f["yoy_eps"] = _yoy_vec(f["netinc"], f["netinc_prior"])
-    f["yoy_rev"] = _yoy_vec(f["revenue"], f["revenue_prior"])
-    margin = f["op_income"] / f["revenue"].where(f["revenue"].notna() & (f["revenue"] != 0))
-    margin_prior = f["op_income_prior"] / f["revenue_prior"].where(
-        f["revenue_prior"].notna() & (f["revenue_prior"] != 0))
-    f["yoy_margin"] = margin - margin_prior  # margin expansion vs prior year (pp)
-    f["_avail"] = pd.to_datetime(f[avail_col].astype(str).str.replace("-", ""), format="%Y%m%d")
-    f = f.dropna(subset=["_avail"]).sort_values(["code", "_avail"])
-    # Defensive de-dup: a duplicated quarter injects a 0-diff into the acceleration
-    # walk and permanently breaks the strict-increase test (Code 33 goes all-False).
-    # Keep one row per (code, quarter) — by ``period`` when present, else by avail date.
-    dedup_key = ["code", "period"] if "period" in f.columns else ["code", "_avail"]
-    f = f.drop_duplicates(subset=dedup_key, keep="first")
-
-    quarter_rows: list[pd.DataFrame] = []
-    for code, g in f.groupby("code", sort=False):
-        e = g["yoy_eps"].to_numpy(float)
-        r = g["yoy_rev"].to_numpy(float)
-        m = g["yoy_margin"].to_numpy(float)
-        flags = [
-            _consec_accel(e, i, accel_steps)
-            and _consec_accel(r, i, accel_steps)
-            and _consec_accel(m, i, accel_steps)
-            for i in range(len(g))
-        ]
-        quarter_rows.append(g.assign(is_code33=flags)[
-            ["code", "_avail", "is_code33", "yoy_eps", "yoy_rev", "yoy_margin"]])
-
-    cols = ["code", "date", "is_code33", "yoy_eps", "yoy_rev", "yoy_margin"]
-    if not quarter_rows:
-        return pd.DataFrame(columns=cols)
-    quarters = pd.concat(quarter_rows, ignore_index=True).sort_values("_avail")
-
-    dates = pd.to_datetime(pd.Series(sorted(trading_dates), name="date"))
-    right_template = pd.DataFrame({"date": dates})
-    frames: list[pd.DataFrame] = []
-    for code, g in quarters.groupby("code", sort=False):
-        merged = pd.merge_asof(
-            right_template, g.drop(columns="code"),
-            left_on="date", right_on="_avail", direction="backward",
-        )
-        merged["code"] = code
-        frames.append(merged)
-
-    out = pd.concat(frames, ignore_index=True)
-    out["is_code33"] = out["is_code33"].fillna(False).astype(bool)
-    out["date"] = out["date"].dt.strftime("%Y-%m-%d")
-    return out[cols]

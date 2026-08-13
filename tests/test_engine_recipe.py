@@ -1,9 +1,8 @@
 """Engine recipe API (Step 5) — declarative experiments produce the same output
 as calling the underlying simulation functions directly.
 
-Cross-sectional (PEAD-style) recipes route to ``rank_tilt_backtest``; event-driven
-recipes route to the Minervini walk + ``compare_arms``. Both are pinned against the
-direct call so the recipe layer adds no divergence.
+Cross-sectional (PEAD-style) recipes route to ``rank_tilt_backtest``, pinned
+against the direct call so the recipe layer adds no divergence.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from kr_quant.engine.recipe import (
     ArmSpec,
     ExperimentConfig,
     run_recipe,
-    sepa_faithful_config,
 )
 from kr_quant.engine.sim_crosssectional import rank_tilt_backtest
 
@@ -115,14 +113,3 @@ def test_unknown_experiment_type_raises():
         assert "nonsense" in str(e)
     else:
         raise AssertionError("expected ValueError for unknown experiment_type")
-
-
-def test_sepa_faithful_config_shape():
-    """The prebuilt faithful-SEPA config declares the 5 pre-registered arms."""
-    config = sepa_faithful_config(n_boot=50)
-    assert config.experiment_type == "event_driven"
-    assert [a.name for a in config.arms] == \
-        ["A", "A-diversified", "A-noVCP", "B-shell", "C-bench"]
-    assert config.deployed == "B-shell" and config.benchmark == "C-bench"
-    assert config.boot_kwargs == {"n_boot": 50}
-    assert config.arms[-1].kind == "benchmark"

@@ -28,7 +28,7 @@ def test_band_excludes_mega_and_tiny_keeps_midtier():
     assert not out["E"] and not out["F"]   # ranks 5,6 (too small) excluded
 
 
-def test_defaults_are_frozen_sepa_values():
+def test_defaults_are_frozen_preregistered_values():
     sig = inspect.signature(smallmid_universe)
     assert sig.parameters["cap_rank"].default == CAP_RANK == (100, 400)
     assert sig.parameters["adv_floor"].default == ADV_FLOOR == 10000.0

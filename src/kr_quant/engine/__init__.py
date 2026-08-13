@@ -22,7 +22,6 @@ from .panels import (
     PANEL_CACHE,
     PanelCache,
     adv_panel,
-    build_panels,
     cached_panel_pivot,
     lookup_panel,
     panel_pivot,
@@ -33,16 +32,11 @@ from .recipe import (
     ArmSpec,
     ExperimentConfig,
     run_recipe,
-    sepa_faithful_config,
 )
 from .sim_crosssectional import (
     rank_ic,
     rank_tilt_backtest,
     staggered_tranche_backtest,
-)
-from .sim_eventdriven import (
-    position_walk,
-    trade_runner,
 )
 
 __all__ = [
@@ -65,17 +59,12 @@ __all__ = [
     "cached_panel_pivot",
     "PanelCache",
     "PANEL_CACHE",
-    "build_panels",
     # recipe API
     "ExperimentConfig",
     "ArmSpec",
     "run_recipe",
-    "sepa_faithful_config",
     # cross-sectional simulation
     "rank_tilt_backtest",
     "staggered_tranche_backtest",
     "rank_ic",
-    # event-driven simulation
-    "position_walk",
-    "trade_runner",
 ]

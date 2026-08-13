@@ -70,7 +70,7 @@ def check_gates_have_verdict() -> list[str]:
     """(b) 각 *_gate.py 에 대응 VERDICT.md 가 있어야 한다(EXEMPT/OVERRIDE 규약 적용)."""
     out = []
     for p in sorted(EXPERIMENTS.glob("*_gate.py")):
-        stem = p.stem                       # 예: minervini_prop_gate
+        stem = p.stem                       # 예: pullback_prop_gate
         if stem in GATE_EXEMPT:
             continue
         log_dir = GATE_LOG_OVERRIDE.get(stem, stem[: -len("_gate")])  # 기본: _gate 제거

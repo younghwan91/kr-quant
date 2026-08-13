@@ -7,15 +7,14 @@ strategies, never the reverse.
 
 Provenance (Step 0 of the backtest-engine migration — copied, signatures
 preserved):
-    ann_sharpe        <- sepa_compare._ann_sharpe
-    cagr              <- sepa_compare._cagr
-    max_drawdown      <- sepa_compare._max_drawdown
     newey_west_t      <- pead._newey_west_t
     summarize_periods <- pead._summarize
     spearman          <- backtest.spearman
     quantile_summary  <- backtest._quantile_summary
-    paired_bootstrap  <- sepa_compare.paired_bootstrap
-    regime_buckets    <- sepa_compare.regime_buckets
+
+``ann_sharpe`` / ``cagr`` / ``max_drawdown`` / ``paired_bootstrap`` /
+``regime_buckets`` were extracted from a since-removed comparison module; the
+engine copy is now their only definition.
 """
 
 from __future__ import annotations
