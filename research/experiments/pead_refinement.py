@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default
+from kr_quant.storage import connect, db_default, read_earnings
 from kr_quant.strategies.pead import (
     _panel,
     _resolve_signal,
@@ -78,9 +78,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     ``yoy_panel`` is the lookahead-safe long panel from ``earnings_yoy_panel``.
     """
     con = connect(db_default())
-    ea = pd.read_sql_query(
-        "SELECT code, period, avail_date, netinc, netinc_prior FROM earnings", con
-    )
+    # 정정공시 버전 중 최신 1건만 — 그냥 SELECT 하면 (code, period)가 중복된다.
+    ea = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"))
     prices = pd.read_sql_query(
         f"SELECT code, date, close, trade_value FROM {PRICE_TABLE}", con  # noqa: S608 — trusted constant
     )

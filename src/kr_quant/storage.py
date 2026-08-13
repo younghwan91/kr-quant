@@ -124,19 +124,25 @@ CREATE TABLE IF NOT EXISTS shares_outstanding_history (
     PRIMARY KEY (code, date)     -- Postgres side (init_timescale.sql) must use BIGINT, not INTEGER(32bit) — 삼성전자(58억주) overflows it
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON shares_outstanding_history(date);
+-- 정정공시는 기존 행을 덮어쓰지 않고 새 버전으로 쌓인다(PK에 knowledge_date 포함).
+-- 그래서 (code, period)당 행이 여럿일 수 있다 — 읽는 쪽은 반드시 as-of로 한 버전만
+-- 골라야 하며, 그냥 SELECT 하면 패널이 조용히 중복된다. kr_quant.storage.read_earnings()
+-- 를 쓸 것.
 CREATE TABLE IF NOT EXISTS earnings (
     code            TEXT NOT NULL,
     period          TEXT NOT NULL,   -- e.g. '2020Q1'
     avail_date      TEXT,            -- lookahead-safe availability date (period-end + filing lag)
+    knowledge_date  TEXT NOT NULL,   -- 이 값을 알게 된 날(수집일) — 정정공시는 새 행
     netinc          REAL,
     netinc_prior    REAL,
     revenue         REAL,
     revenue_prior   REAL,
     op_income       REAL,
     op_income_prior REAL,
-    PRIMARY KEY (code, period)
+    PRIMARY KEY (code, period, knowledge_date)
 );
 CREATE INDEX IF NOT EXISTS idx_earnings_avail_date ON earnings(avail_date);
+CREATE INDEX IF NOT EXISTS idx_earnings_asof ON earnings(code, period, knowledge_date DESC);
 CREATE TABLE IF NOT EXISTS consensus (
     code         TEXT NOT NULL,
     date         TEXT NOT NULL,   -- 스냅샷 수집일 (오늘)
@@ -256,6 +262,52 @@ def _upsert(
 def upsert_daily_bars_adjusted(con: Any, records: list[tuple]) -> int:
     """Insert/replace daily_bars_adjusted rows (tuples ordered by DAILY_BAR_COLUMNS)."""
     return _upsert(con, "daily_bars_adjusted", DAILY_BAR_COLUMNS, records)
+
+
+_EARNINGS_READ_COLS = (
+    "code", "period", "avail_date", "netinc", "netinc_prior",
+    "revenue", "revenue_prior", "op_income", "op_income_prior",
+)
+
+
+def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None):
+    """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
+
+    ``earnings`` is versioned: a DART restatement lands as a new row keyed by
+    ``knowledge_date`` rather than overwriting the original. A plain
+    ``SELECT * FROM earnings`` therefore returns several rows per (code, period)
+    once restatements exist, which silently duplicates every downstream panel.
+    This picks the newest version whose ``knowledge_date <= asof``.
+
+    Args:
+        con: Open connection (sqlite3 or psycopg2).
+        asof: Ceiling on ``knowledge_date`` — the backtest's "today". ``None``
+            means latest-known, which is **not** point-in-time: only pass ``None``
+            for live/screening use, never inside a historical backtest.
+        cols: Columns to return (default :data:`_EARNINGS_READ_COLS`).
+
+    Returns a pandas DataFrame.
+    """
+    import pandas as pd
+
+    sel = ", ".join(cols or _EARNINGS_READ_COLS)
+    if _is_pg(con):
+        where = "WHERE knowledge_date <= %s " if asof else ""
+        sql = (  # noqa: S608 — column names come from a module constant, not user input
+            f"SELECT DISTINCT ON (code, period) {sel} FROM earnings {where}"
+            "ORDER BY code, period, knowledge_date DESC"
+        )
+        params: tuple = (asof,) if asof else ()
+    else:
+        # sqlite has no DISTINCT ON — pick the max knowledge_date per key instead.
+        cap = "AND x.knowledge_date <= ? " if asof else ""
+        sql = (  # noqa: S608 — same
+            f"SELECT {sel} FROM earnings e WHERE e.knowledge_date = ("
+            "SELECT MAX(x.knowledge_date) FROM earnings x "
+            f"WHERE x.code = e.code AND x.period = e.period {cap})"
+        )
+        params = (asof,) if asof else ()
+    return pd.read_sql_query(sql, con, params=params or None)
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:

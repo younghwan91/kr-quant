@@ -44,7 +44,7 @@ from prop_swing_common import dedup_gap, load_env_db, weekly_count
 
 from kr_quant.engine.panels import panel_pivot
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default
+from kr_quant.storage import connect, db_default, read_earnings
 from kr_quant.validation.walkforward import FOLDS
 
 # --- Parameters -------------------------------------------------------------
@@ -74,9 +74,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
         f"SELECT code, date, open, high, low, close, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — trusted constant
         con,
     )
-    ea = pd.read_sql_query(
-        "SELECT code, period, avail_date, netinc, netinc_prior FROM earnings", con
-    )
+    # 정정공시 버전 중 최신 1건만 — 그냥 SELECT 하면 (code, period)가 중복된다.
+    ea = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"))
     con.close()
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)

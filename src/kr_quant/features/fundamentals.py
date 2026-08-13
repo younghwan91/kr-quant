@@ -197,3 +197,14 @@ def combined_signal(
     annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
     ep = earnings_yield_panel(annual, market_cap)
     return blend_rank([yoy, ep], [1.0 - value_weight, value_weight], value_cols=["yoy", "ep"])
+
+
+def _yoy_vec(cur: pd.Series, prior: pd.Series) -> pd.Series:
+    """Vectorized YoY = (cur - prior) / |prior|; NaN where prior is 0/missing.
+
+    Private by name but imported by the research gate runners (pead_gate,
+    pead_concentrated_gate, pead_refinement, prop_feasibility) — treat it as part
+    of this module's surface, not an internal detail free to delete.
+    """
+    p = prior.where(prior.notna() & (prior != 0))
+    return (cur - p) / p.abs()
