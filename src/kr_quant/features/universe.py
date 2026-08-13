@@ -1,16 +1,14 @@
-"""Point-in-time small-mid-cap universe — Minervini's preferred size tier.
+"""Point-in-time small-mid-cap universe.
 
-The deployed Minervini scanner inverted Minervini's small-mid preference to a
-100억+ large-cap universe (``SEPA_FAITHFUL_DESIGN.md`` §1.5, tagged 🔄 reversal).
-The faithful arm A restores the small-mid tier: names sized as **genuinely
-small-mid cap**, that also clear an ADV floor for tradeability.
+Selects names sized as **genuinely small-mid cap** that also clear an ADV floor
+for tradeability.
 
-⚠️ **Rank-band pitfall (discovered 2026-07-12):** the original ``cap_rank`` mode
+⚠️ **Rank-band pitfall (discovered 2026-07-12):** the ``cap_rank`` mode
 ranks *within whatever universe is passed in* — when that universe is itself a
 liquidity-filtered subset (e.g. a top-500-by-trade-value DART backfill), "rank
 100–400 of 500" lands at **market-cap percentile ~90 of the full market** (≈1조
-median), not small-mid at all. This silently defeated the "faithful re-creation"
-experiment (arm A was tested on large/mega caps, not Minervini's actual habitat).
+median), not small-mid at all. This silently defeated a breakout experiment that
+believed it was testing small-mid names while actually running on large/mega caps.
 Use ``cap_band`` (absolute market cap, 원 units) instead whenever the input
 universe is liquidity-pre-filtered; ``cap_rank`` is only safe against a genuinely
 broad/full-market cap panel.
@@ -18,8 +16,7 @@ broad/full-market cap panel.
 Point-in-time by construction: the caller passes as-of market-cap and ADV panels
 (from ``shares_outstanding_history`` × price, and trailing 20-day trade value), so
 the "small-mid" classification never peeks ahead. ⚠️ PIT removes look-ahead
-classification only — delisting survivorship is a separate, unresolved gap
-(see design §정직검증 프레임 item 3).
+classification only — delisting survivorship is a separate, unresolved gap.
 
 Pure DataFrame in → DataFrame out.
 """
@@ -28,13 +25,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-# Frozen SEPA hyperparameters (SEPA_FAITHFUL_DESIGN.md §사전등록 동결표).
+# Frozen universe hyperparameters (pre-registered — do not tune per experiment).
 CAP_RANK = (100, 400)       # market-cap rank band (exclude mega 1–100, keep 101–400)
 ADV_FLOOR = 10000.0         # 20d ADV ≥ 10억 (백만원 units: 10000 = 10억)
 # Absolute small-mid band (원): 3천억–2조. Chosen over pure "<3천억" small-cap for
-# adequate sample size against a liquidity-pre-filtered backfill (see module note);
-# still squarely small-mid — nowhere near the 4.96조 median of the deployed scanner's
-# large-cap universe (HONEST_VERDICT.md).
+# adequate sample size against a liquidity-pre-filtered backfill (see module note).
 CAP_BAND = (3.0e11, 2.0e12)
 
 

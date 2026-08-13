@@ -30,8 +30,7 @@ from .accumulation import load_frame, screen
 # (out of scope) import these via ``from .backtest import forward_returns, spearman``;
 # that path must keep working after the metrics/panels moved into the engine.
 # ``_quantile_summary`` is retained as a private re-export for the Step 0
-# source-equivalence test (``test_engine_metrics.py``), mirroring how
-# ``sepa_compare.py`` kept ``_ann_sharpe``/``_cagr``/``_max_drawdown``.
+# source-equivalence test (``test_engine_metrics.py``).
 spearman = _engine_spearman
 forward_returns = _engine_fwd_returns
 _quantile_summary = _engine_qsummary

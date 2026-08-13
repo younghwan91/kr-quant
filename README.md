@@ -85,6 +85,11 @@
 
 전체 규칙·가중 근거·caveat: [`research/logs/MULTI_ALPHA.md`](research/logs/MULTI_ALPHA.md).
 
+> **2026-08-13 기준 재현성 고지.** MNV 슬리브의 구현 코드(추세템플릿·VCP·SEPA 백테스트 하네스)는
+> §5의 개별-트레이드 기각 판정에 따라 레포에서 삭제했다. 위 표의 수치는 삭제 시점까지 검증된
+> 기록으로 남기며, 지금 레포에서 그대로 재현되지는 않는다 — 코드는 git 이력
+> (`chore/remove-minervini` 이전)에 있다. PEAD·인덱스 슬리브는 영향받지 않는다.
+
 ## 5. 검증 결과 종합 — 메커니즘 분석
 
 방법론(§2)을 여러 볼록형 스윙 가설에 적용한 결과다. 각 항목은 "죽었다"가 아니라 **왜 개별-트레이드 단위에서 재현되지 않는지의 메커니즘**으로 읽어야 한다 — 이것이 스크리너 수준의 백테스트가 놓치는 지점이다.
@@ -117,16 +122,16 @@
 src/kr_quant/
 ├── storage.py           # 읽기 전용 DB 접근 (connect / market_cap_asof)
 ├── price_adjust.py      # 기업행동 백조정 (airflow DAG가 in-place 실행)
-├── engine/              # 백테스트 엔진: cross-sectional·event-driven sim, 패널, 메트릭, recipe
+├── engine/              # 백테스트 엔진: cross-sectional sim, 패널, 메트릭, recipe
 ├── validation/          # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
 ├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)
-├── strategies/          # pead · accumulation · minervini_sepa · supply_wave · multi_signal
+├── strategies/          # pead · accumulation · supply_wave · multi_signal
 ├── models/              # graph_flow(그래프 확산) · ensemble_signal(릿지 앙상블)
-├── features/            # fundamentals · rs_rating · vcp · short_flow · sector_flow · universe
+├── features/            # fundamentals · short_flow · sector_flow · universe
 └── viz/                 # 수급 시각화
 
 research/                # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
-├── signals/             # 신호 정의 (contrarian_retail · operator_flow/minervini)
+├── signals/             # 신호 정의 (contrarian_retail · operator_flow)
 ├── experiments/         # 실험 러너 — prop_gate 게이트 하버스로 심사
 └── logs/                # VERDICT · SUMMARY (검증·분석 결과 기록)
 ```
@@ -146,7 +151,7 @@ uv run ruff check .
 python scripts/check_guardrails.py   # 경계·리포터 규율 검사
 ```
 
-분석 CLI(모두 DB 읽기 전용): `kq-pead`(PEAD 백테스트), `kq-sepa`(SEPA 멀티암 비교), `kq-screen`(매집 스크리너, §9), `kq-chart --code 005930`(수급 차트).
+분석 CLI(모두 DB 읽기 전용): `kq-pead`(PEAD 백테스트), `kq-screen`(매집 스크리너, §9), `kq-chart --code 005930`(수급 차트).
 
 ## 9. 참고 문헌
 

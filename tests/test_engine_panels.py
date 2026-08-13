@@ -14,14 +14,15 @@ from kr_quant.engine.panels import (
     yoy_panels,
 )
 
-# Source functions the engine copied from (equivalence pins). minervini_sepa._lookup
-# (Step 4) and sepa_experiment._adv_panel (Step 5) were migrated onto the engine and
-# deleted; their equivalence is now pinned inline against the canonical transforms.
+# Source functions the engine copied from (equivalence pins). The original
+# ``_lookup`` (Step 4) and ``_adv_panel`` (Step 5) bodies were migrated onto the
+# engine and deleted; their equivalence is now pinned inline against the
+# canonical transforms reproduced below.
 from kr_quant.strategies.pead import _panel as _src_panel
 
 
 def _src_adv_panel(prices: pd.DataFrame, *, window: int = 20) -> pd.DataFrame:
-    """The pre-migration ``sepa_experiment._adv_panel`` body (equivalence pin)."""
+    """The pre-migration ``_adv_panel`` body (equivalence pin)."""
     tv = prices[["code", "date", "trade_value"]].copy()
     tv["trade_value"] = tv["trade_value"].abs()
     tv = tv.sort_values(["code", "date"])

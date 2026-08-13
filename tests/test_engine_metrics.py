@@ -27,11 +27,6 @@ from kr_quant.strategies.backtest import _quantile_summary as _src_quantile_summ
 from kr_quant.strategies.backtest import spearman as _src_spearman
 from kr_quant.strategies.pead import _newey_west_t as _src_newey_west_t
 from kr_quant.strategies.pead import _summarize as _src_summarize
-from kr_quant.strategies.sepa_compare import _ann_sharpe as _src_ann_sharpe
-from kr_quant.strategies.sepa_compare import _cagr as _src_cagr
-from kr_quant.strategies.sepa_compare import _max_drawdown as _src_max_drawdown
-from kr_quant.strategies.sepa_compare import paired_bootstrap as _src_paired_bootstrap
-from kr_quant.strategies.sepa_compare import regime_buckets as _src_regime_buckets
 
 _MONTHS = [f"20{y:02d}-{m:02d}" for y in range(18, 24) for m in range(1, 13)]  # 72 months
 
@@ -66,11 +61,6 @@ def test_ann_sharpe_drops_nan_and_honors_ppy():
     assert abs(ann_sharpe(r, ppy=252) - ann_sharpe(np.array([0.01, -0.01, 0.02]), ppy=252)) < 1e-12
 
 
-def test_ann_sharpe_matches_source():
-    r = _series(0.01, 0.03, seed=7).to_numpy(float)
-    assert ann_sharpe(r) == _src_ann_sharpe(r)
-
-
 # --- cagr -----------------------------------------------------------------------
 
 def test_cagr_known_value():
@@ -91,11 +81,6 @@ def test_cagr_single_element():
     assert abs(cagr(np.array([0.10])) - (1.10 ** 12 - 1.0)) < 1e-9
 
 
-def test_cagr_matches_source():
-    r = _series(0.005, 0.02, seed=8).to_numpy(float)
-    assert cagr(r) == _src_cagr(r)
-
-
 # --- max_drawdown ---------------------------------------------------------------
 
 def test_max_drawdown_known():
@@ -109,11 +94,6 @@ def test_max_drawdown_monotonic_up_is_zero():
 
 def test_max_drawdown_empty_is_nan():
     assert np.isnan(max_drawdown(np.array([])))
-
-
-def test_max_drawdown_matches_source():
-    r = _series(0.0, 0.05, seed=9).to_numpy(float)
-    assert max_drawdown(r) == _src_max_drawdown(r)
 
 
 # --- newey_west_t ---------------------------------------------------------------
@@ -243,12 +223,6 @@ def test_paired_bootstrap_too_short_returns_nan():
     assert np.isnan(res["d_sharpe_ci"][0]) and res["n"] == 3
 
 
-def test_paired_bootstrap_matches_source():
-    a = _series(0.012, 0.03, seed=11)
-    b = _series(0.004, 0.03, seed=12)
-    assert paired_bootstrap(a, b, n_boot=300, seed=0) == _src_paired_bootstrap(a, b, n_boot=300, seed=0)
-
-
 # --- regime_buckets -------------------------------------------------------------
 
 def test_regime_buckets_sign_count():
@@ -262,6 +236,3 @@ def test_regime_buckets_too_few_returns_empty():
     assert regime_buckets(pd.Series([0.01, 0.02]), n=4) == []
 
 
-def test_regime_buckets_matches_source():
-    r = _series(0.006, 0.02, seed=13)
-    assert regime_buckets(r, n=4) == _src_regime_buckets(r, n=4)

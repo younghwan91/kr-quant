@@ -28,7 +28,6 @@ dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8"]
 kq-screen = "kr_quant.strategies.accumulation:main"
 kq-backtest = "kr_quant.strategies.backtest:main"
 kq-pead = "kr_quant.strategies.pead:main"
-kq-sepa = "kr_quant.strategies.sepa_experiment:main"
 kq-supply-wave = "kr_quant.strategies.supply_wave:main"
 kq-graph-flow = "kr_quant.models.graph_flow:main"
 kq-multi-signal = "kr_quant.strategies.multi_signal:main"

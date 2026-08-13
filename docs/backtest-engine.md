@@ -21,10 +21,13 @@ src/kr_quant/engine/
                            # paired_bootstrap, regime_buckets
     panels.py              # 패널 피벗 헬퍼, ADV 계산, 세션 LRU 캐시
     sim_crosssectional.py  # rank_tilt_backtest, staggered_backtest, rank_ic
-    sim_eventdriven.py     # 미너비니식 이벤트드리븐 워크:
-                           # position_walk(stop_price 절대값, ma50 명시 입력), trade_runner
     recipe.py              # ExperimentConfig dataclass, run_recipe() 디스패처
 ```
+
+> **2026-08-13:** 돌파 전략 제거와 함께 `sim_eventdriven.py`(이벤트드리븐 워크)가
+> 삭제됐다. 현재 엔진이 굴리는 패러다임은 횡단면(rank-tilt) 하나뿐이다. 이벤트드리븐을
+> 다시 들이려면 `recipe.py`에 `_run_*` 분기를 추가할 것 — 전략 파일에 회계 루프를
+> 새로 쓰는 게 아니라.
 
 엔진은 **리프 패키지**다 — numpy/pandas만 import하고, 전략이 엔진을 import한다(역방향 금지).
 
@@ -48,10 +51,8 @@ src/kr_quant/engine/
 **선택 이유:** 스펙 수용 기준을 모두 만족하는 유일안. "잘못된 통합"의 위험은 단일 다형 베이스 대신
 **시뮬레이션 모듈을 둘로 분리**하고, 파일별 이전 + 패리티 테스트로 관리한다.
 
-**`sim_eventdriven.py`의 정직한 범위:** `position_walk`의 파라미터(`tennis`, `tennis_window`,
-`sell_half_r`, `pe_array`, `breakeven`)는 **미너비니 전용 청산 규칙**이지 범용 이벤트드리븐 인터페이스가
-아니다. 현재 다른 전략은 이 함수를 그대로 재사용하지 않는다. 이 모듈은 "미너비니식 이벤트드리븐 워크"로
-읽어야 하며, 범용 시뮬레이터가 아니다.
+**당시 기록된 한계(2026-08-13 해소):** 이벤트드리븐 모듈은 범용 시뮬레이터가 아니라 특정
+돌파 전략의 청산 규칙에 강결합돼 있었다. 그 전략이 기각되면서 모듈도 함께 삭제됐다.
 
 **결과:**
 - 엔진은 5개 전략 파일의 강한 의존성이 된다 — 엔진 지표 변경은 전 하류에 영향.
@@ -65,49 +66,14 @@ src/kr_quant/engine/
 
 | 질문 | 결정 | 근거 |
 |---|---|---|
-| 패리티 테스트 영구 보존? | **보존** | `tests/test_parity_*.py` 5개. 엔진이 발표 수치를 안 바꿨음을 증명하는 유일한 장치 — 회귀 보험 값 > 유지 비용 |
-| `book_returns`/`benchmark_returns` 엔진 이전? | **`sepa_compare.py` 잔류** | `sepa_compare.py:71`, `:185`. 수익률 시계열 집계는 지표가 아니라 전략 회계 — 최소 diff |
-| `build_panels` 캐싱 전략? | **콘텐츠 키 LRU** | `panels.py:92~139`. DataFrame이 unhashable이라 직접 구현 |
-| `pivot_fill`/`pivot_fills` 엔진 이전? | **`minervini_sepa.py` 잔류** | `:26`, `:46`. 미너비니 진입 로직과 강결합 — 엔진 `trade_runner`가 호출 |
-| `ExperimentConfig` 스키마? | **dataclass** | `recipe.py:51`. 검증·IDE 지원 |
+| 패리티 테스트 영구 보존? | **보존** | `tests/test_parity_*.py`(현재 backtest·pead 2개, 돌파 전략 제거로 3개 삭제). 엔진이 발표 수치를 안 바꿨음을 증명하는 유일한 장치 — 회귀 보험 값 > 유지 비용 |
+| 패널 캐싱 전략? | **콘텐츠 키 LRU** | `panels.py`의 `PanelCache`. DataFrame이 unhashable이라 직접 구현 |
+| `ExperimentConfig` 스키마? | **dataclass** | `recipe.py`. 검증·IDE 지원 |
 | 재export에 deprecation 경고? | **미추가** | `backtest.py:35~37`, 이유는 `:29~34` 주석. 죽은 리서치 파일에 소음 만들 이유 없음 |
 
 **캐싱 상세:** 키는 `(value 컬럼, shape, pd.util.hash_pandas_object의 sha1 다이제스트)` — 내용이 같고
 객체만 다른 프레임도 캐시를 공유한다. `PanelCache`(OrderedDict LRU, maxsize 32, hits/misses 카운터) +
-모듈 레벨 `PANEL_CACHE`. `build_panels(..., use_cache=True)`로 스윕에서 재피벗 회피, 세션 간에는
-`PANEL_CACHE.clear()`.
-
-## `position_walk` 불변식 6개 (이벤트드리븐 워크)
-
-원래 `minervini_sepa.py`의 `_walk` 클로저가 갖던 동작. **`position_walk`에서 정확히 보존돼야 하며,
-"개선"하면 백테스트 수치가 조용히 바뀐다.** 각 항목은 `tests/test_engine_sim_event.py`가 지킨다.
-이상해 보이는 코드를 고치기 전에 여기부터 읽을 것.
-
-1. **청산 규칙 우선순위** — 봉마다 `손절(L≤stop)` > `PE 확장` > `테니스공 컬` >
-   **`sell_half`/브레이크이븐 상향(청산 아님 — 상태 변경 후 통과)** > `violations`/`climax_run` >
-   `time_cap`(루프 후 폴백) 순으로 발화. sell_half는 단독 청산이 아니다 — 한 봉이 sell_half를 트리거
-   *하면서* 동시에 violations/climax로 청산될 수 있다.
-   *실수:* violations를 손절보다 먼저 검사하거나, sell_half 뒤에 `break`를 넣어 같은 봉의 청산 감지를 막는 것.
-2. **violations와 climax_run의 윈도 비대칭** — `violations()`는 최근 윈도(`C[i, max(0, t−ma_exit_window):t+1]`),
-   `climax_run()`은 **0번 봉부터의 전체 이력**(`C[i, :t+1]`)을 받는다.
-   *실수:* 둘에 같은 윈도를 넘기는 것. (`climax_run`이 두 번 호출되는 건 청산 사유 문자열을
-   "climax"/"violation"으로 구분하기 위함 — 단일 캐시 호출로 "최적화"하지 말 것.)
-3. **`half_target`은 진입 시 한 번만 계산, 재계산 금지** — 초기 `stop0`에서 산출된다. 이후 stop이
-   브레이크이븐으로 상향돼도(`stop = max(stop, raised)`) `half_target`은 원래 값을 유지한다.
-   *실수:* stop 상향 후 half_target을 "친절하게" 재계산 → sell_half 트리거 레벨이 바뀌어 수익률이 달라짐.
-4. **테니스공 윈도는 NaN 스킵 봉을 포함한 달력 봉을 센다** — `(t − f0) >= tennis_window`는 진입 이후
-   모든 봉을 센다(NaN이라 `continue`된 봉 포함). 유한 봉 카운터가 아니라 달력 시간에 발화한다.
-   *실수:* 비NaN 봉만 세는 별도 카운터 → 테니스 컬이 지연됨.
-5. **갭 관통 손절 체결가 표현식** — `min(OPN, stop) if OPN < stop else stop`. 대수적으론 `min(OPN, stop)`과
-   같지만, 갭 관통이 의도적으로 처리됐음을 감사자가 알 수 있게 조건문 형태(또는 동치성 명시 주석)를 유지한다.
-6. **스태거드 블렌딩 관례** — 3개 레그(`STAGGERED_STOPS = (0.04, 0.06, 0.08)`)를 돌려 수익률은
-   **3개 평균**, `exit_price`/`exit_date`는 **마지막 레그(8% 손절)에서만** 가져오고, `reason`은 어느 규칙이
-   실제 발화했든 **리터럴 `"staggered"`로 하드코딩**한다. 자의적 관례지만 그대로 둔다.
-   *실수:* 가장 이른 청산일을 쓰거나, 청산가를 평균 내거나, `legs[0]`을 쓰거나, `reason`을 `legs[-1][3]`에서
-   읽는 것.
-
-**`ma50`는 명시 입력** — 원본은 전 종목 `ma50`를 한 번 계산해 모든 `_walk` 호출이 공유했다. 엔진에서는
-`position_walk`/`trade_runner`의 **명시적 파라미터**여야 한다(호출마다 재계산 금지) — 값 동일성과 성능 둘 다를 위해.
+모듈 레벨 `PANEL_CACHE`. 스윕에서 같은 프레임을 재피벗하지 않고, 세션 간에는 `PANEL_CACHE.clear()`.
 
 ## 후속 과제 (전부 낮은 우선순위)
 

@@ -149,14 +149,6 @@ CREATE TABLE IF NOT EXISTS consensus (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_consensus_date ON consensus(date);
-CREATE TABLE IF NOT EXISTS minervini_scan (
-    date        TEXT NOT NULL,
-    breadth     REAL,   -- 유동주 close>MA50 비율
-    regime      TEXT,   -- 'risk_on' / 'risk_off'
-    n_candidates INTEGER,
-    codes       TEXT,   -- 콤마구분 진입후보 코드 (없으면 빈 문자열)
-    PRIMARY KEY (date)
-);
 CREATE TABLE IF NOT EXISTS daily_bars_adjusted (
     code        TEXT NOT NULL,
     date        TEXT NOT NULL,
@@ -175,16 +167,6 @@ CREATE TABLE IF NOT EXISTS delisted_stocks (
     market          TEXT,
     last_trade_date TEXT,   -- daily_bars 기준 마지막 거래일(상장폐지일 근사), 이력 없으면 NULL
     PRIMARY KEY (code)
-);
-CREATE TABLE IF NOT EXISTS minervini_rba (
-    pick_date TEXT NOT NULL,  -- 스캐너가 진입후보로 뽑은 날짜
-    code      TEXT NOT NULL,
-    entry     REAL,
-    exit_px   REAL,
-    outcome   TEXT,   -- 'stop' / 'target_2R' / 'open'(20일 경과, 미확정 종료)
-    ret_pct   REAL,
-    days      INTEGER,
-    PRIMARY KEY (pick_date, code)
 );
 """
 
@@ -229,8 +211,8 @@ def _is_pg(con: Any) -> bool:
 
 # kr_quant.price_adjust.rebuild_adjusted_table() writes daily_bars_adjusted —
 # the one write path kept here (not moved to kr-quant-airflow) because
-# price_adjust.py's split-detection logic is also imported in-process by
-# strategies/sepa_experiment.py, so the module as a whole stays in kr-quant;
+# price_adjust.py's split-detection logic is imported in-process by the backtest
+# strategies, so the module as a whole stays in kr-quant;
 # weekly_price_adjust.py's DAG task still invokes it via
 # `python -m kr_quant.price_adjust --rebuild-db` (PYTHONPATH-based, no pip
 # install needed) rather than through kr-quant-airflow/collectors.
