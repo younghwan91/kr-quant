@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS supply_demand (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_sd_date ON supply_demand(date);
+-- source: 'kiwoom' = 상장 종목(ka10081, trade_value 는 보고된 거래대금),
+--         'naver'  = 상장폐지 종목 백필(siseJson, trade_value 는 close*volume/1e6
+--                    근사 — 실측 오차 중앙값 0.7%, p95 3.6%).
+-- 폐지 종목이 이 테이블에 들어오는 이유는 생존편향 때문이다: 수집 소스가 현재 상장
+-- 종목만 돌려주므로, 그냥 두면 백테스트가 살아남은 회사만 보고 성적을 잰다.
 CREATE TABLE IF NOT EXISTS daily_bars (
     code        TEXT NOT NULL,
     date        TEXT NOT NULL,
@@ -75,6 +80,7 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     close       INTEGER,
     volume      INTEGER,
     trade_value INTEGER,
+    source      TEXT NOT NULL DEFAULT 'kiwoom',
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_db_date ON daily_bars(date);
