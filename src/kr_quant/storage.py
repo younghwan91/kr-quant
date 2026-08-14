@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS daily_bars_adjusted (
     close       REAL,
     volume      INTEGER,      -- 기본은 미조정 원본 거래량 그대로(adjust_volume=False)
     trade_value INTEGER,      -- 거래대금은 가격조정과 무관(가격×수량이 아니라 원 보고값)
+    source      TEXT NOT NULL DEFAULT 'kiwoom',  -- daily_bars.source 전파(근사 거래대금 식별)
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_dba_date ON daily_bars_adjusted(date);
@@ -273,9 +274,14 @@ def _upsert(
     return len(records)
 
 
+# 조정가 테이블은 원본의 source 를 그대로 실어 나른다 — 백테스트가 읽는 건 이쪽이라,
+# "이 행의 trade_value 는 근사치"라는 사실이 여기 없으면 소비되는 자리에서 알 수 없다.
+ADJUSTED_BAR_COLUMNS: list[str] = [*DAILY_BAR_COLUMNS, "source"]
+
+
 def upsert_daily_bars_adjusted(con: Any, records: list[tuple]) -> int:
-    """Insert/replace daily_bars_adjusted rows (tuples ordered by DAILY_BAR_COLUMNS)."""
-    return _upsert(con, "daily_bars_adjusted", DAILY_BAR_COLUMNS, records)
+    """Insert/replace daily_bars_adjusted rows (tuples ordered by ADJUSTED_BAR_COLUMNS)."""
+    return _upsert(con, "daily_bars_adjusted", ADJUSTED_BAR_COLUMNS, records)
 
 
 _EARNINGS_READ_COLS = (

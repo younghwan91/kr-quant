@@ -97,3 +97,34 @@ def test_rebuild_adjusted_table_writes_back_adjusted_rows_to_db():
     assert adj.iloc[0]["volume"] == 1000
     assert adj.iloc[0]["trade_value"] == 80000
     con.close()
+
+
+def test_rebuild_propagates_source_to_adjusted_table():
+    """조정가 테이블이 daily_bars.source 를 그대로 물려받는지.
+
+    끊기면 조용히 DEFAULT 'kiwoom' 으로 채워져, 폐지 종목의 근사 거래대금이
+    실측치처럼 보인다 — ADV 문턱이 전적으로 trade_value 로 돌기 때문에 유니버스
+    편입까지 영향이 가는데 되짚을 단서가 사라진다.
+    """
+    from kr_quant.price_adjust import rebuild_adjusted_table
+    from kr_quant.storage import DAILY_BAR_COLUMNS, connect
+
+    con = connect(":memory:")
+    cols = [*DAILY_BAR_COLUMNS, "source"]
+    ph = ",".join(["?"] * len(cols))
+    rows = [
+        ("K", "2020-01-02", 100, 110, 90, 100, 10, 1, "kiwoom"),
+        ("K", "2020-01-03", 100, 110, 90, 100, 10, 1, "kiwoom"),
+        ("N", "2020-01-02", 50, 55, 45, 50, 20, 2, "naver"),
+        ("N", "2020-01-03", 50, 55, 45, 50, 20, 2, "naver"),
+    ]
+    con.executemany(
+        f"INSERT INTO daily_bars({','.join(cols)}) VALUES({ph})", rows)  # noqa: S608 — 모듈 상수
+    con.commit()
+
+    rebuild_adjusted_table(con)
+
+    got = dict(con.execute(
+        "SELECT DISTINCT code, source FROM daily_bars_adjusted").fetchall())
+    assert got == {"K": "kiwoom", "N": "naver"}
+    con.close()

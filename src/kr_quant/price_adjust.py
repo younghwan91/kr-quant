@@ -132,14 +132,16 @@ def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
     """
     from .storage import upsert_daily_bars_adjusted
 
+    from .storage import ADJUSTED_BAR_COLUMNS
+
+    # source 도 함께 읽어 그대로 전파한다 — 백테스트가 읽는 건 조정가 테이블이라,
+    # "이 행의 trade_value 는 close*volume 근사치(폐지 종목 백필)"라는 사실이 여기
+    # 없으면 ADV 문턱을 다루는 코드가 그걸 알 방법이 없다.
     df = pd.read_sql(
-        "SELECT code,date,open,high,low,close,volume,trade_value FROM daily_bars", con)
+        "SELECT code,date,open,high,low,close,volume,trade_value,source FROM daily_bars", con)
     df["date"] = df["date"].astype(str)
     adjusted = adjust_prices(df, adjust_volume=adjust_volume)
-    records = list(
-        adjusted[["code", "date", "open", "high", "low", "close", "volume", "trade_value"]]
-        .itertuples(index=False, name=None)
-    )
+    records = list(adjusted[ADJUSTED_BAR_COLUMNS].itertuples(index=False, name=None))
     return upsert_daily_bars_adjusted(con, records)
 
 

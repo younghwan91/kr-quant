@@ -37,18 +37,26 @@ from prop_swing_common import load_env_db  # noqa: E402
 
 from kr_quant.storage import connect, db_default  # noqa: E402
 from kr_quant.strategies.pead import staggered_backtest  # noqa: E402
-from research.experiments.pead_refinement import BASELINE, load_data  # noqa: E402
+from research.experiments.pead_refinement import (  # noqa: E402
+    BASELINE,
+    PRICE_TABLE,
+    load_data,
+)
 
 
 def delisted_codes(con) -> set[str]:
     """폐지 종목 코드 — 백필로 들어온 것(source='naver')이 판별 기준이다.
 
-    delisted_stocks 마스터가 아니라 daily_bars.source 를 쓰는 이유: 마스터에는
-    우리 시세 구간 밖의 폐지분과 채권·ELW 류가 섞여 있어, "이번 백필로 유니버스에
-    새로 들어온 종목"과 일치하지 않는다.
+    delisted_stocks 마스터가 아니라 source 를 쓰는 이유: 마스터에는 우리 시세 구간
+    밖의 폐지분과 채권·ELW 류가 섞여 있어, "이번 백필로 유니버스에 새로 들어온 종목"과
+    일치하지 않는다.
+
+    **백테스트가 읽는 것과 같은 테이블**(PRICE_TABLE)에서 읽는다 — 조정가 테이블에
+    source 가 없던 동안에는 daily_bars 로 되돌아가야 했고, 그러면 유니버스를 만드는
+    테이블과 폐지 여부를 판단하는 테이블이 달라 둘이 어긋나도 드러나지 않는다.
     """
     with con.cursor() as cur:
-        cur.execute("SELECT DISTINCT code FROM daily_bars WHERE source = 'naver'")
+        cur.execute(f"SELECT DISTINCT code FROM {PRICE_TABLE} WHERE source = 'naver'")  # noqa: S608 — 모듈 상수
         return {r[0] for r in cur.fetchall()}
 
 

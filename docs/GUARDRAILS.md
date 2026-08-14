@@ -123,11 +123,12 @@
    실제로 현 DB(정정본 0건)에서 수치가 소수점까지 동일함을 확인했다.
    구현 중 두 번 틀렸고(둘 다 "정정 하나가 무관한 과거 날짜를 바꾼다") 그 두 반례를
    `tests/test_earnings_bitemporal.py` 에 못박았다.
-4. **`source` 가 `daily_bars_adjusted` 에 전파되지 않음.** 폐지 종목 행의 `trade_value` 는
-   `close×volume` 근사치인데, 백테스트가 읽는 테이블은 조정가 테이블이고 거기엔 `source`
-   컬럼이 없다. ADV 문턱이 전적으로 `trade_value` 로 돌아가므로, 근사치라는 사실이
-   docstring 캐비엇으로만 존재하고 데이터에는 없다. `rebuild_adjusted_table` 과 조정가
-   스키마에 `source` 를 실어야 한다(마이그레이션 필요).
+4. ~~**`source` 가 `daily_bars_adjusted` 에 전파되지 않음**~~ **— 2026-08-15 해소.**
+   migration 003 + `rebuild_adjusted_table` 이 `source` 를 그대로 실어 나른다. 백테스트가
+   읽는 테이블에서 "이 행의 `trade_value` 는 `close×volume` 근사치(폐지 종목 백필)"를
+   식별할 수 있다 — ADV 문턱(`ADV_FLOOR`, `adv_floor`)이 전적으로 `trade_value` 로
+   돌기 때문에 필요한 정보다. 전파가 끊기면 조용히 DEFAULT `'kiwoom'` 으로 채워져
+   근사치가 실측치처럼 보이므로 `tests/test_price_adjust.py` 에 회귀 테스트를 뒀다.
 5. **다중검정 원장·DSR 부재** — 사전등록이 마크다운 관례뿐. 시도 config 수를 세는 원장도, Deflated
    Sharpe도 없다. 첫 config 실패 후 조용히 두 번째를 돌려도 아무도 못 잡는다.
 6. **음성대조·비용스윕이 prop_gate 전용** — `research/TEMPLATE.md` 표준 파이프라인엔 음성대조가 없다.
