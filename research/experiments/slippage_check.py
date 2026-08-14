@@ -90,11 +90,11 @@ def _sel_fold_consistency(d: dict) -> tuple[int, int]:
 
 def main() -> int:
     _load_env_db()
-    from research.contrarian_retail import load_data
+    from research.signals.contrarian_retail import load_data
     print("=== 데이터 로드 ===")
     prices, flow = load_data()
 
-    from research.contrarian_retail import simulate_detailed
+    from research.signals.contrarian_retail import simulate_detailed
     cache: dict = {}
     # gross(cost=0) 상세 시뮬 1회 — 비용은 사후 차감(선택/청산에 영향 없음)
     d0 = simulate_detailed(prices, flow, _cache=cache, cost_roundtrip=0.0, **PARAMS)
