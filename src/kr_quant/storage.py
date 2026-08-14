@@ -244,16 +244,24 @@ def _upsert(
     if not records:
         return 0
     if _is_pg(con):
-        placeholders = ",".join(["%s"] * len(cols))
+        # psycopg2 의 executemany 는 행마다 INSERT 문을 한 번씩 왕복시킨다 —
+        # rebuild_adjusted_table() 처럼 570만 행을 upsert 하면 몇 시간이 걸린다
+        # (실측: 40분 넘게 돌고도 진행 중). execute_values 는 한 문장에 여러 VALUES
+        # 튜플을 실어 보내 같은 일을 수십 배 빠르게 끝낸다. 수집기 쪽
+        # (kr-quant-airflow/collectors/storage.py)은 이미 이 방식이다.
+        import psycopg2.extras
+
         update_cols = [c for c in cols if c not in pk_cols]
         set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
         sql = (
-            f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders}) "
+            f"INSERT INTO {table}({','.join(cols)}) VALUES %s "
             f"ON CONFLICT ({','.join(pk_cols)}) DO UPDATE SET {set_clause}"
         )
+        template = "(" + ",".join(["%s"] * len(cols)) + ")"
         try:
             with con.cursor() as cur:
-                cur.executemany(sql, records)
+                psycopg2.extras.execute_values(
+                    cur, sql, records, template=template, page_size=1000)
         except Exception:
             con.rollback()
             raise
