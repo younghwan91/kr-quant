@@ -99,8 +99,10 @@
 |---|---|---|---|
 | 개미 투매 역발상 | 볼록·급등주 스윙 | 수익이 상위 1%(순P&L의 84%)에 집중 → 단일 국면 의존, walk-forward 2/6 | [logs](research/logs/) |
 | 미너비니식 돌파 | 추세추종 | 포트폴리오 성과는 레버리지·복리 효과였고, 개별 트레이드 기대값은 랜덤 널(+0.078R) 아래(−0.029R) | [VERDICT](research/logs/minervini_prop/VERDICT.md) |
-| 눌림목 평균회귀 | 고승률 가설 | 가설의 전제인 고승률이 성립 안 함(34%); 널(−0.267R)보다도 낮은 −0.334R | [VERDICT](research/logs/pullback_prop/VERDICT.md) |
-| 실적 서프라이즈 집중 | 이벤트 스윙 | PEAD는 느린 60일 드리프트 → 손절·보유상한이 승자를 잘라 확산 엣지를 파괴 | [VERDICT](research/logs/pead_concentrated/VERDICT.md) |
+| 눌림목 평균회귀 | 고승률 가설 | 가설의 전제인 고승률이 성립 안 함(35%); 널(−0.267R)보다도 낮은 −0.329R | [VERDICT](research/logs/pullback_prop/VERDICT.md) |
+| 실적 서프라이즈 집중 | 이벤트 스윙 | PEAD는 느린 60일 드리프트 → 손절·보유상한이 승자를 잘라 확산 엣지를 파괴(−0.227R, 널 −0.042R) | [VERDICT](research/logs/pead_concentrated/VERDICT.md) |
+
+> **2026-08-15 생존편향 보정 후 재측정.** 상장폐지 종목을 유니버스에 넣고 눌림목·PEAD집중 게이트를 다시 돌렸다. 두 기각 모두 **유지**된다 — 눌림목 −0.334R → −0.329R(트레이드 1,810 → 1,894건), PEAD집중 −0.208R → −0.227R(랜덤 널과의 격차는 오히려 벌어졌다). 미너비니는 러너를 삭제해 재측정 대상이 아니다. §4의 PEAD와 달리 이들은 **절대수익 R-멀티플** 기준이라, 벤치마크 왜곡이 아니라 트레이드 자체로 평가된다.
 
 **분석적 결론.** 네 가설은 모두 오래 차익거래되어 온 가격 패턴이며, 유동 대형주에서 개별 트레이드 단위로 재현되는 롱온리 엣지를 남기지 않았다. 이 발견의 값어치는 방향 자체가 아니라 **메커니즘의 이해**에 있다 — 분산 엣지를 집중하면 왜 죽는지(PEAD 집중), 포트폴리오 지표가 왜 개별 엣지를 과대평가하는지(미너비니). 종합: [`research/logs/prop_swing_search/SUMMARY.md`](research/logs/prop_swing_search/SUMMARY.md).
 
