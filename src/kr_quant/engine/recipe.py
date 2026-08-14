@@ -25,12 +25,14 @@ from .sim_crosssectional import rank_tilt_backtest
 class ArmSpec:
     """One arm of an experiment — how to turn panels into a return series/summary.
 
-    Cross-sectional (``kind="rank_tilt"``): ``backtest_kwargs`` →
-    :func:`kr_quant.engine.sim_crosssectional.rank_tilt_backtest`.
+    ``backtest_kwargs`` →
+    :func:`kr_quant.engine.sim_crosssectional.rank_tilt_backtest`. The paradigm
+    lives on :class:`ExperimentConfig.experiment_type`, not here — a per-arm
+    ``kind`` field survived the event-driven removal with a single legal value
+    and no reader, which is dead state that silently accepts any string.
     """
 
     name: str
-    kind: str = "rank_tilt"     # "rank_tilt"
     backtest_kwargs: dict = field(default_factory=dict)
 
 

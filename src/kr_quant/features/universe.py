@@ -16,7 +16,17 @@ broad/full-market cap panel.
 Point-in-time by construction: the caller passes as-of market-cap and ADV panels
 (from ``shares_outstanding_history`` × price, and trailing 20-day trade value), so
 the "small-mid" classification never peeks ahead. ⚠️ PIT removes look-ahead
-classification only — delisting survivorship is a separate, unresolved gap.
+classification only.
+
+⚠️ **이 경로의 생존편향은 아직 안 풀렸다 (2026-08-15 기준).** 폐지 종목의 시세·실적은
+백필했지만(``daily_bars.source='naver'``), 여기서 쓰는 ``cap_panel`` 의 출처인
+``shares_outstanding_history`` 에는 폐지분이 여전히 0건이다 — KRX 과거 상장주식수가
+로그인 장벽 뒤에 있다. 즉 cap 기반 유니버스는 지금도 생존자만 담는다. 거래대금 기반
+ADV 필터만 쓰는 경로(PEAD 게이트)는 영향이 없다. GUARDRAILS §4 공백 2 참조.
+
+**현재 호출자 없음.** ``engine.panels.build_panels`` 가 유일한 소비자였는데 미너비니
+제거와 함께 삭제됐다. 위 공백을 닫고 cap 기반 유니버스를 다시 세울 때를 위해 남긴다 —
+지운 게 아니라 의도적으로 보존한 것이다.
 
 Pure DataFrame in → DataFrame out.
 """

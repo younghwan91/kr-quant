@@ -205,14 +205,23 @@ def staggered_tranche_backtest(
             gone = np.isfinite(C[:, t]) & ~np.isfinite(C[:, t + step])
             ret[gone] = C_ff[gone, t + step] / C[gone, t] - 1.0
         bench = float(np.nanmean(ret[uni]))
-        tranche_excess = []
+        tranche_excess, tranche_book = [], []
         for k in range(n_tranches):
             b = book(t - k * step)
             if b is not None:
-                tranche_excess.append(float(np.nanmean(ret[b])) - bench)
+                book_ret = float(np.nanmean(ret[b]))
+                tranche_book.append(book_ret)
+                tranche_excess.append(book_ret - bench)
         if tranche_excess:
+            # book/bench 를 함께 남긴다 — 초과수익만 보면 전략이 좋아진 건지 벤치마크가
+            # 나빠진 건지 구분이 안 된다. 생존편향처럼 유니버스 구성이 바뀌는 변경에서는
+            # 그 구분이 결론 자체를 뒤집는다(research/logs/survivorship_bias/VERDICT.md).
+            # 여기서 내보내지 않으면 호출부가 이 루프를 베껴 재현하게 되고, 실제로
+            # 그렇게 만든 사본이 스태거링과 delisting_exit 를 빠뜨렸다.
             rows.append({"date": dates[t], "gross": float(np.mean(tranche_excess)),
-                         "turnover": 1.0 / n_tranches, "net": float(np.mean(tranche_excess))})
+                         "turnover": 1.0 / n_tranches, "net": float(np.mean(tranche_excess)),
+                         "book": float(np.mean(tranche_book)), "bench": bench,
+                         "n_universe": int(uni.size)})
     periods = pd.DataFrame(rows)
     return periods, summarize_periods(periods, step)
 

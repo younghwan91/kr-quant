@@ -1,13 +1,15 @@
 # Minervini-style ML swing — 통계적 글로벌맥시마 + 청산 + 피라미딩 + 하프켈리 포트폴리오
 
-> ⚠️ **이 디렉터리 경로는 고정이다 — 옮기거나 이름을 바꾸면 프로덕션이 죽는다.**
-> `kr-quant-airflow`의 `daily_minervini_scan` DAG(평일 18:40 KST)가 절대경로로 하드코딩해
-> 스캐너를 import한다: `sys.path.insert(0, '/opt/kr-quant/research/operator_flow/minervini')`
-> → `from scanner_final import scan`. `research/` 아래 있지만 **스크래치가 아니라 살아있는 배포
-> 코드**다. 정리하려면 두 저장소를 함께 바꾸고 배포 순서를 맞춰야 한다.
-> 마찬가지로 `SEPA_FAITHFUL_DESIGN.md`는 `src/`가 17곳에서 인용하며, 특히 §"사전등록 동결표"가
-> `features/{base_count,universe,vcp}.py`·`strategies/minervini_{exits,sizing}.py`의 동결 상수
-> 근거다 — 지우면 그 상수들의 정당성이 사라진다.
+> 🗄️ **보존된 리서치 기록이다 — 실행 코드는 없다 (2026-08-13).**
+> 개별-트레이드 재현성 기각 판정에 따라 미너비니 계열을 전부 걷어냈다:
+> `daily_minervini_scan` DAG, `scanner_final.py`, `strategies/minervini_*`,
+> `features/{vcp,rs_rating,base_count}`, `engine/sim_eventdriven.py`.
+> 아래 문서가 인용하는 파일·상수는 **그 시점의 상태를 기술한 것**이며 지금은 존재하지 않는다
+> (원본은 git 히스토리, `chore/remove-minervini` 병합 이전).
+>
+> 그래도 남겨두는 이유: 기각 결론과 그 근거야말로 같은 셋업을 다시 파는 걸 막아주는 자산이다.
+> 판정은 [`SEPA_VERDICT.md`](SEPA_VERDICT.md)·[`HONEST_VERDICT.md`](HONEST_VERDICT.md),
+> 개별-트레이드 게이트는 [`research/logs/minervini_prop/VERDICT.md`](../../../logs/minervini_prop/VERDICT.md).
 
 > **정리 이력 (2026-07-17):** 실행 스크래치 23개(`prep_*`/`feat_*`/`sim_*.c`/
 > `portfolio_halfkelly.py`/`ml/*` 등)를 삭제했다. **아래 절 제목의 스크립트 이름은 그 결론을

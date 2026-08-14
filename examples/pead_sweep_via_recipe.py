@@ -42,7 +42,7 @@ def main() -> int:
     # The whole experiment definition — one arm per surprise-filter setting.
     base = dict(horizon=20, adv_floor=0.0, start_index=60, min_names=5,
                 long_only=True, top_n=10)
-    arms = [ArmSpec(name=f"fresh{fd}", kind="rank_tilt",
+    arms = [ArmSpec(name=f"fresh{fd}",
                     backtest_kwargs={**base, "fresh_days": fd})
             for fd in (0, 5, 15, 45)]
     config = ExperimentConfig(experiment_type="cross_sectional", arms=arms)

@@ -102,11 +102,43 @@ def check_no_literal_verdict() -> list[str]:
     return out
 
 
+# (d) earnings 는 정정공시가 새 행으로 쌓이는 버전 테이블이라(PK 에 knowledge_date),
+# 그냥 SELECT 하면 (code, period)당 행이 여럿이 되어 하류 패널이 조용히 중복된다.
+# storage.read_earnings() 가 as-of 로 한 버전만 고르는 유일한 정문이다.
+# SELECT ... FROM earnings 한 줄 형태만 잡는다 — "from earnings drift" 같은 산문이
+# 걸리면 규칙이 소음이 되어 아무도 안 본다.
+_RAW_EARNINGS = re.compile(r"\bSELECT\b.*\bFROM\s+earnings\b", re.IGNORECASE)
+_EARNINGS_READ_EXEMPT = {
+    "src/kr_quant/storage.py",          # 정문 자신 + 스키마 문자열
+    "tests/test_earnings_asof.py",      # 정문의 테스트 — 버전이 실제로 쌓이는지 직접 확인해야 한다
+}
+
+
+def check_no_raw_earnings_select() -> list[str]:
+    """(d) storage 밖에서 earnings 를 직접 SELECT 하면 위반."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _EARNINGS_READ_EXEMPT or rel.startswith(".venv/"):
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if _RAW_EARNINGS.search(line):
+                out.append(
+                    f"[earnings] {rel}:{i} — earnings 를 직접 SELECT 했다. "
+                    f"kr_quant.storage.read_earnings(con, asof=...) 를 쓸 것 "
+                    f"(정정공시 버전이 중복 행으로 새어나온다)."
+                )
+    return out
+
+
 def main() -> int:
     violations: list[str] = []
     violations += check_src_no_research_import()
     violations += check_gates_have_verdict()
     violations += check_no_literal_verdict()
+    violations += check_no_raw_earnings_select()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

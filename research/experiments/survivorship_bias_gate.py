@@ -57,53 +57,22 @@ def _fmt(s: dict) -> str:
             f"cum={s['cum_net']:+.4f}  hit={s['hit_rate']:.3f}")
 
 
-def decompose(prices, yoy, label: str) -> dict:
-    """북 수익과 벤치마크 수익을 분리 보고.
+def decompose(periods, label: str) -> dict:
+    """엔진이 내보낸 기간별 북/벤치를 평균내 보고.
 
     PEAD 는 **유니버스 대비 초과수익**이라, 유니버스 구성이 바뀌면 전략을 한 줄도
     안 건드려도 측정치가 움직인다. 합계(Sharpe)만 보면 그게 전략 변화인지 벤치마크
-    변화인지 구분이 안 되므로 둘을 갈라 보고한다 — 이 실험의 결론이 나온 자리다.
+    변화인지 구분이 안 되므로 둘을 갈라 본다 — 이 실험의 결론이 나온 자리다.
+
+    ``staggered_tranche_backtest`` 가 ``book``/``bench`` 를 직접 내보내므로 여기서
+    시뮬레이션을 재현하지 않는다. 초판은 그 루프를 베꼈다가 스태거링과
+    ``delisting_exit`` 를 빠뜨려, 바로 위에 인쇄한 Sharpe 와 다른 회계로 계산된
+    분해를 보고했다.
     """
-    import numpy as np
-
-    from kr_quant.engine.panels import panel_pivot, resolve_signal
-    from research.experiments.pead_refinement import MIN_NAMES, START_INDEX
-
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates, codes = list(close.columns), list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
-    sig, _ = resolve_signal(yoy, None, codes, dates)
-    step, top_n, af = BASELINE["step"], BASELINE["top_n"], BASELINE["adv_floor"]
-
-    adv = np.full_like(C, np.nan)
-    for j in range(20, len(dates)):
-        adv[:, j] = np.nanmean(V[:, j - 20:j], axis=1)
-
-    books, benches, sizes, vanished, held = [], [], [], 0, 0
-    for t in range(START_INDEX, len(dates) - step - 1):
-        if (t - START_INDEX) % step:
-            continue
-        ok = np.isfinite(sig[:, t]) & (adv[:, t] >= af)
-        if ok.sum() < MIN_NAMES:
-            continue
-        uni = np.where(ok)[0]
-        ret = C[:, t + step] / C[:, t] - 1.0
-        b = uni[np.argsort(-sig[uni, t])[:top_n]]
-        entered = np.isfinite(C[b, t])
-        held += int(entered.sum())
-        vanished += int((entered & ~np.isfinite(C[b, t + step])).sum())
-        books.append(np.nanmean(ret[b]))
-        benches.append(np.nanmean(ret[uni]))
-        sizes.append(uni.size)
-
-    bk, bn = np.array(books), np.array(benches)
-    out = {"book": bk.mean(), "bench": bn.mean(), "excess": (bk - bn).mean(),
-           "uni": float(np.mean(sizes)), "vanished": vanished, "held": held}
+    out = {"book": periods["book"].mean(), "bench": periods["bench"].mean(),
+           "excess": periods["net"].mean(), "uni": periods["n_universe"].mean()}
     print(f"{label:24} 북={out['book']*100:+.3f}%  벤치={out['bench']*100:+.3f}%  "
-          f"초과={out['excess']*100:+.3f}%  유니버스={out['uni']:.0f}종목  "
-          f"보유중소멸={vanished}/{held}")
+          f"초과={out['excess']*100:+.3f}%  유니버스={out['uni']:.0f}종목")
     return out
 
 
@@ -122,19 +91,17 @@ def main() -> int:
     with_sig = dl & set(yoy["code"].unique())
     print(f"  그중 폐지분: 시세 {len(in_data)}종목 / 실적신호 {len(with_sig)}종목\n")
 
-    results = {}
+    # survivors 프레임은 한 번만 만든다(수백만 행 isin 스캔 + 사본).
+    surv = (prices[~prices["code"].isin(dl)], yoy[~yoy["code"].isin(dl)])
     arms = (
-        ("full (폐지 포함)", None, False),
-        ("survivors (폐지 제외)", dl, False),
-        ("full + 폐지수익 반영", None, True),
+        ("full (폐지 포함)", (prices, yoy), False),
+        ("survivors (폐지 제외)", surv, False),
+        ("full + 폐지수익 반영", (prices, yoy), True),
     )
-    for label, drop, dex in arms:
-        p, y = prices, yoy
-        if drop is not None:
-            p = prices[~prices["code"].isin(drop)]
-            y = yoy[~yoy["code"].isin(drop)]
-        _, s = staggered_backtest(p, y, delisting_exit=dex, **BASELINE)
-        results[label] = s
+    results, period_frames = {}, {}
+    for label, (p, y), dex in arms:
+        periods, s = staggered_backtest(p, y, delisting_exit=dex, **BASELINE)
+        results[label], period_frames[label] = s, periods
         print(f"{label:24} {_fmt(s)}")
 
     a = results["survivors (폐지 제외)"]
@@ -146,9 +113,8 @@ def main() -> int:
         print(f"  {k:9} {a[k]:+.4f} -> {b[k]:+.4f}   차이 {d:+.4f}{rel}")
 
     print("\n=== 북/벤치 분해 (기간당 평균, step=20영업일) ===")
-    df = decompose(prices, yoy, "full (폐지 포함)")
-    ds = decompose(prices[~prices["code"].isin(dl)],
-                   yoy[~yoy["code"].isin(dl)], "survivors (폐지 제외)")
+    df = decompose(period_frames["full (폐지 포함)"], "full (폐지 포함)")
+    ds = decompose(period_frames["survivors (폐지 제외)"], "survivors (폐지 제외)")
     print(f"\n  북   차이 {(df['book'] - ds['book'])*100:+.3f}%p"
           f"   (폐지 종목을 담아서 생긴 전략 쪽 손실)")
     print(f"  벤치 차이 {(df['bench'] - ds['bench'])*100:+.3f}%p"
@@ -160,9 +126,7 @@ def main() -> int:
         print(f"  {k:9} {b[k]:+.4f} -> {c[k]:+.4f}   차이 {c[k] - b[k]:+.4f}")
 
     print("\n※ 읽는 법: PEAD 는 '유니버스 대비 초과수익'이다. 생존편향은 전략보다"
-          "\n  벤치마크를 더 크게 왜곡하므로, 폐지 종목을 빼면 초과수익이 *과소* 측정된다."
-          "\n※ 보유중소멸 = 보유 기간에 가격이 끊긴 포지션. delisting_exit 를 끄면"
-          "\n  nanmean 이 그 종목을 빼서 폐지 손실이 북·벤치 양쪽에서 누락된다.")
+          "\n  벤치마크를 더 크게 왜곡하므로, 폐지 종목을 빼면 초과수익이 *과소* 측정된다.")
     return 0
 
 

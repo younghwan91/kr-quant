@@ -90,7 +90,7 @@
 > **상대수익**(excess-over-universe) 전략에서는 편향이 전략보다 **벤치마크를 더 크게**
 > 부풀리므로, 폐지 종목을 빼면 초과수익이 오히려 **과소** 측정된다.
 > 실측: PEAD(상대수익) Sharpe 1.20 → 1.49로 **상승**, 벤치마크 왜곡(−0.215%p)이
-> 전략 왜곡(−0.060%p)의 3.5배. 같은 보정에서 눌림목·PEAD집중(절대수익 R-멀티플)은
+> 전략 왜곡(−0.053%p)의 4.1배. 같은 보정에서 눌림목·PEAD집중(절대수익 R-멀티플)은
 > 기각이 유지됐다. 근거: [`research/logs/survivorship_bias/VERDICT.md`](../research/logs/survivorship_bias/VERDICT.md).
 >
 > 새 전략을 평가할 때 **먼저 어느 유형인지 정하고** 편향 방향을 예상할 것.
@@ -114,11 +114,23 @@
    주간 DAG로 재발을 막았다. 폐지 손실 실현은 `staggered_tranche_backtest(delisting_exit=True)`
    로 선택 가능(기본 False — 발표 수치·패리티 테스트 보존). 남은 공백은 **유니버스 빌더가
    그걸 쓰도록 강제하는 규칙**이 여전히 없다는 것. 상장주식수·수급은 아직 폐지분이 비어 있다.
-3. **다중검정 원장·DSR 부재** — 사전등록이 마크다운 관례뿐. 시도 config 수를 세는 원장도, Deflated
+3. **정정공시 룩어헤드 (2026-08-15 신규 식별).** `read_earnings(asof=...)` 는 만들었지만
+   두 PEAD 러너(`pead_refinement.load_data`, `prop_feasibility.load_data`)가 `asof` 없이
+   호출한다 — 최신 버전을 받아 과거 날짜 셀에 넣는다는 뜻이다. 현재 DB 에 정정본이 0건이라
+   실害(實害)는 없으나, 첫 정정공시가 들어오는 순간 조용한 룩어헤드가 된다. `asof` 는 스칼라라
+   "각 바 t 시점" 을 표현할 수 없는 게 근본 원인 — 제대로 된 자리는
+   `features.fundamentals.earnings_yoy_panel` 의 `merge_asof` 에 `knowledge_date <= date` 를
+   함께 태우는 것이다. (raw `SELECT ... FROM earnings` 금지는 `check_guardrails.py` 로 강제됨.)
+4. **`source` 가 `daily_bars_adjusted` 에 전파되지 않음.** 폐지 종목 행의 `trade_value` 는
+   `close×volume` 근사치인데, 백테스트가 읽는 테이블은 조정가 테이블이고 거기엔 `source`
+   컬럼이 없다. ADV 문턱이 전적으로 `trade_value` 로 돌아가므로, 근사치라는 사실이
+   docstring 캐비엇으로만 존재하고 데이터에는 없다. `rebuild_adjusted_table` 과 조정가
+   스키마에 `source` 를 실어야 한다(마이그레이션 필요).
+5. **다중검정 원장·DSR 부재** — 사전등록이 마크다운 관례뿐. 시도 config 수를 세는 원장도, Deflated
    Sharpe도 없다. 첫 config 실패 후 조용히 두 번째를 돌려도 아무도 못 잡는다.
-4. **음성대조·비용스윕이 prop_gate 전용** — `research/TEMPLATE.md` 표준 파이프라인엔 음성대조가 없다.
+6. **음성대조·비용스윕이 prop_gate 전용** — `research/TEMPLATE.md` 표준 파이프라인엔 음성대조가 없다.
    TEMPLATE만 따르는 새 연구자는 널 대조를 안 만들 수 있다.
-5. **R분포/fragility 포함이 문화적** — 새 스크립트가 복리 자본곡선만 보고해도 아무도 안 막는다.
+7. **R분포/fragility 포함이 문화적** — 새 스크립트가 복리 자본곡선만 보고해도 아무도 안 막는다.
 
 ---
 

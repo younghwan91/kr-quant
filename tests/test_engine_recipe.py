@@ -54,7 +54,7 @@ def test_cross_sectional_recipe_matches_direct_call():
     kw = dict(horizon=20, adv_floor=0.0, start_index=60, min_names=5, long_only=True)
     config = ExperimentConfig(
         experiment_type="cross_sectional",
-        arms=[ArmSpec(name="pead", kind="rank_tilt", backtest_kwargs=kw)])
+        arms=[ArmSpec(name="pead", backtest_kwargs=kw)])
     table, summaries = run_recipe(config, prices, earnings)
 
     _, direct = _direct_rank_tilt(prices, earnings, **kw)
@@ -69,7 +69,7 @@ def test_cross_sectional_recipe_multi_arm_surprise_filter_sweep():
     """A PEAD surprise-filter sweep: several arms, one config, one run_recipe call."""
     prices, earnings, _ = _cross_synth()
     base = dict(horizon=20, adv_floor=0.0, start_index=60, min_names=5, long_only=True)
-    arms = [ArmSpec(name=f"top{tn}", kind="rank_tilt", backtest_kwargs={**base, "top_n": tn})
+    arms = [ArmSpec(name=f"top{tn}", backtest_kwargs={**base, "top_n": tn})
             for tn in (5, 10, 0)]
     table, summaries = run_recipe(
         ExperimentConfig(experiment_type="cross_sectional", arms=arms), prices, earnings)
@@ -90,7 +90,7 @@ def test_signal_panel_overrides_earnings_yoy():
     kw = dict(horizon=20, adv_floor=0.0, start_index=60, min_names=5, long_only=True)
     config = ExperimentConfig(
         experiment_type="cross_sectional",
-        arms=[ArmSpec(name="blend", kind="rank_tilt", backtest_kwargs=kw)],
+        arms=[ArmSpec(name="blend", backtest_kwargs=kw)],
         signal_panel=sig_panel)
     _, summaries = run_recipe(config, prices, earnings)
 

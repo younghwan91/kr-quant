@@ -7,11 +7,9 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
-from kr_quant.storage import SCHEMA, read_earnings
+from kr_quant.storage import connect, read_earnings
 
 FIRST = ("000020", "2026Q1", "2026-05-15", "2026-05-15", 100.0, 90.0, 1.0, 1.0, 1.0, 1.0)
 RESTATED = ("000020", "2026Q1", "2026-05-15", "2026-08-13", 111.0, 90.0, 1.0, 1.0, 1.0, 1.0)
@@ -20,9 +18,7 @@ OTHER = ("000030", "2026Q1", "2026-05-16", "2026-05-16", 200.0, 180.0, 1.0, 1.0,
 
 @pytest.fixture
 def con():
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
+    c = connect(":memory:")   # row_factory + init_db(SCHEMA) 까지 해준다
     c.executemany("INSERT INTO earnings VALUES (?,?,?,?,?,?,?,?,?,?)", [FIRST, RESTATED, OTHER])
     yield c
     c.close()
