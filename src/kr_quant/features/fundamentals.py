@@ -18,6 +18,7 @@ no DB connection, no network. Callers load the raw DART rows (see
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 # Filing lag in calendar days from period-end to public availability.
@@ -41,12 +42,31 @@ def available_date(period_end: pd.Timestamp | str, *, is_annual: bool) -> pd.Tim
     return pd.Timestamp(period_end) + pd.Timedelta(days=lag)
 
 
+def _asof_yoy(ea: pd.DataFrame, dates: pd.Series, value_col: str) -> pd.DataFrame:
+    """code 별 backward as-of 조인 — (code, date, yoy, age_days) 롱 프레임."""
+    frames: list[pd.DataFrame] = []
+    right_template = pd.DataFrame({"date": dates})
+    for code, g in ea.groupby("code", sort=False):
+        merged = pd.merge_asof(
+            right_template, g.rename(columns={value_col: "yoy"})[["_avail", "yoy"]],
+            left_on="date", right_on="_avail", direction="backward",
+        )
+        merged["code"] = code
+        merged["age_days"] = (merged["date"] - merged["_avail"]).dt.days
+        frames.append(merged[["code", "date", "yoy", "age_days"]])
+    if not frames:
+        return pd.DataFrame(columns=["code", "date", "yoy", "age_days"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def earnings_yoy_panel(
     earnings: pd.DataFrame,
     trading_dates: list[str],
     *,
     avail_col: str = "avail_date",
     value_col: str = "yoy",
+    knowledge_col: str | None = None,
+    key_cols: tuple[str, ...] = ("code", "period"),
 ) -> pd.DataFrame:
     """Build a lookahead-safe (code × date) panel of the latest available YoY.
 
@@ -63,28 +83,90 @@ def earnings_yoy_panel(
             over — typically ``sorted(daily_bars["date"].unique())``.
         avail_col: Availability-date column name.
         value_col: Signal column name to forward-fill from each filing.
+        knowledge_col: 정정공시 버전 컬럼(보통 ``knowledge_date``). 주면 **이중
+            시간축(bitemporal)** 으로 판단한다 — 어느 분기가 공시됐나(``avail_col``)와
+            그 분기의 어느 버전을 그때 알고 있었나(``knowledge_col``)는 서로 독립인
+            축이라, 하나의 스칼라 as-of 로는 표현되지 않는다.
+
+            생략하면 기존 동작 그대로다(입력에 버전이 하나뿐이라고 가정). 발표 수치와
+            ``tests/test_parity_pead.py`` 가 그 경로에 고정돼 있다.
+        key_cols: 버전을 묶는 키. ``knowledge_col`` 을 줄 때만 쓰인다.
 
     Returns:
         Long DataFrame with columns ``code``, ``date`` (from ``trading_dates``),
         ``yoy`` (latest available value, ``NaN`` before a code's first filing),
         and ``age_days`` (calendar days since that filing became available — the
         PEAD "freshness", used to isolate the post-announcement drift window).
+
+    Note:
+        **왜 ``max(avail, knowledge)`` 로 정렬하면 안 되는가.** 그러면 "2024Q4를 이미
+        아는 상태에서 2020Q1이 정정된" 경우 정정본의 valid_from 이 더 커서, 옛 분기를
+        최신 신호로 집는다. 그래서 버전이 바뀌는 시점으로 타임라인을 쪼개고, 각 구간
+        안에서는 그때 알던 스냅샷으로 기존 as-of 조인을 돌린다. 정정이 없으면 구간이
+        하나뿐이라 기존 경로와 완전히 동일하다.
     """
     dates = pd.to_datetime(pd.Series(sorted(trading_dates), name="date"))
-    ea = earnings[["code", avail_col, value_col]].copy()
+
+    cols = ["code", avail_col, value_col]
+    if knowledge_col is not None:
+        cols += [c for c in (*key_cols, knowledge_col) if c not in cols]
+    ea = earnings[cols].copy()
     ea["_avail"] = pd.to_datetime(ea[avail_col].astype(str).str.replace("-", ""), format="%Y%m%d")
     ea = ea.dropna(subset=["_avail", value_col]).sort_values("_avail")
 
-    frames: list[pd.DataFrame] = []
-    right_template = pd.DataFrame({"date": dates})
-    for code, g in ea.groupby("code", sort=False):
-        merged = pd.merge_asof(
-            right_template, g.rename(columns={value_col: "yoy"})[["_avail", "yoy"]],
-            left_on="date", right_on="_avail", direction="backward",
-        )
-        merged["code"] = code
-        merged["age_days"] = (merged["date"] - merged["_avail"]).dt.days
-        frames.append(merged[["code", "date", "yoy", "age_days"]])
+    if knowledge_col is None:
+        out = _asof_yoy(ea, dates, value_col)
+        if not out.empty:
+            out["date"] = out["date"].dt.strftime("%Y-%m-%d")
+        return out
+
+    ea["_know"] = pd.to_datetime(
+        ea[knowledge_col].astype(str).str.replace("-", ""), format="%Y%m%d")
+    ea = ea.dropna(subset=["_know"])
+    # 이 행을 실제로 쓸 수 있게 된 날. 늦게 수집된 공시(_know > _avail)도 여기서 걸린다.
+    ea["_valid_from"] = ea[["_avail", "_know"]].max(axis=1)
+
+    keys = list(key_cols)
+    n_versions = ea.groupby(keys, sort=False)["_know"].transform("size")
+    # "평범한" 행 = 버전이 하나뿐이고 공시일에 알게 된 것. 이런 행만 있으면 knowledge
+    # 제약이 avail 제약에 포함되므로 구간을 쪼갤 이유가 없다.
+    plain = (n_versions == 1) & (ea["_know"] <= ea["_avail"])
+    events = sorted(ea.loc[~plain, "_valid_from"].unique())
+
+    if not events:
+        out = _asof_yoy(ea, dates, value_col)
+        if not out.empty:
+            out["date"] = out["date"].dt.strftime("%Y-%m-%d")
+        return out
+
+    bounds = [dates.min()] + [e for e in events if dates.min() < e <= dates.max()]
+    frames = []
+    for i, lo in enumerate(bounds):
+        hi = bounds[i + 1] if i + 1 < len(bounds) else None
+        seg = dates[(dates >= lo) & ((dates < hi) if hi is not None else True)]
+        if seg.empty:
+            continue
+        # 구간 안에서 버전 선택이 필요한 건 **버전이 여럿이거나 늦게 수집된 키**뿐이다.
+        # 평범한 행은 _know == _avail 이라 버전 제약이 분기 제약과 같으므로, 구간 시작
+        # 시점으로 거르면 구간 *안에서* 공시되는 최신 분기까지 잘려나간다 — 정정 하나가
+        # 무관한 과거 날짜의 값을 바꿔버린다(실측으로 잡음). 그래서 평범한 행은 전부
+        # 넘기고 날짜별 게이팅은 아래 merge_asof 에 맡긴다.
+        versioned = ea[~plain]
+        versioned = versioned[versioned["_know"] <= seg.iloc[0]]
+        if not versioned.empty:
+            versioned = versioned.sort_values("_know").drop_duplicates(subset=keys, keep="last")
+        known = pd.concat([ea[plain], versioned], ignore_index=True)
+        seg = seg.reset_index(drop=True)
+        if known.empty:
+            # 아직 아무 공시도 모르는 구간. 행을 빼면 안 된다 — 기본 경로는 첫 공시
+            # 이전 날짜에도 yoy=NaN 행을 남기고, 하류 패널이 그 자리를 기대한다.
+            frames.append(pd.DataFrame({
+                "code": np.repeat(ea["code"].unique(), len(seg)),
+                "date": np.tile(seg.to_numpy(), ea["code"].nunique()),
+                "yoy": np.nan, "age_days": np.nan,
+            }))
+            continue
+        frames.append(_asof_yoy(known.sort_values("_avail"), seg, value_col))
 
     if not frames:
         return pd.DataFrame(columns=["code", "date", "yoy", "age_days"])

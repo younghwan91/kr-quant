@@ -78,8 +78,11 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     ``yoy_panel`` is the lookahead-safe long panel from ``earnings_yoy_panel``.
     """
     con = connect(db_default())
-    # 정정공시 버전 중 최신 1건만 — 그냥 SELECT 하면 (code, period)가 중복된다.
-    ea = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"))
+    # 정정공시 버전을 **전부** 받아 earnings_yoy_panel 이 날짜별로 고르게 한다.
+    # 여기서 한 버전으로 접으면(read_earnings 기본값) 최신 정정본이 과거 날짜 셀에
+    # 들어가 조용한 룩어헤드가 된다.
+    ea = read_earnings(con, all_versions=True, cols=(
+        "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
     prices = pd.read_sql_query(
         f"SELECT code, date, close, trade_value FROM {PRICE_TABLE}", con  # noqa: S608 — trusted constant
     )
@@ -93,7 +96,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)
     dates = sorted(prices["date"].unique())
-    yoy_panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates)
+    yoy_panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates,
+                                   knowledge_col="knowledge_date")
     return prices, yoy_panel
 
 

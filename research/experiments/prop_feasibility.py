@@ -74,8 +74,11 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
         f"SELECT code, date, open, high, low, close, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — trusted constant
         con,
     )
-    # 정정공시 버전 중 최신 1건만 — 그냥 SELECT 하면 (code, period)가 중복된다.
-    ea = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"))
+    # 정정공시 버전을 **전부** 받아 earnings_yoy_panel 이 날짜별로 고르게 한다.
+    # 여기서 한 버전으로 접으면(read_earnings 기본값) 최신 정정본이 과거 날짜 셀에
+    # 들어가 조용한 룩어헤드가 된다.
+    ea = read_earnings(con, all_versions=True, cols=(
+        "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
     con.close()
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)
@@ -168,11 +171,12 @@ def pead_entries(prices: pd.DataFrame, earnings: pd.DataFrame, p: dict) -> list[
     On each rebalance date (every PEAD_STEP trading days from PEAD_START_INDEX),
     among ADV-eligible names with a fresh (as-of) earnings YoY surprise, take the
     top-PEAD_TOP_N by surprise. Each pick = one entry. Reuses the validated
-    lookahead-safe ``earnings_yoy_panel`` (avail_date-gated) exactly as
-    pead_refinement does.
+    lookahead-safe ``earnings_yoy_panel`` (avail_date + knowledge_date 이중 시간축)
+    exactly as pead_refinement does.
     """
     dates = p["dates"]
-    yoy_panel = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), dates)
+    yoy_panel = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), dates,
+                                   knowledge_col="knowledge_date")
     yoy = (yoy_panel.pivot_table(index="date", columns="code", values="yoy", aggfunc="first")
            .reindex(index=dates))
     adv = p["adv"]

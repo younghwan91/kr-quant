@@ -284,7 +284,8 @@ _EARNINGS_READ_COLS = (
 )
 
 
-def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None):
+def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None,
+                  all_versions: bool = False):
     """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
 
     ``earnings`` is versioned: a DART restatement lands as a new row keyed by
@@ -295,16 +296,30 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
 
     Args:
         con: Open connection (sqlite3 or psycopg2).
-        asof: Ceiling on ``knowledge_date`` — the backtest's "today". ``None``
-            means latest-known, which is **not** point-in-time: only pass ``None``
-            for live/screening use, never inside a historical backtest.
+        asof: Ceiling on ``knowledge_date`` — a single instant. ``None`` means
+            latest-known.
         cols: Columns to return (default :data:`_EARNINGS_READ_COLS`).
+        all_versions: 접지 말고 모든 버전을 그대로 준다(``knowledge_date`` 포함).
+
+            **백테스트는 이쪽을 써야 한다.** 스칼라 ``asof`` 는 "한 시점 기준"만
+            표현할 수 있는데, 백테스트가 필요한 건 "각 바 t 시점 기준"이다. 버전
+            선택은 날짜별로 달라져야 하므로 읽는 단계가 아니라
+            :func:`kr_quant.features.fundamentals.earnings_yoy_panel` 의
+            ``knowledge_col`` 로 넘겨 as-of 조인에 함께 태운다.
+
+            ``asof`` 없이 접어서 쓰면(기본값) 최신 정정본이 과거 날짜 셀에 들어가
+            조용한 룩어헤드가 된다 — 터지지 않고 성과만 좋아지는 종류다.
 
     Returns a pandas DataFrame.
     """
     import pandas as pd
 
     sel = ", ".join(cols or _EARNINGS_READ_COLS)
+    if all_versions:
+        if asof is not None:
+            raise ValueError("all_versions 와 asof 는 함께 쓸 수 없다 — "
+                             "버전 선택을 날짜별로 하려고 전부 넘기는 것이다")
+        return pd.read_sql_query(f"SELECT {sel} FROM earnings", con)  # noqa: S608 — 모듈 상수
     if _is_pg(con):
         where = "WHERE knowledge_date <= %s " if asof else ""
         sql = (  # noqa: S608 — column names come from a module constant, not user input

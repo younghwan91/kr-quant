@@ -114,13 +114,15 @@
    주간 DAG로 재발을 막았다. 폐지 손실 실현은 `staggered_tranche_backtest(delisting_exit=True)`
    로 선택 가능(기본 False — 발표 수치·패리티 테스트 보존). 남은 공백은 **유니버스 빌더가
    그걸 쓰도록 강제하는 규칙**이 여전히 없다는 것. 상장주식수·수급은 아직 폐지분이 비어 있다.
-3. **정정공시 룩어헤드 (2026-08-15 신규 식별).** `read_earnings(asof=...)` 는 만들었지만
-   두 PEAD 러너(`pead_refinement.load_data`, `prop_feasibility.load_data`)가 `asof` 없이
-   호출한다 — 최신 버전을 받아 과거 날짜 셀에 넣는다는 뜻이다. 현재 DB 에 정정본이 0건이라
-   실害(實害)는 없으나, 첫 정정공시가 들어오는 순간 조용한 룩어헤드가 된다. `asof` 는 스칼라라
-   "각 바 t 시점" 을 표현할 수 없는 게 근본 원인 — 제대로 된 자리는
-   `features.fundamentals.earnings_yoy_panel` 의 `merge_asof` 에 `knowledge_date <= date` 를
-   함께 태우는 것이다. (raw `SELECT ... FROM earnings` 금지는 `check_guardrails.py` 로 강제됨.)
+3. ~~**정정공시 룩어헤드**~~ **— 2026-08-15 해소.** `earnings_yoy_panel(knowledge_col=...)`
+   이 **이중 시간축**으로 판단한다: 어느 분기가 공시됐나(`avail_date`)와 그 분기의 어느
+   버전을 그때 알고 있었나(`knowledge_date`)는 독립인 축이라 스칼라 as-of 로는 표현되지
+   않는다. 버전이 바뀌는 시점으로 타임라인을 쪼개고 각 구간에서 그때 알던 스냅샷으로
+   as-of 조인을 돌린다. 두 PEAD 러너를 `read_earnings(all_versions=True)` + 이 경로로
+   전환했다. `knowledge_col` 을 안 주면 기존 동작 그대로라 발표 수치·패리티는 불변이고,
+   실제로 현 DB(정정본 0건)에서 수치가 소수점까지 동일함을 확인했다.
+   구현 중 두 번 틀렸고(둘 다 "정정 하나가 무관한 과거 날짜를 바꾼다") 그 두 반례를
+   `tests/test_earnings_bitemporal.py` 에 못박았다.
 4. **`source` 가 `daily_bars_adjusted` 에 전파되지 않음.** 폐지 종목 행의 `trade_value` 는
    `close×volume` 근사치인데, 백테스트가 읽는 테이블은 조정가 테이블이고 거기엔 `source`
    컬럼이 없다. ADV 문턱이 전적으로 `trade_value` 로 돌아가므로, 근사치라는 사실이
