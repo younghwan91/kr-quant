@@ -123,12 +123,17 @@ def main() -> int:
     print(f"  그중 폐지분: 시세 {len(in_data)}종목 / 실적신호 {len(with_sig)}종목\n")
 
     results = {}
-    for label, keep in (("full (폐지 포함)", None), ("survivors (폐지 제외)", dl)):
+    arms = (
+        ("full (폐지 포함)", None, False),
+        ("survivors (폐지 제외)", dl, False),
+        ("full + 폐지수익 반영", None, True),
+    )
+    for label, drop, dex in arms:
         p, y = prices, yoy
-        if keep is not None:
-            p = prices[~prices["code"].isin(keep)]
-            y = yoy[~yoy["code"].isin(keep)]
-        _, s = staggered_backtest(p, y, **BASELINE)
+        if drop is not None:
+            p = prices[~prices["code"].isin(drop)]
+            y = yoy[~yoy["code"].isin(drop)]
+        _, s = staggered_backtest(p, y, delisting_exit=dex, **BASELINE)
         results[label] = s
         print(f"{label:24} {_fmt(s)}")
 
@@ -149,10 +154,15 @@ def main() -> int:
     print(f"  벤치 차이 {(df['bench'] - ds['bench'])*100:+.3f}%p"
           f"   (유니버스가 실제로 얼마나 나빴는지)")
     print(f"  초과 차이 {(df['excess'] - ds['excess'])*100:+.3f}%p")
+    c = results["full + 폐지수익 반영"]
+    print("\n=== 폐지수익 반영 효과 (full 기준) ===")
+    for k in ("sharpe", "t_stat", "cum_net"):
+        print(f"  {k:9} {b[k]:+.4f} -> {c[k]:+.4f}   차이 {c[k] - b[k]:+.4f}")
+
     print("\n※ 읽는 법: PEAD 는 '유니버스 대비 초과수익'이다. 생존편향은 전략보다"
           "\n  벤치마크를 더 크게 왜곡하므로, 폐지 종목을 빼면 초과수익이 *과소* 측정된다."
-          "\n※ 보유중소멸 = 보유 기간에 가격이 끊긴 포지션. nanmean 이 조용히 빼므로"
-          "\n  폐지 시점 손실이 반영되지 않는다 — 이 수가 크면 위 숫자는 낙관 편향이다.")
+          "\n※ 보유중소멸 = 보유 기간에 가격이 끊긴 포지션. delisting_exit 를 끄면"
+          "\n  nanmean 이 그 종목을 빼서 폐지 손실이 북·벤치 양쪽에서 누락된다.")
     return 0
 
 

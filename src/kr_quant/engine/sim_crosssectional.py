@@ -130,6 +130,7 @@ def staggered_tranche_backtest(
     min_names: int = 20,
     cap_array: np.ndarray | None = None,
     cap_rank: tuple[int, int] | None = None,
+    delisting_exit: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """Long-only excess with staggered entry — the recommended real-money form.
 
@@ -138,6 +139,23 @@ def staggered_tranche_backtest(
         dates: date labels aligned to the panels' columns.
         cap_array: ``code × date`` market-cap panel (numpy), or ``None``.
         cap_rank: ``(lo, hi)`` cap-rank tier to restrict to, paired with ``cap_array``.
+        delisting_exit: 보유 기간에 상장폐지된 종목의 손실을 반영할지.
+
+            기본 ``False`` 는 기존 동작이다: 수익률이
+            ``C[:, t+step] / C[:, t] - 1`` 이므로 폐지 후 가격이 NaN 이 되고,
+            ``np.nanmean`` 이 그 종목을 **조용히 빼버린다**. 즉 폐지 종목은 살아
+            있는 동안 상승에는 기여하고 죽을 때는 비용 없이 사라진다 — 북과
+            벤치마크 양쪽을 낙관 쪽으로 왜곡한다.
+
+            ``True`` 면 마지막 관측 종가(정리매매 종료가)로 청산한 것으로 본다.
+            한국 시장은 상장폐지 전 정리매매(보통 7거래일)가 있어 보유자가 실제로
+            그 가격대에 빠져나올 수 있으므로, 임의의 상수(-30% 등)를 씌우는 것보다
+            데이터에 충실하다. 다만 정리매매 자체를 못 판 경우는 반영되지 않으므로
+            이 역시 낙관 쪽 하한이다.
+
+            기본값을 바꾸지 않는 이유: 발표된 수치와 ``tests/test_parity_*.py`` 가
+            기존 동작에 고정돼 있다. 조용한 드리프트를 만들지 않고, 켠 값과 끈 값을
+            나란히 보고하는 게 이 레포의 규율이다(GUARDRAILS §8).
 
     See :func:`kr_quant.strategies.pead.staggered_backtest` for the semantics.
     """
@@ -150,6 +168,10 @@ def staggered_tranche_backtest(
         adv[:, j] = np.nanmean(V[:, j - adv_window:j], axis=1)
     n_tranches = max(1, horizon // step)
     capm = cap_array
+
+    # 폐지 청산가: 각 시점까지의 마지막 관측 종가(행 방향 forward-fill).
+    # delisting_exit 가 꺼져 있으면 만들지 않는다(메모리·시간 낭비 방지).
+    C_ff = pd.DataFrame(C).ffill(axis=1).to_numpy(float) if delisting_exit else None
 
     def eligible(t: int) -> np.ndarray:
         ok = np.isfinite(sig_m[:, t]) & (adv[:, t] >= adv_floor)
@@ -177,6 +199,11 @@ def staggered_tranche_backtest(
         if uni.size < min_names:
             continue
         ret = C[:, t + step] / C[:, t] - 1.0
+        if C_ff is not None:
+            # 진입 시점엔 가격이 있었는데 청산 시점에 없는 종목 = 보유 중 상장폐지.
+            # 마지막 관측가로 청산 처리해 손실을 실현시킨다(안 그러면 nanmean 이 뺀다).
+            gone = np.isfinite(C[:, t]) & ~np.isfinite(C[:, t + step])
+            ret[gone] = C_ff[gone, t + step] / C[gone, t] - 1.0
         bench = float(np.nanmean(ret[uni]))
         tranche_excess = []
         for k in range(n_tranches):

@@ -125,6 +125,7 @@ def staggered_backtest(
     min_names: int = 20,
     cap_panel: pd.DataFrame | None = None,
     cap_rank: tuple[int, int] | None = None,
+    delisting_exit: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """Long-only excess with **staggered entry** — the recommended real-money form.
 
@@ -160,7 +161,7 @@ def staggered_backtest(
     return staggered_tranche_backtest(
         C, V, sig_m, dates, horizon=horizon, step=step, top_n=top_n, adv_floor=adv_floor,
         adv_window=adv_window, start_index=start_index, min_names=min_names,
-        cap_array=capm, cap_rank=cap_rank)
+        cap_array=capm, cap_rank=cap_rank, delisting_exit=delisting_exit)
 
 
 def pead_rank_ic(
