@@ -133,12 +133,39 @@ def check_no_raw_earnings_select() -> list[str]:
     return out
 
 
+# (e) *_gate.py 는 prop_gate 에 config= 를 넘겨 다중검정 원장에 시행을 남겨야 한다.
+# 안 넘기면 DSR/t-haircut 이 계산되지 않고, 두 번째 config 를 조용히 돌려도 아무도
+# 못 잡는다(GUARDRAILS §4 공백 5). 이 레포에서 반복된 "기능은 있고 쓰는 쪽이 안 씀"을
+# 코드로 막는다.
+_PROP_GATE_CALL = re.compile(r"\bprop_gate\s*\(")
+_HAS_CONFIG_ARG = re.compile(r"\bconfig\s*=")
+
+
+def check_gates_record_trials() -> list[str]:
+    """(e) prop_gate 를 호출하는 *_gate.py 는 config= 를 함께 넘겨야 한다."""
+    out = []
+    for p in sorted(EXPERIMENTS.glob("*_gate.py")):
+        stem = p.stem
+        if stem in GATE_EXEMPT:
+            continue
+        text = p.read_text(encoding="utf-8")
+        if not _PROP_GATE_CALL.search(text) or _HAS_CONFIG_ARG.search(text):
+            continue
+        rel = p.relative_to(REPO)
+        out.append(
+            f"[trials] {rel} — prop_gate 에 config= 를 안 넘겼다. 사전등록 config 를 "
+            f"넘겨야 다중검정 원장(TRIALS.jsonl)에 시행이 남고 DSR 이 계산된다."
+        )
+    return out
+
+
 def main() -> int:
     violations: list[str] = []
     violations += check_src_no_research_import()
     violations += check_gates_have_verdict()
     violations += check_no_literal_verdict()
     violations += check_no_raw_earnings_select()
+    violations += check_gates_record_trials()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

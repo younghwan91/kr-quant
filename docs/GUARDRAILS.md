@@ -135,8 +135,15 @@
    식별할 수 있다 — ADV 문턱(`ADV_FLOOR`, `adv_floor`)이 전적으로 `trade_value` 로
    돌기 때문에 필요한 정보다. 전파가 끊기면 조용히 DEFAULT `'kiwoom'` 으로 채워져
    근사치가 실측치처럼 보이므로 `tests/test_price_adjust.py` 에 회귀 테스트를 뒀다.
-5. **다중검정 원장·DSR 부재** — 사전등록이 마크다운 관례뿐. 시도 config 수를 세는 원장도, Deflated
-   Sharpe도 없다. 첫 config 실패 후 조용히 두 번째를 돌려도 아무도 못 잡는다.
+5. ~~**다중검정 원장·DSR 부재**~~ **— 2026-08-15 해소.** DSR·t-haircut 은 `gate_report`
+   에 이미 있었으나 **어떤 게이트도 `n_trials` 를 넘기지 않아 한 번도 계산되지 않았다**
+   (이 레포 네 번째 "기능은 있고 쓰는 쪽이 안 씀"). 빠진 조각은 N 을 **어디서 가져오느냐**
+   였다 — 손으로 적으면 부탁이지 규율이 아니다.
+   `kr_quant.diagnostics.trials` 원장 신설: `prop_gate(config=..., log_dir=...)` 이
+   사전등록 config 를 `research/logs/<alpha>/TRIALS.jsonl` 에 append 하고 N 을 거기서
+   읽는다. config 지문으로 중복 제거해 **재실행은 시행으로 안 센다**(시행 = 다르게 시도한
+   횟수). label 별 원장이라 음성대조(`rand`)가 실제 셋업 N 을 오염시키지 않는다.
+   `check_guardrails.py` 규칙 (e) 가 `*_gate.py` 의 `config=` 누락을 CI 에서 막는다.
 6. **음성대조·비용스윕이 prop_gate 전용** — `research/TEMPLATE.md` 표준 파이프라인엔 음성대조가 없다.
    TEMPLATE만 따르는 새 연구자는 널 대조를 안 만들 수 있다.
 7. **R분포/fragility 포함이 문화적** — 새 스크립트가 복리 자본곡선만 보고해도 아무도 안 막는다.
@@ -150,8 +157,9 @@
 1. **purge/embargo** → `walkforward.rolling_folds(..., embargo_days=..., max_hold=...)`에 파라미터 추가.
    폴드 경계에서 `max_hold`만큼 진입을 purge하고 embargo 완충. 테스트 추가.
 2. **생존편향** → 유니버스 빌더에 "상장폐지 종목 + 종료수익 포함, cap_rank는 PIT" 규칙. 위반 시 assert.
-3. **다중검정 원장** → 실험이 `trials_tried`를 기록하게 하고 `gate_report(..., n_trials=)`가 **Deflated
-   Sharpe / t-haircut 필드**를 반환. (리포터 원칙 유지 — 판정 아닌 숫자.)
+3. ~~**다중검정 원장**~~ **완료** → `diagnostics.trials` 원장 + `prop_gate(config=)` 자동 기록,
+   `gate_report(..., n_trials=)` 가 Deflated Sharpe / t-haircut 필드를 반환한다.
+   (리포터 원칙 유지 — 판정 아닌 숫자.) 누락은 `check_guardrails` (e) 가 잡는다.
 4. **음성대조·비용을 표준으로** → `research/TEMPLATE.md` 파이프라인 5단계에 "음성대조 > 널"과 "비용 2배"를
    명시. 새 `*_gate.py`가 `prop_gate`를 import하도록 유도.
 5. **경계 린트** → `src/kr_quant`가 `research/`를 import하면 실패하는 간단한 검사, 모든
