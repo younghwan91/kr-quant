@@ -67,8 +67,13 @@ def load_data(db: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     from kr_quant.storage import connect, db_default, read_prices
     con = connect(db or db_default())
     prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    # individual IS NOT NULL 을 명시하는 이유: 폐지 종목 수급은 네이버에서 부분만
+    # 받아(기관·외국인) individual 이 NULL 이다. 필터가 없어도 NaN 전파로 결국
+    # 빠지지만, 그러면 "왜 폐지 종목이 이 연구에 없는가"가 코드에 안 드러난다.
+    # 이 전략은 개인 순매매가 신호 자체라 부분 데이터로는 재현할 수 없다.
     flow = pd.read_sql_query(
-        "SELECT code, date, individual, acc_trde_qty AS volume FROM supply_demand", con
+        "SELECT code, date, individual, acc_trde_qty AS volume FROM supply_demand "
+        "WHERE individual IS NOT NULL", con
     )
     con.close()
     for df in (prices, flow):

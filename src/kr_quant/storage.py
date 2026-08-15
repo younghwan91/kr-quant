@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS supply_demand (
     flu_rt       REAL,
     acc_trde_qty INTEGER,
     {_INVESTOR_COL_DDL},
+    -- kiwoom = 11개 분류 전체. naver = 폐지 종목 부분 백필(기관·외국인 순매매만,
+    -- 나머지는 NULL — 0 은 '순매매 없음'이고 NULL 은 '모름'이라 구분해야 한다).
+    -- 외국인 정의도 다르다: 네이버 값은 4개 분류 합이 0이 되도록 맞춘 수치다.
+    source       TEXT NOT NULL DEFAULT 'kiwoom',
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_sd_date ON supply_demand(date);
