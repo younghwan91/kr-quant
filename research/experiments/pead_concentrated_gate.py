@@ -365,7 +365,11 @@ def run() -> None:
     print(f"[extractor] 리밸런스 사용 {meta['n_rebalances_used']}회, "
           f"floor 제거 {meta['n_floor_removed']} → 트레이드 {len(ret)}건")
 
-    rep = prop_gate(ent, ret, PRE_STOP, label="pead_concentrated")
+    # 사전등록 config → 다중검정 원장 기록 + N 자동 산출(DSR·t-haircut 입력).
+    rep = prop_gate(ent, ret, PRE_STOP, label="pead_concentrated", log_dir=OUT_DIR, config={
+        "top_n": PRE_TOP_N, "hold": PRE_HOLD, "stop": PRE_STOP,
+        "surprise_q": PRE_SURPRISE_Q, "step": REBALANCE_STEP, "adv_floor": ADV_FLOOR,
+    })
 
     # 음성대조 — 실제 트레이드 수만큼 무작위 draw.
     ctrl = random_entry_control(ent, ret, PRE_STOP, n_per_draw=len(ret), n_draws=200, seed=7)
