@@ -62,6 +62,14 @@ _sim_core 선택/청산에 영향 없이 각 트레이드 수익에서 상수 �
 `--walkforward`(BO vs 수동 파라미터)도 함께 돌렸다: BO OOS 평균 +0.0113R, 수동 OOS
 평균 +0.0145R, BO가 수동을 이긴 폴드 1/6. 최적화 이득이 없다는 초판 서술과 일치한다.
 
+**purge/embargo 적용(2026-08-15).** θ 를 TRAIN 에서 학습하는 경로(`fold_slices`)에
+AFML §7.4 purge 를 배선했다 — 경계 직전 진입해 TEST 창에서 실현되는 트레이드가 TRAIN 에
+남아 있으면 그 라벨이 임계값에 스며든다. 보유 60거래일을 달력일로 상향(90일)해 적용.
+
+purge 는 **TRAIN 의 8.7%(3,121건 중 270건)를 실제로 걷어낸다** — 무개입이 아니다.
+그런데도 폴드일관은 **2/6 그대로**이고 사망 비용도 46bp 그대로다. 즉 이 기각은
+라벨 누출에서 온 게 아니다. `slippage_check.py` 가 purge 전/후를 나란히 보고한다.
+
 > ⚠️ 재현 스크립트가 깨져 있던 것을 이때 발견해 고쳤다 — `slippage_check.py`가
 > `research.contrarian_retail`(구 경로)을 import하고 있었다. 함수 본문 안의 import라
 > `tests/test_research_imports.py`의 모듈 레벨 스모크가 못 잡는다.

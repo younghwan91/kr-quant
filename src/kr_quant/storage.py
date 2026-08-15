@@ -213,7 +213,32 @@ def connect(db_path: str | Path | None = None) -> Any:
     return con
 
 
+# 기존 sqlite 파일에 나중에 추가된 컬럼 — {테이블: [(컬럼, DDL 조각)]}.
+# ``CREATE TABLE IF NOT EXISTS`` 는 이미 있는 테이블을 고치지 않으므로, 마이그레이션
+# 이전에 만들어진 로컬 DB 는 컬럼이 없는 채로 남는다. 그 상태에서 새 인덱스
+# (idx_earnings_asof 는 knowledge_date 를 참조)를 만들면 init_db 가 통째로 죽는다 —
+# Postgres 없이 쓰는 경로가 막힌다(실측). Postgres 쪽은 sql/migrations/ 가 담당한다.
+_SQLITE_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "earnings": [("knowledge_date", "TEXT")],
+    "daily_bars": [("source", "TEXT NOT NULL DEFAULT 'kiwoom'")],
+    "daily_bars_adjusted": [("source", "TEXT NOT NULL DEFAULT 'kiwoom'")],
+}
+
+
+def _add_missing_columns(con: sqlite3.Connection) -> None:
+    """기존 파일에 빠진 컬럼을 채운다. 새 파일에는 no-op."""
+    for table, cols in _SQLITE_ADDED_COLUMNS.items():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # noqa: S608 — 모듈 상수
+        if not have:
+            continue                      # 테이블 자체가 없다 = 새 DB, SCHEMA 가 만든다
+        for name, ddl in cols:
+            if name not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")  # noqa: S608 — 모듈 상수
+    con.commit()
+
+
 def init_db(con: sqlite3.Connection) -> None:
+    _add_missing_columns(con)
     con.executescript(SCHEMA)
     con.commit()
 

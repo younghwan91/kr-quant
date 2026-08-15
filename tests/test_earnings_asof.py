@@ -64,3 +64,30 @@ def test_unversioned_key_is_unaffected_by_asof(con):
     for asof in (None, "2026-06-01", "2026-08-13"):
         df = read_earnings(con, asof=asof)
         assert float(df.loc[df["code"] == "000030", "netinc"].iloc[0]) == 200.0
+
+
+def test_init_db_upgrades_a_pre_migration_sqlite_file(tmp_path):
+    """마이그레이션 이전에 만들어진 로컬 sqlite 파일도 열려야 한다.
+
+    ``CREATE TABLE IF NOT EXISTS`` 는 기존 테이블을 고치지 않으므로 컬럼이 없는 채로
+    남는데, 새 인덱스(idx_earnings_asof)가 knowledge_date 를 참조해 init_db 가 통째로
+    죽었다 — Postgres 없이 쓰는 경로가 막힌다(실측).
+    """
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE earnings (code TEXT, period TEXT, avail_date TEXT, netinc REAL,
+                               PRIMARY KEY (code, period));
+        CREATE TABLE daily_bars (code TEXT, date TEXT, close INTEGER,
+                                 PRIMARY KEY (code, date));
+    """)
+    old.commit()
+    old.close()
+
+    con = connect(path)          # init_db 가 여기서 죽으면 안 된다
+    for table, col in (("earnings", "knowledge_date"), ("daily_bars", "source")):
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        assert col in cols, f"{table}.{col} 가 채워져야 한다"
+    con.close()

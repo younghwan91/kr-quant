@@ -18,6 +18,8 @@ from kr_quant.validation import (
     fold_slices,
     oos_fixed,
     purge_embargo,
+    fold_consistency,
+    Fold,
     rolling_folds,
     sensitivity_table,
     slice_by_entry,
@@ -196,3 +198,60 @@ def test_sensitivity_table_shape():
     # 각 행에 train/oos stat dict
     for r in rows:
         assert "expectancy" in r["train"] and "n" in r["oos"]
+
+
+# --- fold_slices 의 purge 배선 ---------------------------------------------
+#
+# purge_embargo 는 오래 전부터 있었지만 **아무 러너도 호출하지 않았다**(GUARDRAILS §4
+# 공백 1). θ 를 TRAIN 에서 학습하는 fold_slices 가 그게 필요한 자리다 — 경계 직전
+# 진입해 TEST 창에서 실현되는 트레이드가 TRAIN 에 남으면 라벨이 θ 로 스며든다.
+
+def _purge_fixture():
+    """TRAIN 경계(2022-01-01) 직전 진입 + 장기 보유 트레이드를 섞은 폴드."""
+    fold = Fold("2019-01-01", "2022-01-01", "2022-01-01", "2023-01-01")
+    entry = np.array(
+        ["2019-06-01"] * 40          # TRAIN 깊숙이 — 항상 남는다
+        + ["2021-12-20"] * 10        # TRAIN 이지만 보유하면 TEST 로 넘어간다
+        + ["2022-06-01"] * 20        # TEST
+    )
+    feature = np.concatenate([np.full(40, 1.0), np.full(10, 9.0), np.full(20, 1.0)])
+    value = np.concatenate([np.full(40, 0.1), np.full(10, 5.0), np.full(20, 0.2)])
+    return fold, entry, feature, value
+
+
+def test_fold_slices_purges_labels_that_spill_into_test():
+    fold, entry, feature, value = _purge_fixture()
+
+    plain = fold_slices(entry, feature, value, fold, 0.2, min_train=10)
+    purged = fold_slices(entry, feature, value, fold, 0.2, min_train=10, max_hold=30)
+    assert plain is not None and purged is not None
+
+    # 경계 직전 트레이드가 feature=9 로 θ 를 끌어올린다. purge 하면 사라져야 한다.
+    assert purged[0] < plain[0], "purge 후 θ 가 낮아져야 한다(누출 표본 제거)"
+
+
+def test_fold_slices_purge_never_shrinks_the_test_slice():
+    """OOS 지표는 절대 건드리지 않는다 — purge 는 TRAIN 에서만 뺀다."""
+    fold, entry, feature, value = _purge_fixture()
+    plain = fold_slices(entry, feature, value, fold, 0.2, min_train=10)
+    purged = fold_slices(entry, feature, value, fold, 0.2, min_train=10,
+                         max_hold=30, embargo_days=60)
+    np.testing.assert_array_equal(plain[1], purged[1])   # base(TEST 전체) 동일
+
+
+def test_fold_slices_without_purge_args_is_unchanged():
+    """기본 경로 무개입 — 발표 수치가 여기 고정돼 있다."""
+    fold, entry, feature, value = _purge_fixture()
+    a = fold_slices(entry, feature, value, fold, 0.2, min_train=10)
+    b = fold_slices(entry, feature, value, fold, 0.2, min_train=10,
+                    exit_dates=None, max_hold=None, embargo_days=0)
+    assert a[0] == b[0]
+    np.testing.assert_array_equal(a[1], b[1])
+    np.testing.assert_array_equal(a[2], b[2])
+
+
+def test_fold_consistency_forwards_purge_args():
+    fold, entry, feature, value = _purge_fixture()
+    out = fold_consistency(entry, feature, value, [fold], 0.2,
+                           min_train=10, min_sel=1, max_hold=30)
+    assert out["valid"] == 1, "purge 후에도 폴드가 유효해야 한다"

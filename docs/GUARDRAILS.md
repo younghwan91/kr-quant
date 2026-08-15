@@ -107,8 +107,14 @@
 - 비용 스윕 + `cost_edge_dies`, 음성대조(`random_entry_control`), 손안댄창, plateau 민감도 (`prop_gate.py`)
 
 **최우선 공백 (수동 → 코드로 승격 대상):**
-1. **purge/embargo 부재** — `rolling_folds`는 `train_hi == test_lo`로 인접. 보유기간 트레이드가 진입일론
-   TRAIN인데 실현은 TEST 안 → 라벨 누출. 가장 방어 어려운 열린 누출.
+1. ~~**purge/embargo 부재**~~ **— 2026-08-15 해소.** `purge_embargo()` 는 전부터 있었으나
+   **아무 러너도 호출하지 않았다**(이 레포의 반복 패턴: 기능은 있고 쓰는 쪽이 안 씀).
+   누출이 실제로 생기는 자리는 TRAIN 에서 무언가를 *학습*하는 경로 — `fold_slices`
+   (θ 학습) 와 `walk_forward`(fit) 다. `prop_gate` 는 고정 R 을 TEST 구간별로 자를 뿐이라
+   해당 없음. `fold_slices`/`fold_consistency` 에 `exit_dates`/`max_hold`/`embargo_days`
+   를 배선하고 `slippage_check.py` 가 purge 전/후를 나란히 보고하게 했다.
+   실측: purge 가 TRAIN 의 8.7%(270/3,121)를 걷어내지만 역발상 판정은 2/6·46bp 사망으로
+   불변 — **기각이 라벨 누출에서 온 게 아님이 확인됐다.** 인자를 안 주면 기존 동작 그대로.
 2. ~~**생존편향 가드 부재**~~ **— 데이터 층은 2026-08-15 해소, 규칙 강제는 미해결.**
    상장폐지 종목의 시세(460종목)·실적(364종목)을 백필해 `daily_bars`/`earnings`에 넣었고
    주간 DAG로 재발을 막았다. 폐지 손실 실현은 `staggered_tranche_backtest(delisting_exit=True)`

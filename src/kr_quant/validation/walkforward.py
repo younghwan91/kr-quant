@@ -236,16 +236,29 @@ def fold_slices(
     frac: float,
     *,
     min_train: int = 40,
+    exit_dates=None,
+    max_hold=None,
+    embargo_days: int = 0,
 ):
     """TRAIN에서 feature의 (1-frac) 분위 θ 학습 → TEST에 그대로 적용. look-ahead 없음.
 
     진입시점에 이미 아는 θ로 "잡을지 말지"를 정하므로 배포 가능. ``value``는 보통
     R-멀티플(수익÷손절폭). ``selective_walkforward._fold_slices`` 일반화(시그널 무관).
 
+    **여기가 purge 가 필요한 자리다.** θ 를 TRAIN 에서 *학습*하므로, 경계 직전 진입해
+    TEST 창 안에서 실현되는 트레이드가 TRAIN 에 남아 있으면 그 라벨이 θ 에 스며든다
+    (AFML §7.4). ``exit_dates`` 또는 ``max_hold`` 를 주면 :func:`purge_embargo` 로
+    그 트레이드를 TRAIN 에서 걷어낸다. 아무것도 안 주면 기존 동작 그대로다 —
+    발표 수치가 그 경로에 고정돼 있어 opt-in 으로 둔다.
+
+    TEST 슬라이스는 어떤 경우에도 줄이지 않는다(OOS 지표 불변).
+
     반환: ``(theta, base_values, selected_values)`` 또는 TRAIN 부족시 ``None``."""
     fin = np.isfinite(feature) & np.isfinite(value)
-    tr = (entry >= fold.train_lo) & (entry < fold.train_hi) & fin
-    te = (entry >= fold.test_lo) & (entry < fold.test_hi) & fin
+    mask = purge_embargo(entry, fold, exit_dates=exit_dates, max_hold=max_hold,
+                         embargo_days=embargo_days)
+    tr = mask.train & fin
+    te = mask.test & fin
     if tr.sum() < min_train:
         return None
     theta = np.quantile(feature[tr], 1.0 - frac)  # TRAIN 분위 = 고정 임계값
@@ -263,6 +276,9 @@ def fold_consistency(
     *,
     min_train: int = 40,
     min_sel: int = 15,
+    exit_dates=None,
+    max_hold=None,
+    embargo_days: int = 0,
 ) -> dict:
     """여러 fold에서 "선별이 R-분포를 굽히나"를 재현성으로 판정(결정론 아님).
 
@@ -270,11 +286,16 @@ def fold_consistency(
     베이스 기대값R. 유효폴드 중 몇 폴드에서 재현되나(부호검정 서술). 선별표본<min_sel
     이면 폴드 무효(희소성 정직 처리).
 
+    ``exit_dates``/``max_hold``/``embargo_days`` 는 :func:`fold_slices` 로 그대로
+    넘어간다(라벨 겹침 purge). 안 주면 기존 동작 그대로.
+
     반환: ``{"valid", "bent", "rows"}`` — rows는 fold별 상세 dict."""
     valid = bent = 0
     rows = []
     for f in folds:
-        fs = fold_slices(entry, feature, value, f, frac, min_train=min_train)
+        fs = fold_slices(entry, feature, value, f, frac, min_train=min_train,
+                         exit_dates=exit_dates, max_hold=max_hold,
+                         embargo_days=embargo_days)
         if fs is None:
             rows.append({"fold": f, "status": "train_short"})
             continue

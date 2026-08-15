@@ -68,15 +68,26 @@ def _base_fold_consistency(entry: np.ndarray, R: np.ndarray) -> tuple[int, int]:
     return pos, valid
 
 
-def _sel_fold_consistency(d: dict) -> tuple[int, int]:
+# 보유 상한을 **달력일**로 올린 값. PARAMS["hold"] 는 60 거래일이고 purge 는 달력일로
+# 재므로, 주말·공휴일을 감안해 넉넉히 잡는다(60 거래일 ≈ 84~88 달력일). 상향 근사가
+# 보수적인 방향이다 — 덜 걷어내는 것보다 더 걷어내는 쪽이 누출에 안전하다.
+PURGE_MAX_HOLD_DAYS = 90
+
+
+def _sel_fold_consistency(d: dict, *, purge: bool = False) -> tuple[int, int]:
     """선별(θ는 각 폴드 TRAIN서 학습) 6폴드 → (선별기대값R>0 폴드, 유효폴드).
 
     유효 = 선별표본 ≥ MIN_SEL 인 폴드(희소 폴드는 정직하게 무효 처리).
+
+    ``purge=True`` 면 TRAIN 에서 라벨이 TEST 로 넘어가는 트레이드를 걷어낸다
+    (AFML §7.4). θ 를 TRAIN 에서 학습하므로 그 트레이드가 남아 있으면 TEST 결과가
+    임계값에 스며든다. TEST 슬라이스는 변하지 않으므로 두 값을 나란히 보고한다.
     """
     pos = valid = 0
     for f in FOLDS:
         # 라이브러리 fold_slices: TRAIN서 θ 학습(모멘텀 (1-FRAC) 분위) → TEST에 적용. no-lookahead.
-        fs = fold_slices(d["entry"], d["mom"], d["ret"] / STOP, f, FRAC)
+        fs = fold_slices(d["entry"], d["mom"], d["ret"] / STOP, f, FRAC,
+                         max_hold=PURGE_MAX_HOLD_DAYS if purge else None)
         if fs is None:
             continue
         _theta, _base, sel = fs
@@ -123,13 +134,14 @@ def main() -> int:
         s = _rsummary(R[sel_mask])
         d_cost = {**d0, "ret": ret0 - cost}
         spos, sval = _sel_fold_consistency(d_cost)
+        ppos, pval = _sel_fold_consistency(d_cost, purge=True)
         print(f"  {'base':>6} {bp:>4}bp | {b['n']:>4} {b['expR']:>+7.3f} {b['win']:>5.0%} "
               f"{b['tail3']:>5.0%} {b['payoff']:>6.2f} {b['monster']:>8.0%} | "
               f"{f'{bpos}/{bval}':>14}")
         print(f"  {'선별':>6} {bp:>4}bp | {s['n']:>4} {s['expR']:>+7.3f} {s['win']:>5.0%} "
               f"{s['tail3']:>5.0%} {s['payoff']:>6.2f} {s['monster']:>8.0%} | "
-              f"{f'{spos}/{sval}':>14}")
-        verdict_rows.append((bp, b, bpos, bval, s, spos, sval))
+              f"{f'{spos}/{sval}':>14}  (purge {ppos}/{pval})")
+        verdict_rows.append((bp, b, bpos, bval, s, spos, sval, ppos, pval))
 
     # === 폴드별 상세 — 집계 양수가 한 레짐(2025~26) 아티팩트인지 폭로 ===
     print("\n=== 폴드별 base expR (재최적화 없음) — 46/100/150bp, IS=진입<2022 ===")
@@ -146,15 +158,17 @@ def main() -> int:
     # === 판정 요약 ===
     print("\n=== 판정 요약 (cost bp × {OOS expR, 폴드일관 k/6, monster%}) ===")
     print(f"  {'cost':>6} | {'base_expR':>9} {'base_k/6':>8} {'base_mon':>8} | "
-          f"{'sel_expR':>9} {'sel_k/n':>8} {'sel_mon':>8}")
-    for bp, b, bpos, bval, s, spos, sval in verdict_rows:
+          f"{'sel_expR':>9} {'sel_k/n':>8} {'sel_mon':>8} | {'purge_k/n':>9}")
+    for bp, b, bpos, bval, s, spos, sval, ppos, pval in verdict_rows:
         print(f"  {bp:>4}bp | {b['expR']:>+9.3f} {f'{bpos}/{bval}':>8} {b['monster']:>8.0%} | "
-              f"{s['expR']:>+9.3f} {f'{spos}/{sval}':>8} {s['monster']:>8.0%}")
+              f"{s['expR']:>+9.3f} {f'{spos}/{sval}':>8} {s['monster']:>8.0%} | "
+              f"{f'{ppos}/{pval}':>9}")
 
     # 엣지가 죽는 비용: OOS expR ≤ 0 이 되는 첫 비용, 또는 폴드일관이 과반 이하로
     def _dies_at(rows, exp_key):
-        for bp, b, bpos, bval, s, spos, sval in rows:
-            summ = (b, bpos, bval) if exp_key == "base" else (s, spos, sval)
+        for bp, b, bpos, bval, s, spos, sval, ppos, pval in rows:
+            summ = ((b, bpos, bval) if exp_key == "base"
+                    else (s, ppos, pval) if exp_key == "purge" else (s, spos, sval))
             st, pos, val = summ
             if not (st["expR"] > 0) or val == 0 or pos <= val / 2:
                 return bp
@@ -165,6 +179,10 @@ def main() -> int:
     print("\n  판독: expR>0 이고 폴드일관 k>유효/2 를 둘 다 만족하는 최대 비용까지 엣지 생존.")
     print(f"    base  → {'전 구간(≤150bp) 생존' if base_die is None else f'~{base_die}bp에서 사망'}")
     print(f"    선별  → {'전 구간(≤150bp) 생존' if sel_die is None else f'~{sel_die}bp에서 사망'}")
+    purge_die = _dies_at(verdict_rows, "purge")
+    print(f"    선별(purge) → "
+          f"{'전 구간(≤150bp) 생존' if purge_die is None else f'~{purge_die}bp에서 사망'}"
+          f"   ← TRAIN 에서 TEST 로 넘어가는 라벨을 걷어낸 뒤(AFML §7.4)")
     return 0
 
 
