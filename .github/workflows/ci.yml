@@ -21,7 +21,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Lint
-        run: ruff check src/ tests/ research/ scripts/
+        run: ruff check src/ tests/ research/ scripts/ examples/
       - name: Guardrails
         run: python scripts/check_guardrails.py
       - name: Test
