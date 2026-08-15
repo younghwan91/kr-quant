@@ -34,7 +34,7 @@ _context 는 종가(C)만 노출하므로 손절/청산은 **종가 기준**(장
 
 라이브러리 경계: src/kr_quant 를 수정하지 않고 research 형제 모듈만 재사용한다.
 
-실행(DB 필요): docker start kr-quant-airflow-timescaledb-1 후
+실행(DB 필요): docker start quant-airflow-timescaledb-1 후
     uv run python research/experiments/pead_concentrated_gate.py
 """
 

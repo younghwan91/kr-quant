@@ -7,7 +7,7 @@ import pytest
 from kr_quant.storage import connect
 from kr_quant.viz.supply_demand_chart import build_chart, fetch_series
 
-# Write helpers (upsert_stocks etc.) moved to kr-quant-airflow/collectors/
+# Write helpers (upsert_stocks etc.) moved to quant-airflow/collectors/
 # storage.py; this repo's storage.py is read-only, so tests insert rows with
 # raw SQL instead. Column names are INVESTOR_COLUMNS' *keys* (individual,
 # foreign_, institution, ...) — the actual DB/table columns; the dict's

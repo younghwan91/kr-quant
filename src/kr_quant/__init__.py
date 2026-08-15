@@ -1,6 +1,6 @@
 """kr-quant — Korean equity strategy/feature analysis library.
 
-Data collection lives in the kr-quant-airflow repo (collectors/), not here.
+Data collection lives in the quant-airflow repo (collectors/), not here.
 Layers:
     storage      — read-side schema helpers (connect, market_cap_asof)
     strategies/  — screeners/strategies over collected data

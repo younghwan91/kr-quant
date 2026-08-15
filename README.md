@@ -20,7 +20,7 @@
 
 > **왜 신뢰할 수 있나.** 위 규율은 부탁이 아니라 CI 린트로 강제된다 — 게이트가 공용 하버스를 안 쓰거나, 음성대조 없이 판정하거나, 시행 수를 원장에 안 남기면 빌드가 깨진다(§7).
 
-> **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터, TimescaleDB 적재)은 [quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 분리되어 있다. 본 저장소는 DB를 **읽기 전용**으로 사용한다.
+> **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터, TimescaleDB 적재)은 [quant-airflow](https://github.com/younghwan91/quant-airflow)로 분리되어 있다. 본 저장소는 DB를 **읽기 전용**으로 사용한다.
 
 ---
 
@@ -202,7 +202,7 @@ python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 
 | `short_selling` / `credit_balance` / `sector_index` | 공매도·신용잔고·업종지수 |
 | `delisted_stocks` | 상장폐지 종목 마스터. 과거 시세는 `daily_bars`에 `source='naver'`로 들어간다 |
 
-테이블 소유·마이그레이션은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)가 담당한다.
+테이블 소유·마이그레이션은 [quant-airflow](https://github.com/younghwan91/quant-airflow)가 담당한다.
 
 ## 12. 범위와 한계
 
@@ -236,7 +236,7 @@ MIT
 | **[kiwoom-rest-api](https://github.com/younghwan91/kiwoom-rest-api)** | 키움증권 REST API Python 라이브러리 — 207개 엔드포인트 + 실시간 WebSocket |
 | **[krx-fundamentals-api](https://github.com/younghwan91/krx-fundamentals-api)** | 국내 기업 펀더멘탈 REST API — 재무제표·투자지표·배당·종목 스크리닝 (DART + KRX + 네이버) |
 | **[krx-news-rest-api](https://github.com/younghwan91/krx-news-rest-api)** | 한국 주식 뉴스·공시 수집 REST API (FastAPI + Redis) |
-| **[kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)** | 시세·수급·실적을 TimescaleDB로 수집하는 Airflow 파이프라인 — **상장폐지 종목까지** 담아 생존편향을 막는다 |
+| **[quant-airflow](https://github.com/younghwan91/quant-airflow)** | 시세·수급·실적을 TimescaleDB로 수집하는 Airflow 파이프라인 — **상장폐지 종목까지** 담아 생존편향을 막는다 |
 | **[quantbox-engine](https://github.com/younghwan91/quantbox-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
 | **[opt_portfolio](https://github.com/younghwan91/opt_portfolio)** | VAA 기반 전술적 자산배분 백테스트·운용 시스템 |
 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |

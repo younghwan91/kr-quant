@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kr-quant"
 version = "0.1.0"
-description = "코스피·코스닥 알파 리서치 라이브러리 — 개별 트레이드 분포·walk-forward·음성대조를 강제하는 검증 가드레일과 정직한 부정 결과 (데이터 수집은 kr-quant-airflow)"
+description = "코스피·코스닥 알파 리서치 라이브러리 — 개별 트레이드 분포·walk-forward·음성대조를 강제하는 검증 가드레일과 정직한 부정 결과 (데이터 수집은 quant-airflow)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ pg = ["psycopg2-binary>=2.9"]
 dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8"]
 
 [project.scripts]
-# 데이터 수집 CLI(kq-collect*)는 collectors/와 함께 kr-quant-airflow로 이전됨.
+# 데이터 수집 CLI(kq-collect*)는 collectors/와 함께 quant-airflow로 이전됨.
 kq-screen = "kr_quant.strategies.accumulation:main"
 kq-backtest = "kr_quant.strategies.backtest:main"
 kq-pead = "kr_quant.strategies.pead:main"

@@ -12,7 +12,7 @@ R1(사전등록·비협상): 게이트 출력을 보기 **전에** TRAIN-only/�
 random_entry_control 을 그대로 호출한다. 결과는 research/logs/pullback_prop/VERDICT.md
 로(사람이 읽는 리포트, 코딩된 판정 없음 — R3).
 
-실행(DB 필요): docker start kr-quant-airflow-timescaledb-1 후
+실행(DB 필요): docker start quant-airflow-timescaledb-1 후
     uv run python research/experiments/pullback_prop_gate.py
 """
 

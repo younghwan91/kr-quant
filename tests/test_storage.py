@@ -1,8 +1,8 @@
 """Storage layer (read side): connect() dispatch, market_cap_asof. No network.
 
 Write-side tests (upsert idempotency, to_int/to_float, ON CONFLICT SQL) moved
-to kr-quant-airflow/tests/test_storage.py along with the upsert_* functions
-themselves — see kr-quant-airflow/collectors/storage.py.
+to quant-airflow/tests/test_storage.py along with the upsert_* functions
+themselves — see quant-airflow/collectors/storage.py.
 """
 
 from __future__ import annotations

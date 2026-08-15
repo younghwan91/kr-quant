@@ -105,6 +105,6 @@ PEAD는 유니버스 대비 **초과수익**으로 측정한다. 폐지 종목�
 ## 재현
 
 ```bash
-docker start kr-quant-airflow-timescaledb-1
+docker start quant-airflow-timescaledb-1
 uv run python research/experiments/survivorship_bias_gate.py
 ```

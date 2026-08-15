@@ -21,7 +21,7 @@
      통과 여부가 실측치 기준과 미세하게 다를 수 있다.
   따라서 여기서 나오는 편향 크기는 **실제 편향의 하한**으로 읽어야 한다.
 
-실행(DB 필요): docker start kr-quant-airflow-timescaledb-1 후
+실행(DB 필요): docker start quant-airflow-timescaledb-1 후
     uv run python research/experiments/survivorship_bias_gate.py
 """
 

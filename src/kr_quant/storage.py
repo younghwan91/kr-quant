@@ -1,7 +1,7 @@
 """Storage layer (read side) — sqlite or Postgres/TimescaleDB.
 
 Collectors (and their write-side upsert helpers) now live in
-kr-quant-airflow/collectors/storage.py — an intentionally independent copy,
+quant-airflow/collectors/storage.py — an intentionally independent copy,
 not a shared package. This module keeps only what strategies/features read:
 ``connect()``/``default_db_path()`` (also used for the local sqlite dev
 fallback) and ``market_cap_asof()``/``market_cap_asof_bulk()``.
@@ -205,7 +205,7 @@ def connect(db_path: str | Path | None = None) -> Any:
 
         con = psycopg2.connect(db_path)
         # Schema (tables, hypertables, compression policy) is provisioned by
-        # kr-quant-airflow/sql/init_timescale.sql, not here — init_db() only
+        # quant-airflow/sql/init_timescale.sql, not here — init_db() only
         # applies to the sqlite path.
         return con
 
@@ -252,12 +252,12 @@ def _is_pg(con: Any) -> bool:
 
 
 # kr_quant.price_adjust.rebuild_adjusted_table() writes daily_bars_adjusted —
-# the one write path kept here (not moved to kr-quant-airflow) because
+# the one write path kept here (not moved to quant-airflow) because
 # price_adjust.py's split-detection logic is imported in-process by the backtest
 # strategies, so the module as a whole stays in kr-quant;
 # weekly_price_adjust.py's DAG task still invokes it via
 # `python -m kr_quant.price_adjust --rebuild-db` (PYTHONPATH-based, no pip
-# install needed) rather than through kr-quant-airflow/collectors.
+# install needed) rather than through quant-airflow/collectors.
 DAILY_BAR_COLUMNS: list[str] = [
     "code", "date", "open", "high", "low", "close", "volume", "trade_value",
 ]
@@ -278,7 +278,7 @@ def _upsert(
         # rebuild_adjusted_table() 처럼 570만 행을 upsert 하면 몇 시간이 걸린다
         # (실측: 40분 넘게 돌고도 진행 중). execute_values 는 한 문장에 여러 VALUES
         # 튜플을 실어 보내 같은 일을 수십 배 빠르게 끝낸다. 수집기 쪽
-        # (kr-quant-airflow/collectors/storage.py)은 이미 이 방식이다.
+        # (quant-airflow/collectors/storage.py)은 이미 이 방식이다.
         import psycopg2.extras
 
         update_cols = [c for c in cols if c not in pk_cols]
