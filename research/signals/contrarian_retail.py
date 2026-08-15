@@ -64,11 +64,9 @@ def load_data(db: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
       - ``prices``: long ``code``/``date``/``close``/``trade_value`` (분할조정)
       - ``flow``:   long ``code``/``date``/``individual``/``volume``
     """
-    from kr_quant.storage import connect, db_default
+    from kr_quant.storage import connect, db_default, read_prices
     con = connect(db or db_default())
-    prices = pd.read_sql_query(
-        f"SELECT code, date, close, trade_value FROM {PRICE_TABLE}", con  # noqa: S608 — 신뢰 상수
-    )
+    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
     flow = pd.read_sql_query(
         "SELECT code, date, individual, acc_trde_qty AS volume FROM supply_demand", con
     )

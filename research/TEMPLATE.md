@@ -100,7 +100,7 @@ from kr_quant.diagnostics.gate_report import gate_report
 > (a) src→research import, (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL"
 > 판정 문자열, (d) `storage` 밖에서 raw `SELECT ... FROM earnings`(정정공시 버전이
 > 중복 행으로 샌다), (e) `prop_gate` 에 `config=` 누락(다중검정 원장에 시행이 안 남아
-> DSR 이 계산되지 않는다), (f) `*_gate.py` 가 `prop_gate` 하버스를 안 쓰는 것.
+> DSR 이 계산되지 않는다), (f) `*_gate.py` 가 `prop_gate` 하버스를 안 쓰는 것, (g) 가격 테이블 직접 SELECT(정문 `read_prices` 우회 — 유니버스에서 폐지 종목이 조용히 빠진다).
 >
 > (f)가 이 5단계를 **부탁이 아니라 규약으로** 만든다 — 자체 배터리를 새로 짜면
 > 음성대조·비용2배·손안댄창·R분포·fragility 중 무엇이 빠졌는지 아무도 모른다.

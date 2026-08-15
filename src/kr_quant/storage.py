@@ -370,6 +370,70 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
     return pd.read_sql_query(sql, con, params=params or None)
 
 
+PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.
+_PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "trade_value")
+
+
+def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
+                table: str = PRICE_TABLE, require_delisted: bool = True):
+    """백테스트용 가격 패널 — **상장폐지 종목 포함**을 로딩 시점에 검사한다.
+
+    생존편향은 "가장 큰 숨은 인플레이터"인데(GUARDRAILS §3), 검증 스택은 넘겨받은
+    트레이드만 믿으므로 유니버스가 이미 생존자만 담고 있으면 **어떤 게이트도 그걸
+    못 잡는다**(§4 공백 2). 잡을 수 있는 유일한 지점이 데이터를 읽는 이 자리다.
+
+    Args:
+        con: 열린 연결.
+        cols: 반환 컬럼(기본 :data:`_PRICE_READ_COLS`).
+        table: 가격 테이블. 기본 분할조정 테이블 — 백테스트가 원자료를 읽으면
+            액면분할이 수익률로 둔갑한다.
+        require_delisted: DB 에 폐지 종목 시세가 있는데 이 조회 결과엔 없으면
+            ``AssertionError``. 유니버스를 좁히는 WHERE 를 붙였거나 폐지 백필이
+            안 돌았다는 뜻이다. 폐지 시세가 DB 에 아예 없으면(신규 DB 등) 통과시킨다 —
+            없는 걸 요구할 수는 없고, 그 경우는 백필 자체가 선행 과제다.
+
+    Returns: pandas DataFrame.
+    """
+    import pandas as pd
+
+    sel = ", ".join(cols or _PRICE_READ_COLS)
+    df = pd.read_sql_query(f"SELECT {sel} FROM {table}", con)  # noqa: S608 — 컬럼·테이블은 모듈 상수
+    if require_delisted:
+        _assert_universe_has_delisted(con, df, table=table)
+    return df
+
+
+def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
+    """조회 결과가 폐지 종목을 담고 있는지 확인(DB 에 있는 경우에 한해)."""
+    ph = "%s" if _is_pg(con) else "?"
+    sql = f"SELECT count(DISTINCT code) FROM {table} WHERE source = {ph}"  # noqa: S608 — 모듈 상수
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, ("naver",))
+            in_db = cur.fetchone()[0]
+    else:
+        in_db = con.execute(sql, ("naver",)).fetchone()[0]
+    if not in_db:
+        return                      # DB 에 폐지 시세 자체가 없음 — 백필이 선행 과제
+    if "code" not in df.columns:
+        return                      # code 를 안 뽑은 조회는 유니버스 판정 대상이 아님
+    loaded = set(df["code"].astype(str).unique())
+    ph2 = "%s" if _is_pg(con) else "?"
+    sql2 = f"SELECT DISTINCT code FROM {table} WHERE source = {ph2}"  # noqa: S608 — 모듈 상수
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql2, ("naver",))
+            delisted = {r[0] for r in cur.fetchall()}
+    else:
+        delisted = {r[0] for r in con.execute(sql2, ("naver",)).fetchall()}
+    if not (delisted & loaded):
+        raise AssertionError(
+            f"{table} 에 상장폐지 종목 {in_db}개가 있는데 로딩된 유니버스에 하나도 없다 — "
+            f"생존편향이 들어간다. 유니버스를 좁히는 WHERE 를 걷어내거나, "
+            f"의도한 것이면 read_prices(require_delisted=False) 로 명시하라."
+        )
+
+
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
     """Market cap for ``code`` on exactly ``date``: close * shares outstanding.
 

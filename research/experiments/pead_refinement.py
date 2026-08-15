@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default, read_earnings
+from kr_quant.storage import connect, db_default, read_earnings, read_prices
 from kr_quant.strategies.pead import (
     _panel,
     _resolve_signal,
@@ -83,9 +83,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     # 들어가 조용한 룩어헤드가 된다.
     ea = read_earnings(con, all_versions=True, cols=(
         "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
-    prices = pd.read_sql_query(
-        f"SELECT code, date, close, trade_value FROM {PRICE_TABLE}", con  # noqa: S608 — trusted constant
-    )
+    # read_prices: 로딩 시점에 상장폐지 종목 포함을 검사한다(생존편향은 게이트가 못 잡는다).
+    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
     con.close()
 
     ea["code"] = ea["code"].astype(str)
