@@ -241,7 +241,12 @@ def run() -> None:
     print(f"\n[extractor] 원신호(de-dup 전) {n_entries_raw} → de-dup {len(entries)} → "
           f"시뮬 트레이드 {len(rets)}  (주당 중앙값 {weekly_median:.0f}/최대 {weekly_max})")
 
-    rep = prop_gate(fill_dates, rets, PRE_STOP, label="pullback")
+    # 사전등록 config 를 넘기면 다중검정 원장(research/logs/pullback_prop/TRIALS.jsonl)에
+    # 기록되고 N 이 거기서 읽힌다 — DSR·t-haircut 의 입력을 손으로 세지 않는다.
+    rep = prop_gate(fill_dates, rets, PRE_STOP, label="pullback", log_dir=OUT_DIR, config={
+        "adv_floor": ADV_FLOOR, "min_gap": MIN_GAP, "rsi_max": RSI_MAX,
+        "stop": PRE_STOP, "target": PRE_TARGET, "hold_max": PRE_HOLD_MAX,
+    })
 
     # 음성대조 — 실제 트레이드 수만큼 무작위 draw.
     ctrl = random_entry_control(

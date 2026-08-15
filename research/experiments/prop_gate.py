@@ -30,9 +30,12 @@ research/ 로부터 아무것도 import 하지 않고 src/kr_quant 를 수정하
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from kr_quant.diagnostics.fragility import fragility_report, monster_share
+from kr_quant.diagnostics.trials import count_trials, record_trial
 from kr_quant.diagnostics.gate_report import gate_report
 from kr_quant.diagnostics.r_distribution import dist_shape, r_multiples
 from kr_quant.validation.walkforward import FOLDS, _expectancy, entry_mask, slice_by_entry
@@ -41,6 +44,18 @@ COSTS = (0.0046, 0.008, 0.010, 0.015)   # 왕복비용 스윕: 46 / 80 / 100 / 1
 TRAIN_HI = "2022-01-01"                  # no-lookahead 경계 (진입 < 이 날짜 = TRAIN)
 UNTOUCHED_LO = "2025-07-01"              # R1 held-out 최종창 하한 (탐색 중 미접촉)
 UNTOUCHED_HI = "2026-07-01"              # R1 held-out 최종창 상한
+
+
+def _ledger_target(label: str, log_dir: str | None) -> tuple[str, "str | None"]:
+    """(원장 label, 상위 디렉터리). ``log_dir`` 을 주면 그 경로의 마지막 조각이 label 이 된다.
+
+    ``research/logs/pullback_prop`` → ``("pullback_prop", "research/logs")`` — 원장이
+    VERDICT.md 와 같은 디렉터리에 놓이게 하기 위한 변환이다.
+    """
+    if log_dir is None:
+        return label, None
+    p = Path(log_dir)
+    return p.name, str(p.parent)
 
 
 def _fold_rows(entry: np.ndarray, R: np.ndarray, folds, train_hi: str) -> list[dict]:
@@ -92,6 +107,8 @@ def prop_gate(
     train_hi: str = TRAIN_HI,
     untouched_lo: str = UNTOUCHED_LO,
     untouched_hi: str = UNTOUCHED_HI,
+    config: dict | None = None,
+    log_dir: str | None = None,
     n_trials: int | None = None,
     n_boot: int = 2000,
     seed: int = 0,
@@ -113,8 +130,16 @@ def prop_gate(
         folds: 워크포워드 fold 세트(기본 frozen FOLDS). fold-shopping 금지.
         train_hi: no-lookahead 경계. 진입 < train_hi = TRAIN(=OOS 아님). R2 clean 판별에도 사용.
         untouched_lo/untouched_hi: R1 held-out 최종 확인창 [lo, hi).
-        n_trials: 이 알파에 시도한 config 수(옵션). 주어지면 gate_report 가 Deflated
-            Sharpe·t-haircut 로 선택편향을 깎아 보고한다(§11 다중검정 보정). None 이면 생략.
+        config: 이 호출의 사전등록 config(옵션). 주면 **다중검정 원장에 자동 기록**되고
+            ``n_trials`` 를 원장에서 읽는다 — 연구자가 시행 수를 손으로 세지 않는다.
+            같은 config 재실행은 시행으로 안 센다(config 지문 중복 제거).
+        log_dir: 원장을 둘 디렉터리(예: ``"research/logs/pullback_prop"``). 생략하면
+            ``research/logs/<label>`` — 다만 label 과 로그 디렉터리가 다른 게이트가 있어
+            (pullback → pullback_prop) 그런 경우 반드시 지정해야 한다. **원장은 그 알파의
+            VERDICT.md 옆에 있어야 한다** — 따로 놀면 둘이 어긋나도 아무도 모른다.
+        n_trials: 시행 수를 직접 지정(옵션). 주면 원장 대신 이 값을 쓴다 — 원장 이전에
+            돌린 시행을 소급 반영하는 등 예외적 용도. 주어지면 gate_report 가 Deflated
+            Sharpe·t-haircut 로 선택편향을 깎아 보고한다(§11). 둘 다 None 이면 생략.
         n_boot, seed: gate_report 부트스트랩 파라미터.
         verbose: True 면 사람이 읽는 요약을 print(판정줄 없음). 음성대조는 False.
 
@@ -123,6 +148,13 @@ def prop_gate(
         cost_edge_dies, folds(2: rows·raw/clean 카운트), distribution(3), fragility(3),
         untouched(4), gate_report(5). **bool 판정 키는 없다.**
     """
+    if config is not None:
+        # 게이트가 직접 적는다 — record_trial 을 연구자가 부를 일이 없게(§0 "부탁 금지").
+        led_label, led_dir = _ledger_target(label, log_dir)
+        record_trial(led_label, config, logs_dir=led_dir)
+        if n_trials is None:
+            n_trials = count_trials(led_label, logs_dir=led_dir)
+
     entry = np.asarray(entry_dates)
     ret = np.asarray(returns, float)
     if len(entry) != len(ret):

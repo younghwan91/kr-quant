@@ -155,3 +155,46 @@ def test_cost_sweep_edge_dies_monotone():
     exps = [cs["oos_expectancy_R"] for cs in rep["cost_sweep"]]
     # 비용 오름차순이므로 기대값은 비증가(같은 R 에서 상수 차감)
     assert all(exps[i] >= exps[i + 1] - 1e-12 for i in range(len(exps) - 1))
+
+
+# --- 다중검정 원장 배선 -------------------------------------------------------
+
+def test_prop_gate_records_config_and_derives_n_trials(tmp_path, monkeypatch):
+    """config 를 주면 원장에 적히고 N 이 거기서 나온다 — 손으로 세지 않는다."""
+    import numpy as np
+
+    from kr_quant.diagnostics import trials
+    from research.experiments.prop_gate import prop_gate
+
+    monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)
+    rng = np.random.default_rng(0)
+    n = 400
+    entry = np.array([f"2023-{1 + i % 12:02d}-15" for i in range(n)])
+    ret = rng.normal(0.01, 0.05, n)
+
+    rep = prop_gate(entry, ret, 0.10, label="tl", config={"a": 1}, verbose=False)
+    assert rep["gate_report"]["deflation"]["n_trials"] == 1
+
+    # 같은 config 재실행 → 시행 아님
+    rep = prop_gate(entry, ret, 0.10, label="tl", config={"a": 1}, verbose=False)
+    assert rep["gate_report"]["deflation"]["n_trials"] == 1
+
+    # 다른 config → 시행
+    rep = prop_gate(entry, ret, 0.10, label="tl", config={"a": 2}, verbose=False)
+    assert rep["gate_report"]["deflation"]["n_trials"] == 2
+
+
+def test_prop_gate_without_config_is_unchanged(tmp_path, monkeypatch):
+    """config 미지정이면 원장을 만들지도, deflation 을 보고하지도 않는다."""
+    import numpy as np
+
+    from kr_quant.diagnostics import trials
+    from research.experiments.prop_gate import prop_gate
+
+    monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)
+    rng = np.random.default_rng(1)
+    n = 300
+    entry = np.array([f"2023-{1 + i % 12:02d}-15" for i in range(n)])
+    rep = prop_gate(entry, rng.normal(0.01, 0.05, n), 0.10, label="none", verbose=False)
+    assert rep["gate_report"].get("deflation") is None
+    assert not (tmp_path / "research").exists()
