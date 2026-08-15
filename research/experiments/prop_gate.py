@@ -51,6 +51,12 @@ def _ledger_target(label: str, log_dir: str | None) -> tuple[str, "str | None"]:
 
     ``research/logs/pullback_prop`` → ``("pullback_prop", "research/logs")`` — 원장이
     VERDICT.md 와 같은 디렉터리에 놓이게 하기 위한 변환이다.
+
+    **결과적으로 원장의 키는 label 이 아니라 VERDICT 디렉터리다.** 의도한 의미다 —
+    시행 수 N 은 "이 판정문이 근거로 삼은 config 를 몇 개나 시도했나"이지 "이 파일이
+    몇 번 돌았나"가 아니다. 그래서 한 알파를 여러 러너가 나눠 재는 경우(pead_gate 는
+    top_n=40 분산형, pead_concentrated_gate 는 top_n=3 집중형, 판정은 하나로 통합)
+    두 config 가 같은 원장에 쌓여 N=2 가 된다.
     """
     if log_dir is None:
         return label, None

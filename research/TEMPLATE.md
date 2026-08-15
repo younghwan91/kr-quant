@@ -96,8 +96,15 @@ from kr_quant.diagnostics.gate_report import gate_report
 정직한 부정 결과도 산출물이다 — 예: [`logs/contrarian_retail/VERDICT.md`](logs/contrarian_retail/VERDICT.md)
 (엣지가 fold-재현되지 않아 NO-GO, sim 추출 취소).
 
-> **경계·판정 린트(CI 강제).** `scripts/check_guardrails.py`가 (a) src→research import,
-> (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL" 판정 문자열을 CI 에서 막는다.
+> **경계·판정 린트(CI 강제).** `scripts/check_guardrails.py`가 CI 에서 막는 것:
+> (a) src→research import, (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL"
+> 판정 문자열, (d) `storage` 밖에서 raw `SELECT ... FROM earnings`(정정공시 버전이
+> 중복 행으로 샌다), (e) `prop_gate` 에 `config=` 누락(다중검정 원장에 시행이 안 남아
+> DSR 이 계산되지 않는다), (f) `*_gate.py` 가 `prop_gate` 하버스를 안 쓰는 것.
+>
+> (f)가 이 5단계를 **부탁이 아니라 규약으로** 만든다 — 자체 배터리를 새로 짜면
+> 음성대조·비용2배·손안댄창·R분포·fragility 중 무엇이 빠졌는지 아무도 모른다.
+> 실제로 `pead_gate.py` 가 그 상태로 오래 있었다(2026-08-15 하버스로 이전).
 > 유니버스는 PIT·상장폐지 포함이어야 한다 — `kr_quant.validation.survivorship_report`
 > 로 생존편향 스멜을 리포트하고, 명백한 생존필터는 `assert_point_in_time`이 잡는다
 > (스멜테스트지 보증 아님 — 폐지수익 정합성은 별도).
