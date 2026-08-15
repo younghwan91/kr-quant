@@ -14,6 +14,7 @@
 - **검증된 확산형 알파는 PEAD**(실적 서프라이즈 후 드리프트)이며, 무상관 슬리브와 결합한 멀티-알파 북이 비용·분할조정 후 시총가중 인덱스를 파레토 지배한다(§4).
 - **진입 시점의 모멘텀 강도가 사후의 꼬리 수익을 선험적으로(a-priori) 예측**한다는 등, 개별 트레이드 분포는 구조적 규칙성을 드러낸다(§3.2).
 - 여러 볼록형 후보는 엄격한 개별-트레이드 재현성 검증을 넘지 못했다. 이는 실패의 나열이 아니라, **왜 넘지 못하는지에 대한 메커니즘 분석**으로 제시된다(§5).
+- **생존편향은 전략이 아니라 벤치마크를 더 크게 왜곡한다** — 상장폐지 종목을 유니버스에 복원하자 PEAD의 초과수익이 오히려 *올라갔다*(§4). 통념과 반대 방향이며, 상대수익 전략의 구조적 성질이다.
 
 > **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터, TimescaleDB 적재)은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)로 분리되어 있다. 본 저장소는 DB를 **읽기 전용**으로 사용한다.
 
@@ -38,7 +39,11 @@
 | 손 안 댄 최종 구간 | 탐색에 한 번도 쓰지 않은 구간에서 사는가 | `prop_gate` (untouched window) |
 | 비용·슬리피지 | 현실 비용의 2배에도 사는가 | `prop_gate` (cost sweep) |
 | 취약성 | 상위 몇 건을 제거해도 사는가 | `kr_quant.diagnostics.fragility` |
-| 다중검정 보정 | 시도한 config 수를 반영한 Deflated Sharpe | `kr_quant.diagnostics.gate_report` |
+| 다중검정 보정 | 시도한 config 수를 반영한 Deflated Sharpe·t-haircut | `diagnostics.gate_report` + `diagnostics.trials`(원장) |
+| 라벨 누출 차단 | 보유기간이 TEST로 넘어간 표본을 TRAIN에서 걷어냈나 | `validation.walkforward.purge_embargo` |
+| 유니버스 무결성 | 상장폐지 종목이 유니버스에 들어있나 | `storage.read_prices`(로딩 시점 assert) |
+
+**시행 수는 손으로 세지 않는다.** Deflated Sharpe의 입력 N을 사람이 적으면 규율이 아니라 부탁이다 — 첫 config가 죽고 조용히 두 번째를 돌려도 아무도 못 잡는다. 게이트가 사전등록 config를 `research/logs/<alpha>/TRIALS.jsonl`에 append하고 N을 거기서 읽는다. 같은 config 재실행은 시행으로 세지 않는다(시행 = *다르게* 시도한 횟수).
 
 **음성대조가 핵심인 이유.** 폴드 성공 개수만으로 판정하면 순수 노이즈도 "6폴드 중 5폴드 양수"를 약 46% 확률로 통과한다. 따라서 진짜 판별 기준은 폴드 수가 아니라 "전략이 자기 자신의 랜덤 버전을 유의하게 이기는가"이다. 정석 개념은 문헌을 따른다(§9).
 
@@ -110,7 +115,8 @@
 
 알파가 전부가 아니다. 알파 탐색은 대부분 부정으로 끝나지만, 그 과정에서 남는 것이 더 오래간다.
 
-- **재사용 가능한 검증 프레임워크.** walk-forward·음성대조·손 안 댄 구간·취약성·Deflated Sharpe를 하나의 게이트로 묶은 `kr_quant.validation`·`kr_quant.diagnostics`. 어떤 새 가설이든 동일한 잣대로 몇 시간 만에 심사한다 — 특정 알파보다 오래 남는 자산이다.
+- **재사용 가능한 검증 프레임워크.** walk-forward·음성대조·손 안 댄 구간·취약성·Deflated Sharpe·purge/embargo를 하나의 게이트로 묶은 `kr_quant.validation`·`kr_quant.diagnostics`. 어떤 새 가설이든 동일한 잣대로 몇 시간 만에 심사한다 — 특정 알파보다 오래 남는 자산이다.
+- **만드는 것과 연결하는 것은 다른 일이다.** 이 레포에서 반복된 실패 모드는 기능 부재가 아니라 **배선 누락**이었다 — purge/embargo·Deflated Sharpe·음성대조 규약이 전부 구현된 채 한 번도 호출되지 않고 있었다. 그래서 지금은 배선이 빠지면 CI가 실패한다(§7).
 - **분포적 사고.** 평균이나 자본곡선이 아니라 개별 트레이드 분포로 보면 같은 데이터가 다르게 읽힌다. 볼록형/확산형 구분, 꼬리 집중도, 선험적 예측력은 이 렌즈에서만 드러난다.
 - **음성대조라는 규율.** "내 전략이 랜덤보다 나은가"는 단순하지만 대부분의 자기기만을 잡아낸다(순수 노이즈가 폴드 기준을 46% 통과한다).
 - **엔지니어링 토대.** PIT 데이터·무룩어헤드·읽기전용 분리·경계 린트·CI. 알파와 무관하게 재현 가능한 리서치를 떠받치는 하부구조다.
@@ -123,11 +129,12 @@
 
 ```
 src/kr_quant/
-├── storage.py           # 읽기 전용 DB 접근 (connect / market_cap_asof)
+├── storage.py           # 읽기 전용 DB 접근. read_prices/read_earnings가 유일한 정문 —
+│                        #   폐지종목 포함·정정공시 버전을 로딩 시점에 검사한다
 ├── price_adjust.py      # 기업행동 백조정 (airflow DAG가 in-place 실행)
 ├── engine/              # 백테스트 엔진: cross-sectional sim, 패널, 메트릭, recipe
 ├── validation/          # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
-├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)
+├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)·trials(다중검정 원장)
 ├── strategies/          # pead · accumulation · supply_wave · multi_signal
 ├── models/              # graph_flow(그래프 확산) · ensemble_signal(릿지 앙상블)
 ├── features/            # fundamentals · short_flow · sector_flow · universe
@@ -136,10 +143,14 @@ src/kr_quant/
 research/                # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
 ├── signals/             # 신호 정의 (contrarian_retail · operator_flow)
 ├── experiments/         # 실험 러너 — prop_gate 게이트 하버스로 심사
-└── logs/                # VERDICT · SUMMARY (검증·분석 결과 기록)
+└── logs/                # VERDICT · SUMMARY · TRIALS.jsonl (판정·분석·시행 원장)
 ```
 
-설계 원칙: `src/kr_quant`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다(경계는 `scripts/check_guardrails.py`가 CI에서 강제). 새 알파의 표준 흐름은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
+설계 원칙: `src/kr_quant`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다. 새 알파의 표준 흐름은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
+
+**규율은 부탁이 아니라 린트다.** `scripts/check_guardrails.py`가 CI에서 7가지를 막는다 — (a) src→research import, (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL" 판정 문자열, (d) `storage` 밖에서 raw `SELECT ... FROM earnings`(정정공시 버전이 중복 행으로 샌다), (e) `prop_gate`에 `config=` 누락(원장에 시행이 안 남아 DSR이 계산되지 않는다), (f) `*_gate.py`가 공용 하버스를 안 쓰는 것(음성대조·비용2배·R분포가 조용히 빠진다), (g) 가격 테이블 직접 SELECT(유니버스에서 폐지 종목이 빠진다).
+
+이 레포에서 반복된 실패 모드가 "기능은 만들어두고 쓰는 쪽에 연결을 안 함"이었기 때문이다 — purge/embargo·Deflated Sharpe·음성대조 규약이 모두 구현돼 있으면서 한 번도 호출되지 않은 채로 있었다.
 
 ## 8. 재현
 
@@ -151,7 +162,7 @@ cp .env.example .env          # KR_QUANT_DB에 TimescaleDB 접속정보 (비우�
 
 uv run pytest                 # 네트워크 불요 — 검증·진단 라이브러리 회귀 테스트
 uv run ruff check .
-python scripts/check_guardrails.py   # 경계·리포터 규율 검사
+python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 검사 (a)~(g)
 ```
 
 분석 CLI(모두 DB 읽기 전용): `kq-pead`(PEAD 백테스트), `kq-screen`(매집 스크리너, §9), `kq-chart --code 005930`(수급 차트).
@@ -178,12 +189,12 @@ python scripts/check_guardrails.py   # 경계·리포터 규율 검사
 |---|---|
 | `stocks` | code, name, market, sector, kind |
 | `supply_demand` | 투자자별 수급 (foreign/institution + 기관 세부 8종, PK: code+date) |
-| `daily_bars` / `daily_bars_adjusted` | OHLCV; 분할조정본은 `price_adjust.py` 생성 |
+| `daily_bars` / `daily_bars_adjusted` | OHLCV; 분할조정본은 `price_adjust.py` 생성. `source`가 `'kiwoom'`(상장 종목, 보고된 거래대금) / `'naver'`(폐지 종목 백필, 거래대금은 `close×volume` 근사)를 구분한다 |
 | `earnings` | DART 실적 (avail_date 기준 룩어헤드 없음) — PEAD 소스. PK는 `(code, period, knowledge_date)`로, 정정공시는 기존 행을 덮어쓰지 않고 새 버전으로 쌓인다 — 읽을 때 `knowledge_date <= t`로 그 시점에 알 수 있었던 값을 고른다 |
 | `consensus` | 목표주가·투자의견·forward EPS 일별 축적 |
 | `shares_outstanding_history` | 시가총액용 발행주식수 이력 |
 | `short_selling` / `credit_balance` / `sector_index` | 공매도·신용잔고·업종지수 |
-| `delisted_stocks` | 상장폐지 종목 (생존편향 보정용) |
+| `delisted_stocks` | 상장폐지 종목 마스터. 과거 시세는 `daily_bars`에 `source='naver'`로 들어간다 |
 
 테이블 소유·마이그레이션은 [kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)가 담당한다.
 
@@ -191,7 +202,7 @@ python scripts/check_guardrails.py   # 경계·리포터 규율 검사
 
 - **단일 시장·일봉 지평.** 결과는 한국 유동 대형·중형주와 일봉 데이터에 한정된다. 장중·틱·대체데이터는 다루지 않는다.
 - **용량(capacity).** 대형주 스태거드 롱온리 기준이며, 소형·급등주 확장 시 슬리피지·용량은 별도 통제가 필요하다.
-- **생존편향.** `delisted_stocks`로 부분 보정하나 진정한 delisting return의 완전성은 데이터 벤더에 의존한다(`universe_hygiene`는 스멜테스트이지 보증이 아니다).
+- **생존편향.** 시세·실적은 상장폐지 종목까지 복원했고(460·364종목), 유니버스 무결성은 `storage.read_prices`가 로딩 시점에 검사한다. **남은 구멍은 `shares_outstanding_history`·`supply_demand`** — KRX 과거 데이터가 로그인 장벽 뒤라 폐지분이 비어 있어, 시총 기반 유니버스는 여전히 생존자만 담는다. 폐지 손실 실현은 `delisting_exit=True`로 선택 가능하며 실측 영향은 미미했다(정리매매 구간이 이미 가격에 들어 있어서).
 - **과거는 미래를 보장하지 않는다.** 모든 수치는 백테스트 결과이며, 이 저장소의 기여는 수익 보장이 아니라 **체계적 검증 방법론과 그 분석 결과의 공유**다.
 
 ## 라이선스
@@ -217,7 +228,7 @@ MIT
 | **[kiwoom-rest-api](https://github.com/younghwan91/kiwoom-rest-api)** | 키움증권 REST API Python 라이브러리 — 207개 엔드포인트 + 실시간 WebSocket |
 | **[krx-fundamentals-api](https://github.com/younghwan91/krx-fundamentals-api)** | 국내 기업 펀더멘탈 REST API — 재무제표·투자지표·배당·종목 스크리닝 (DART + KRX + 네이버) |
 | **[krx-news-rest-api](https://github.com/younghwan91/krx-news-rest-api)** | 한국 주식 뉴스·공시 수집 REST API (FastAPI + Redis) |
-| **[kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)** | 시세·수급·실적 데이터를 TimescaleDB로 수집하는 Airflow 파이프라인 |
+| **[kr-quant-airflow](https://github.com/younghwan91/kr-quant-airflow)** | 시세·수급·실적을 TimescaleDB로 수집하는 Airflow 파이프라인 — **상장폐지 종목까지** 담아 생존편향을 막는다 |
 | **[quantbox-engine](https://github.com/younghwan91/quantbox-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
 | **[opt_portfolio](https://github.com/younghwan91/opt_portfolio)** | VAA 기반 전술적 자산배분 백테스트·운용 시스템 |
 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
