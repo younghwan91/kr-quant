@@ -44,7 +44,7 @@ from prop_swing_common import dedup_gap, load_env_db, weekly_count
 
 from kr_quant.engine.panels import panel_pivot
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default, read_earnings
+from kr_quant.storage import connect, db_default, read_earnings, read_prices
 from kr_quant.validation.walkforward import FOLDS
 
 # --- Parameters -------------------------------------------------------------
@@ -70,10 +70,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     load_env_db()
     con = connect(db_default())
-    prices = pd.read_sql_query(
-        f"SELECT code, date, open, high, low, close, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — trusted constant
-        con,
-    )
+    prices = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "trade_value"))
     # 정정공시 버전을 **전부** 받아 earnings_yoy_panel 이 날짜별로 고르게 한다.
     # 여기서 한 버전으로 접으면(read_earnings 기본값) 최신 정정본이 과거 날짜 셀에
     # 들어가 조용한 룩어헤드가 된다.

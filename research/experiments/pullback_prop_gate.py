@@ -52,7 +52,7 @@ from research.signals.pullback_swing import (  # noqa: E402 — sys.path 부트�
     simulate_pullback_trades,
 )
 
-from kr_quant.storage import connect, db_default  # noqa: E402 — sys.path 부트스트랩 뒤
+from kr_quant.storage import connect, db_default, read_prices  # noqa: E402 — sys.path 부트스트랩 뒤
 
 # ===========================================================================
 # 사전등록 1차 CONFIG (R1) — 게이트 출력을 보기 전에 못박음. 이것이 THE 테스트.
@@ -85,10 +85,7 @@ def load_prices() -> pd.DataFrame:
     """split-adjusted OHLC + trade_value 를 long 으로 로드."""
     load_env_db()
     con = connect(db_default())
-    prices = pd.read_sql_query(
-        f"SELECT code, date, open, high, low, close, trade_value FROM {PRICE_TABLE}",  # noqa: S608 — 신뢰 상수
-        con,
-    )
+    prices = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "trade_value"))
     con.close()
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)

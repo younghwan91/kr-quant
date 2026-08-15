@@ -115,11 +115,16 @@
    를 배선하고 `slippage_check.py` 가 purge 전/후를 나란히 보고하게 했다.
    실측: purge 가 TRAIN 의 8.7%(270/3,121)를 걷어내지만 역발상 판정은 2/6·46bp 사망으로
    불변 — **기각이 라벨 누출에서 온 게 아님이 확인됐다.** 인자를 안 주면 기존 동작 그대로.
-2. ~~**생존편향 가드 부재**~~ **— 데이터 층은 2026-08-15 해소, 규칙 강제는 미해결.**
-   상장폐지 종목의 시세(460종목)·실적(364종목)을 백필해 `daily_bars`/`earnings`에 넣었고
-   주간 DAG로 재발을 막았다. 폐지 손실 실현은 `staggered_tranche_backtest(delisting_exit=True)`
-   로 선택 가능(기본 False — 발표 수치·패리티 테스트 보존). 남은 공백은 **유니버스 빌더가
-   그걸 쓰도록 강제하는 규칙**이 여전히 없다는 것. 상장주식수·수급은 아직 폐지분이 비어 있다.
+2. ~~**생존편향 가드 부재**~~ **— 2026-08-15 해소.** 데이터 층: 폐지 종목 시세(460)·실적(364)
+   백필 + 주간 DAG 재발 방지 + `staggered_tranche_backtest(delisting_exit=)`.
+   **규칙 강제**: 잡을 수 있는 유일한 지점이 데이터를 읽는 자리다 — 검증 스택(walk-forward·
+   음성대조·fragility)은 넘겨받은 트레이드만 보므로 유니버스가 이미 생존자만 담고 있으면
+   모든 게이트가 초록불이면서 성적만 부푼다. `storage.read_prices()` 가 로딩 시점에
+   "DB 에 폐지 종목이 있는데 로딩 결과엔 없다"를 `AssertionError` 로 잡고,
+   `check_guardrails` 규칙 (g) 가 가격 테이블 직접 SELECT 를 CI 에서 막는다(정문 강제).
+   좁힌 유니버스가 의도라면 `require_delisted=False` 로 **명시**해야 한다.
+   ⚠️ 남은 한계: `shares_outstanding_history`·`supply_demand` 는 아직 폐지분이 비어
+   있어(KRX 로그인 장벽) cap 기반 유니버스는 여전히 생존자만 담는다.
 3. ~~**정정공시 룩어헤드**~~ **— 2026-08-15 해소.** `earnings_yoy_panel(knowledge_col=...)`
    이 **이중 시간축**으로 판단한다: 어느 분기가 공시됐나(`avail_date`)와 그 분기의 어느
    버전을 그때 알고 있었나(`knowledge_date`)는 독립인 축이라 스칼라 as-of 로는 표현되지
@@ -164,7 +169,9 @@
 
 1. **purge/embargo** → `walkforward.rolling_folds(..., embargo_days=..., max_hold=...)`에 파라미터 추가.
    폴드 경계에서 `max_hold`만큼 진입을 purge하고 embargo 완충. 테스트 추가.
-2. **생존편향** → 유니버스 빌더에 "상장폐지 종목 + 종료수익 포함, cap_rank는 PIT" 규칙. 위반 시 assert.
+2. ~~**생존편향**~~ **완료** → `storage.read_prices()` 가 로딩 시점에 폐지 종목 포함을
+   assert 하고, `check_guardrails` (g) 가 우회(직접 SELECT)를 막는다. 폐지 손실 실현은
+   `delisting_exit=True`. cap 기반 유니버스는 상장주식수 폐지분이 없어 미해결로 남는다.
 3. ~~**다중검정 원장**~~ **완료** → `diagnostics.trials` 원장 + `prop_gate(config=)` 자동 기록,
    `gate_report(..., n_trials=)` 가 Deflated Sharpe / t-haircut 필드를 반환한다.
    (리포터 원칙 유지 — 판정 아닌 숫자.) 누락은 `check_guardrails` (e) 가 잡는다.

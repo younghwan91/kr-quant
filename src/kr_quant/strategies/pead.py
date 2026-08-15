@@ -285,7 +285,7 @@ def main() -> int:
     """
     import argparse
     import pandas as _pd
-    from ..storage import connect, db_default
+    from ..storage import connect, read_prices, db_default
     from ..features.fundamentals import combined_signal, earnings_yoy_panel
 
     ap = argparse.ArgumentParser(description="PEAD⊕가치 저회전 알파 백테스트 (실적 드리프트 + 가치)")
@@ -309,9 +309,13 @@ def main() -> int:
     # 분할조정 필수: 미조정 daily_bars로는 분할이 가짜 −68% 손실로 잡혀 검증된 알파가
     # 재현되지 않는다(Sharpe 0.42). daily_bars_adjusted는 weekly_price_adjust DAG가
     # 재생성한다 — 비어 있으면 그 DAG가 아직 안 돈 것.
-    prices = _pd.read_sql_query(
-        "SELECT code,date,close,trade_value FROM daily_bars_adjusted WHERE code = ANY(%(c)s)",
-        con, params={"c": codes})
+    # 정문(read_prices)으로 전체를 읽고 CSV 종목으로 좁힌다. 좁히는 걸 SQL 에서 하면
+    # 로딩 시점 생존편향 검사가 통째로 우회된다 — 검사는 DB 가 폐지 종목을 갖고 있는지를
+    # 보는 것이라 WHERE 뒤에서는 의미가 없다.
+    # ⚠️ 최종 유니버스는 이 CSV 가 정한다. CSV 가 생존자만 담고 있으면 여전히 생존편향이
+    # 들어간다 — 그건 이 함수가 막을 수 없고, CSV 를 만든 쪽의 책임이다.
+    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    prices = prices[prices["code"].isin(codes)]
     shares = None if args.no_value else _pd.read_sql_query(
         "SELECT code,date,shares_outstanding FROM shares_outstanding_history WHERE code = ANY(%(c)s)",
         con, params={"c": codes})

@@ -184,6 +184,35 @@ def check_gates_use_shared_harness() -> list[str]:
     return out
 
 
+# (g) 가격 테이블도 storage 정문(read_prices)으로만 읽는다. 직접 SELECT 하면 유니버스를
+# 좁히는 WHERE 가 조용히 들어가고, 생존편향은 검증 스택이 못 잡는다 — walk-forward·
+# 음성대조·fragility 는 전부 넘겨받은 트레이드만 보기 때문이다(GUARDRAILS §4 공백 2).
+_RAW_PRICES = re.compile(r"\bSELECT\b.*\bFROM\s+(daily_bars_adjusted|daily_bars)\b", re.I)
+_PRICE_READ_EXEMPT = {
+    "src/kr_quant/storage.py",        # 정문 자신 + 스키마 문자열
+    "src/kr_quant/price_adjust.py",   # 조정가 테이블을 *만드는* 쪽 — 정문의 상류
+}
+
+
+def check_no_raw_price_select() -> list[str]:
+    """(g) storage/price_adjust 밖에서 가격 테이블을 직접 SELECT 하면 위반."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _PRICE_READ_EXEMPT or rel.startswith((".venv/", "tests/")):
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if _RAW_PRICES.search(line):
+                out.append(
+                    f"[universe] {rel}:{i} — 가격 테이블을 직접 SELECT 했다. "
+                    f"kr_quant.storage.read_prices() 를 쓸 것 (상장폐지 종목 포함을 "
+                    f"로딩 시점에 검사한다)."
+                )
+    return out
+
+
 def main() -> int:
     violations: list[str] = []
     violations += check_src_no_research_import()
@@ -192,6 +221,7 @@ def main() -> int:
     violations += check_no_raw_earnings_select()
     violations += check_gates_record_trials()
     violations += check_gates_use_shared_harness()
+    violations += check_no_raw_price_select()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))
