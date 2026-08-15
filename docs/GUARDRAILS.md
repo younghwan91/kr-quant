@@ -123,8 +123,12 @@
    "DB 에 폐지 종목이 있는데 로딩 결과엔 없다"를 `AssertionError` 로 잡고,
    `check_guardrails` 규칙 (g) 가 가격 테이블 직접 SELECT 를 CI 에서 막는다(정문 강제).
    좁힌 유니버스가 의도라면 `require_delisted=False` 로 **명시**해야 한다.
-   ⚠️ 남은 한계: `shares_outstanding_history`·`supply_demand` 는 아직 폐지분이 비어
-   있어(KRX 로그인 장벽) cap 기반 유니버스는 여전히 생존자만 담는다.
+   ⚠️ 남은 한계: `shares_outstanding_history`·`supply_demand` 는 아직 폐지분이 비어 있어
+   cap 기반 유니버스는 여전히 생존자만 담는다. **상장주식수는 경로를 찾았다(2026-08-15
+   실측)** — KRX 통계는 로그인 장벽이지만 DART `stockTotqySttus`(주식의 총수 현황)가
+   폐지 기업도 준다. 분기보고서까지 훑으면 표본 12개 중 11개(92%) 확보되고,
+   `istc_totqy`(발행주식총수)가 우리 상장주식수 규약에 대응하며 `stlm_dt`(기준일)와
+   `rcept_no`(접수일)가 있어 PIT 구성도 된다. 수급(`supply_demand`)은 여전히 경로 없음.
 3. ~~**정정공시 룩어헤드**~~ **— 2026-08-15 해소.** `earnings_yoy_panel(knowledge_col=...)`
    이 **이중 시간축**으로 판단한다: 어느 분기가 공시됐나(`avail_date`)와 그 분기의 어느
    버전을 그때 알고 있었나(`knowledge_date`)는 독립인 축이라 스칼라 as-of 로는 표현되지
