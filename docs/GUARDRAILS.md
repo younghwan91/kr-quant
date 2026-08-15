@@ -144,9 +144,17 @@
    읽는다. config 지문으로 중복 제거해 **재실행은 시행으로 안 센다**(시행 = 다르게 시도한
    횟수). label 별 원장이라 음성대조(`rand`)가 실제 셋업 N 을 오염시키지 않는다.
    `check_guardrails.py` 규칙 (e) 가 `*_gate.py` 의 `config=` 누락을 CI 에서 막는다.
-6. **음성대조·비용스윕이 prop_gate 전용** — `research/TEMPLATE.md` 표준 파이프라인엔 음성대조가 없다.
-   TEMPLATE만 따르는 새 연구자는 널 대조를 안 만들 수 있다.
-7. **R분포/fragility 포함이 문화적** — 새 스크립트가 복리 자본곡선만 보고해도 아무도 안 막는다.
+6. ~~**음성대조·비용스윕이 prop_gate 전용**~~ **— 2026-08-15 해소.** `TEMPLATE.md` §5 는
+   이미 음성대조·비용2배·R분포를 규약으로 적고 있었다(감사 시점 이후 갱신됨). 남은 진짜
+   문제는 **그걸 안 따르는 게이트가 실재했다**는 것 — `pead_gate.py` 가 자체 배터리
+   (폴드재현 + 분포)만 갖고 음성대조·비용스윕·손안댄창·DSR·fragility 가 없었다.
+   해당 게이트를 `prop_gate` 하버스로 이전하고, `check_guardrails` 규칙 (f) 가
+   `*_gate.py` 의 하버스 미사용을 CI 에서 막는다.
+7. ~~**R분포/fragility 포함이 문화적**~~ **— 2026-08-15 해소(게이트 한정).** 위 (f) 규칙이
+   `*_gate.py` 를 하버스로 몰기 때문에 R분포·fragility 보고가 자동으로 따라온다 — 빼려면
+   하버스를 안 써야 하고 그건 CI 가 막는다. 다만 **게이트가 아닌 일반 스크립트**는 여전히
+   문화적이다(복리 자본곡선만 보고해도 안 막힌다). 배포 주장을 하는 건 `*_gate.py` 라
+   거기까지 강제하는 것으로 충분하다고 본다.
 
 ---
 
@@ -160,8 +168,8 @@
 3. ~~**다중검정 원장**~~ **완료** → `diagnostics.trials` 원장 + `prop_gate(config=)` 자동 기록,
    `gate_report(..., n_trials=)` 가 Deflated Sharpe / t-haircut 필드를 반환한다.
    (리포터 원칙 유지 — 판정 아닌 숫자.) 누락은 `check_guardrails` (e) 가 잡는다.
-4. **음성대조·비용을 표준으로** → `research/TEMPLATE.md` 파이프라인 5단계에 "음성대조 > 널"과 "비용 2배"를
-   명시. 새 `*_gate.py`가 `prop_gate`를 import하도록 유도.
+4. ~~**음성대조·비용을 표준으로**~~ **완료** → TEMPLATE §5 에 명시돼 있고, "유도"가 아니라
+   `check_guardrails` (f) 가 `*_gate.py` 의 하버스 사용을 강제한다(부탁 → 규칙).
 5. **경계 린트** → `src/kr_quant`가 `research/`를 import하면 실패하는 간단한 검사, 모든
    `research/experiments/*_gate.py`에 대응 `VERDICT.md`가 있는지 grep 검사(pre-commit/CI).
 

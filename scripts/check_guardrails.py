@@ -34,6 +34,9 @@ LOGS = REPO / "research" / "logs"
 GATE_EXEMPT = {
     # prop_gate 는 세 프랍 셋업을 동일 잣대로 재는 공용 리포터 배터리(알파 아님).
     "prop_gate",
+    # 생존편향 측정 스크립트. 알파를 심사하는 게 아니라 유니버스 보정이 기존 측정에
+    # 미친 영향을 재는 리포터라, 트레이드 표본도 사전등록 config 도 없다.
+    "survivorship_bias_gate",
 }
 # OVERRIDE: 로그 디렉터리 이름이 기본 규약과 다른 게이트(판정이 통합·개명된 경우).
 GATE_LOG_OVERRIDE = {
@@ -159,6 +162,28 @@ def check_gates_record_trials() -> list[str]:
     return out
 
 
+# (f) *_gate.py 는 공용 하버스(prop_gate)를 재사용해야 한다. 자체 배터리를 새로 짜면
+# 음성대조·비용 2배 스트레스·손안댄창·R분포·fragility 중 무엇이 빠졌는지 아무도 모른다
+# (GUARDRAILS §4 공백 6·7 — 실제로 pead_gate 가 그 상태였다). 동일 잣대 강제.
+_USES_HARNESS = re.compile(r"\bprop_gate\s*\(")
+
+
+def check_gates_use_shared_harness() -> list[str]:
+    """(f) *_gate.py 는 prop_gate 하버스를 통과시켜야 한다."""
+    out = []
+    for p in sorted(EXPERIMENTS.glob("*_gate.py")):
+        if p.stem in GATE_EXEMPT:
+            continue
+        if _USES_HARNESS.search(p.read_text(encoding="utf-8")):
+            continue
+        rel = p.relative_to(REPO)
+        out.append(
+            f"[harness] {rel} — prop_gate 를 안 쓴다. 자체 배터리를 짜면 음성대조·"
+            f"비용2배·손안댄창·R분포·fragility 중 빠진 게 드러나지 않는다."
+        )
+    return out
+
+
 def main() -> int:
     violations: list[str] = []
     violations += check_src_no_research_import()
@@ -166,6 +191,7 @@ def main() -> int:
     violations += check_no_literal_verdict()
     violations += check_no_raw_earnings_select()
     violations += check_gates_record_trials()
+    violations += check_gates_use_shared_harness()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

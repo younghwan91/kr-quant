@@ -28,6 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from prop_swing_common import load_env_db  # noqa: E402 — sys.path 부트스트랩 뒤
 
 from kr_quant.validation.walkforward import FOLDS  # noqa: E402
+from prop_gate import prop_gate, random_entry_control  # noqa: E402 — 형제 모듈
+
+OUT_DIR = "research/logs/pead_concentrated"   # check_guardrails 의 GATE_LOG_OVERRIDE 와 일치
 from research.experiments.pead_refinement import (  # noqa: E402
     BASELINE,
     MIN_NAMES,
@@ -113,6 +116,16 @@ def main() -> int:
 
     k, valid = fold_reproducibility(ent, exc)
     distribution(exc)
+
+    # 공용 하버스 — 자체 배터리에 없던 음성대조·비용스윕·손안댄창·DSR·fragility 를
+    # 여기서 받는다(GUARDRAILS §4 공백 6·7). 자체 배터리 두 개는 이 하버스가
+    # 상위집합으로 포함하지만, 기존 출력을 읽던 사람을 위해 남겨 둔다.
+    #
+    # stop=1.0 인 이유: PEAD 는 하드손절이 없어 R 정규화 분모가 없다. 1.0 으로 두면
+    # R = 초과수익 그대로라 분포·취약성 지표가 초과수익 단위로 읽힌다(R-멀티플로
+    # 오독하지 말 것 — 손절폭 대비 배수가 아니다).
+    prop_gate(ent, exc, stop=1.0, label="pead", log_dir=OUT_DIR, config=dict(BASELINE))
+    random_entry_control(ent, exc, 1.0, n_per_draw=len(exc), n_draws=200, seed=0)
 
     print("\n=== 판정 (리포터, 하드코딩 합격선 없음) ===")
     print(f"  폴드-재현 {k}/{valid} + 저왜도·저집중이면 → 분산형 진짜 알파(contrarian과 정반대 프로파일).")

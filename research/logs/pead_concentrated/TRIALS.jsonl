@@ -1,1 +1,2 @@
 {"config": {"adv_floor": 20000.0, "hold": 10, "step": 20, "stop": 0.1, "surprise_q": 0.9, "top_n": 3}, "fingerprint": "5dd42bddb69bfef9"}
+{"config": {"adv_floor": 20000.0, "horizon": 60, "step": 20, "top_n": 40}, "fingerprint": "82be2b6565a5b793"}
