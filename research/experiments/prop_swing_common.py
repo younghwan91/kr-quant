@@ -213,7 +213,37 @@ def render_gate_report(rep: dict, *, ci_width: bool = False) -> list[str]:
     L.append(f"- 폴드 {fc['n_positive']}/{fc['n_folds']} 양수  monster={gr['monster_share']:.0%}  "
              f"최장연패={gr['max_loss_streak']}")
     L.append("")
+    L.extend(render_deflation(rep))
     return L
+
+
+def render_deflation(rep: dict) -> list[str]:
+    """다중검정 보정(DSR·t-haircut) 블록 — VERDICT 에 기록되는 부분.
+
+    2026-08-16 신설. ``prop_gate(verbose=True)`` 는 이 숫자를 **stdout 으로 출력만** 하고
+    VERDICT 를 쓰는 ``render_gate_report`` 는 통째로 빠뜨리고 있었다. 그래서 원장·DSR·
+    t-haircut 을 다 구현해두고도 **어떤 판정문에도 보정 수치가 남지 않았다** — 터미널을
+    닫으면 사라지는 규율이었다. 이 레포의 상습 실패 모드(만들고 연결 안 함)가 다중검정
+    보정에서 한 번 더 반복된 것이라, 렌더러에 붙여 기록으로 남긴다.
+    """
+    df = rep["gate_report"].get("deflation")
+    if df is None:
+        return []
+    th = df["t_haircut"]
+    return [
+        f"### [6] 다중검정 보정 — 시도 config N={df['n_trials']} (REPORTER, 판정 아님)",
+        "",
+        "선택편향을 깎은 값이다. N 은 원장(`TRIALS.jsonl`)에서 읽으며 사람이 세지 않는다.",
+        "",
+        f"- 건당 Sharpe={df['observed_sharpe']:+.3f}  "
+        f"E[maxSharpe|H0]={df['expected_max_sharpe_h0']:.3f}  "
+        f"**deflated={df['deflated_sharpe']:+.3f}**",
+        f"- P(Sharpe>0)={df['prob_sharpe_gt0']:.1%}  "
+        f"P(Sharpe>SR0)={df['prob_deflated_sharpe']:.1%}",
+        f"- t-haircut ×{th['haircut_multiple']:.2f} "
+        f"(문턱 t {th['base_hurdle_t']:.2f}→{th['adjusted_hurdle_t']:.2f})",
+        "",
+    ]
 
 
 def render_control(rep: dict, ctrl: dict, *, intro: str, actual_label: str) -> list[str]:

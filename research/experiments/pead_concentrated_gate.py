@@ -367,6 +367,11 @@ def run() -> None:
     print(f"[extractor] 리밸런스 사용 {meta['n_rebalances_used']}회, "
           f"floor 제거 {meta['n_floor_removed']} → 트레이드 {len(ret)}건")
 
+    # 민감도 격자를 **먼저** 돌린다(2026-08-16). DSR 의 입력 N 은 원장에서 읽는데,
+    # 사전등록 게이트가 격자보다 먼저 실행되면 그 시점 원장에는 자기 자신뿐이라
+    # N=1 -> deflation 0 이 된다. "두 번 돌리면 맞는다"에 의존하지 않도록 순서를 고정한다.
+    sens = _sensitivity(ctx, floor)
+
     # 사전등록 config → 다중검정 원장 기록 + N 자동 산출(DSR·t-haircut 입력).
     rep = prop_gate(ent, ret, PRE_STOP, label="pead_concentrated", log_dir=OUT_DIR, config={
         "top_n": PRE_TOP_N, "hold": PRE_HOLD, "stop": PRE_STOP,
@@ -376,9 +381,8 @@ def run() -> None:
     # 음성대조 — 실제 트레이드 수만큼 무작위 draw.
     ctrl = random_entry_control(ent, ret, PRE_STOP, n_per_draw=len(ret), n_draws=200, seed=7)
 
-    # 분산형 대조 + 탐색적 민감도(2차).
+    # 분산형 대조.
     div = diversified_baseline_shape(ctx)
-    sens = _sensitivity(ctx, floor)
 
     report = _fmt_verdict(rep, ctrl, div, sens, floor, meta)
     os.makedirs(OUT_DIR, exist_ok=True)

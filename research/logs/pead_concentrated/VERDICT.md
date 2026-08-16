@@ -72,6 +72,14 @@ Step -1 feasibility: PEAD-top3 = **MEASURABLE BUT THIN**. clean-OOS 폴드당 ~3
 - OOS n=167  기대값R=-0.227  95%CI=[-0.426, -0.012]  (**CI 폭 0.414 R** — thin 표본)
 - 폴드 3/6 양수  monster=-61%  최장연패=10
 
+### [6] 다중검정 보정 — 시도 config N=29 (REPORTER, 판정 아님)
+
+선택편향을 깎은 값이다. N 은 원장(`TRIALS.jsonl`)에서 읽으며 사람이 세지 않는다.
+
+- 건당 Sharpe=-0.170  E[maxSharpe|H0]=0.160  **deflated=-0.329**
+- P(Sharpe>0)=3.1%  P(Sharpe>SR0)=0.0%
+- t-haircut ×1.60 (문턱 t 1.96→3.13)
+
 ## vs 랜덤 음성대조 (R1 — 게이트 자체 위양성률 보정)
 
 같은 유니버스/타이밍의 marginal 을 흉내낸 무작위 진입↔수익 페어링을 동일 게이트에 태운 것. 무작위가 이 바를 실제 셋업만큼 자주 넘으면 바가 느슨(thin 표본에선 특히 중요).
