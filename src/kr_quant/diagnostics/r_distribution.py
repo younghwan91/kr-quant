@@ -14,7 +14,7 @@ R-멀티플 = 트레이드 수익 ÷ 진입시 리스크(=하드손절 폭). 손
 아니라. 이 모듈은 순수 배열(수익, 진입일, 확신 피처, 손절폭)만 받는다.
 research/ 로부터 아무것도 import 하지 않는다 — 라이브러리 경계.
 
-Provenance: research/distribution.py 의 r_multiples / dist_shape / selection_curve /
+Provenance(git 이력 — 원본은 추출과 함께 삭제): research/distribution.py 의 r_multiples / dist_shape / selection_curve /
 conviction_analysis / hold_curve 를 print 기반에서 구조화된 dict 반환으로 일반화.
 """
 

@@ -78,6 +78,6 @@ src/kr_quant/engine/
 ## 후속 과제 (전부 낮은 우선순위)
 
 - `supply_wave.py`·`multi_signal.py`를 엔진으로 이전 (죽은 리서치 파일).
-- `research/pead_refinement.py` 스크래치 스크립트를 recipe API로 이전.
+- `research/experiments/pead_refinement.py` 스크래치 스크립트를 recipe API로 이전.
 - 테스트 DB 픽스처가 생기면 실데이터 골든 아웃풋 CI 테스트 추가.
 - 비용 모델이 복잡해지면 `engine/cost.py` 분리 (현재는 `cost_one_way * turnover`).

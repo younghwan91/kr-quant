@@ -1,7 +1,7 @@
 """Parameter sensitivity sweeps — plateau (robust) vs spike (overfit).
 
 Signal-agnostic extraction from ``research/bo_validate.py`` (run_sensitivity,
-run_explore). One-at-a-time perturbation: hold a center parameter set fixed, walk
+run_explore; 원본은 추출과 함께 삭제돼 git 이력에만 있다). One-at-a-time perturbation: hold a center parameter set fixed, walk
 one parameter across a grid, and read the TRAIN vs OOS metric shape.
 
     - A **plateau** around the center (neighbors stay near the center's value) =

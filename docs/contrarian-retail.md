@@ -5,7 +5,7 @@
 측정 가능한 것을 신호화한 뒤, (3) 부호를 반전(정반대)해 백테스트한 결과를 **정직하게** 기록한다.
 
 > **북극성:** "무조건 정반대"는 검증할 **가설**이지, 커브핏으로 양수를 만들 명령이 아니다.
-> 정반대가 알파면 알파로, 아니면 아님으로 보고한다. 스크립트: `research/contrarian_retail.py`.
+> 정반대가 알파면 알파로, 아니면 아님으로 보고한다. 스크립트: `research/signals/contrarian_retail.py`.
 
 ## 핵심 데이터 사실 (DB 실측, 2026-07-18)
 
@@ -52,7 +52,7 @@
 > 관점 + 손익비 청산**으로 재접근하면 검증된 스윙 전략이 나온다 → 문서 하단 "최종 전략" 참조.
 
 데이터: 2017-01 ~ 2026-07, 분할조정, 유동성 유니버스(거래대금 ADV ≥ 200억). engine
-`staggered_backtest` 회계 재사용. 스크립트 `research/contrarian_retail.py`.
+`staggered_backtest` 회계 재사용. 스크립트 `research/signals/contrarian_retail.py`.
 
 ### 1) 롱온리 excess — 함정: 반대매매도 추종도 **둘 다** 이긴다
 
@@ -280,7 +280,7 @@ stop0.10·trail0.20·hold60)을 한 번만 정하고 **재최적화 없이** wal
 ### 한 줄
 **"개미 반대"의 정답은 개미를 숏치는 게 아니라, 개미가 투매하는 강세주를 롱으로 받아 달리게
 두는 것.** 개미의 실수(처분효과·본전 닻내림)가 만드는 비펀더멘털 매도압력을 당신이 흡수한다 —
-그게 기관이 하는 일이다. 스크립트: `research/contrarian_retail.py`(`--behavior/--trade/--money/
+그게 기관이 하는 일이다. 스크립트: `research/signals/contrarian_retail.py`(`--behavior/--trade/--money/
 --harden/--payoff` 모드로 각 장 재현).
 
 > 방법론 주의: 1~3차의 부정 결과도 그대로 남겼다. 이 여정 자체(왜 단순 반전·방향성 매매는

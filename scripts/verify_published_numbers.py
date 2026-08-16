@@ -7,7 +7,7 @@ PRE-MIGRATION version of ``pead.py`` (git commit before the Step 3 engine
 migration), run on the exact same live-DB data.
 
 Note: this deliberately does NOT compare against a frozen numeric snapshot
-(e.g. research/PEAD_REFINEMENT_RESULTS.md). KR_QUANT_DB is a live TimescaleDB
+(e.g. research/logs/PEAD_REFINEMENT_RESULTS.md). KR_QUANT_DB is a live TimescaleDB
 that production DAGs keep ingesting into daily, so day-over-day numbers
 naturally drift as new trading days/earnings land -- that drift is expected
 and is not a migration regression. The only valid acceptance check is

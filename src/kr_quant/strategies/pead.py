@@ -31,7 +31,7 @@ from ..engine.panels import panel_pivot, resolve_signal
 from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest, staggered_tranche_backtest
 
 # Backward-compat re-exports (the metric/panel logic now lives in the engine).
-# `research/pead_refinement.py` and the engine parity tests still import these
+# `research/experiments/pead_refinement.py` and the engine parity tests still import these
 # private names; keep them as thin aliases so nothing re-derives the accounting.
 _panel = panel_pivot
 _resolve_signal = resolve_signal
