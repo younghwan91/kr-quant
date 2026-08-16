@@ -153,8 +153,10 @@ uv run kq-pead --db "$DSN" --earnings-csv earnings.csv \
 
 - `features/fundamentals.py`: `earnings_yoy_panel`, `earnings_yield_panel`, `blend_rank`, `combined_signal`
 - `strategies/pead.py`: `pead_backtest`, `staggered_backtest` (권장 실전형; `cap_panel`+`cap_rank=(20,60)`로 중대형 티어 제한 = 정직한 권장 유니버스), `pead_rank_ic`, `market_cap_panel`, `recommend_holdings` (현재 추천 보유 종목 산출), `main`
-- `collectors/dart_earnings.py`: `parse_net_income`, `yoy_growth`, `load_corp_map`, `fetch_net_income`, `main`
-- 테스트: `test_fundamentals.py`, `test_pead.py`, `test_dart_earnings.py` (90 통과, ruff 클린)
+- 수집: `collectors/dart_earnings.py` — 2026-07-12(51b3d95)에 테스트와 함께
+  [quant-airflow](https://github.com/younghwan91/quant-airflow)로 이전됐다. 이 저장소는
+  `earnings` 테이블을 읽기만 한다.
+- 테스트: `test_fundamentals.py`, `test_pead.py`, `test_parity_pead.py`
 
 ## 코스피 멜트업 문제 (비-과최적화 검증)
 

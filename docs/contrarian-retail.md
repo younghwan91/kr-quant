@@ -205,8 +205,14 @@ window×horizon 9개 격자의 롱숏 t-stat (서로소 보정 후):
 ### 6-1. 잘못된 시도 (경계까지 최적화 → 과최적 자초)
 
 파라미터를 optuna TPE로 최적화(TRAIN 2017~2021만, 목적=부트스트랩 기대값 하단, 120 trials).
-과최적을 구조적으로 막고 walk-forward로 일반화 검증. 스크립트: `research/bo_optimize.py`,
-`research/bo_validate.py`. 가속: numba 코어(루프 232ms/trial, clean 데이터 bit-parity).
+과최적을 구조적으로 막고 walk-forward로 일반화 검증. 가속: numba 코어(루프 232ms/trial,
+clean 데이터 bit-parity).
+
+> 당시 스크립트 `research/bo_optimize.py`·`research/bo_validate.py` 는 신호에 무관한
+> 부분이 라이브러리로 추출되면서 삭제됐다(git 이력에 있다). 지금 같은 일을 하는 코드는
+> `kr_quant.validation.optimization`(BO 목적함수)·`kr_quant.validation.sensitivity`
+> (민감도 스윕)·`kr_quant.validation.walkforward`(폴드·일관성)이고, 역발상 알파에
+> 물린 러너는 `research/experiments/contrarian_bo.py`·`contrarian_validate.py` 다.
 
 ### 함정: 단일 홀드아웃은 BO를 과대평가한다
 BO best(window10·top_mom.89·ext_q.88·stop.14·trail.29·hold90)를 단일 홀드아웃으로 보면:

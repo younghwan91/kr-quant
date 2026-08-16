@@ -181,7 +181,7 @@ cp .env.example .env          # KR_QUANT_DB에 TimescaleDB 접속정보 (비우�
 
 uv run pytest                 # 네트워크 불요 — 검증·진단 라이브러리 회귀 테스트
 uv run ruff check .
-python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 검사 (a)~(g)
+python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 검사 (a)~(h)
 ```
 
 분석 CLI(DB 읽기 전용): `kq-pead` — 게이트를 통과한 유일한 알파의 재현용 백테스트. 이
