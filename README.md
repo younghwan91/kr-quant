@@ -22,6 +22,28 @@
 
 > **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터, TimescaleDB 적재)은 [quant-airflow](https://github.com/younghwan91/quant-airflow)로 분리되어 있다. 본 저장소는 DB를 **읽기 전용**으로 사용한다.
 
+## 지금 바로 확인 — API 키도 DB도 필요 없다
+
+위의 "노이즈가 46% 확률로 통과한다"는 주장을 합성 데이터로 직접 재현할 수 있다. 1초 안에 끝난다.
+
+```bash
+uv run python research/experiments/prop_gate.py     # 심사 배터리 전체 + 랜덤 음성대조
+uv run python examples/pead_sweep_via_recipe.py     # 레시피로 PEAD 파라미터 스윕
+```
+
+실제 출력 마지막 블록:
+
+```text
+  랜덤 음성대조 — 50 draws × 600 trades (게이트 위양성률 보정)
+========================================================================
+  raw ≥5/6 폴드 도달: 46.0% of draws
+  clean-OOS 전폴드(≥4/4) 양수 도달: 22.0% of draws
+  OOS 기대값R: 평균 +0.076  p95 +0.185
+  → 무작위가 이 바를 자주 넘으면 게이트가 너무 느슨하다(사람이 판단).
+```
+
+**신호가 아예 없는 데이터로 만든 전략이 "6폴드 중 5폴드 양수"를 46% 확률로 달성한다.** 백테스트 자본곡선이 왜 증거가 못 되는지가 이 한 줄에 들어 있다. 같은 배터리가 §3–§5의 실제 가설 5건에 그대로 돌아간다.
+
 ---
 
 ## 1. 연구 원칙
@@ -227,19 +249,19 @@ MIT
 - 🐛 버그·질문 → [Issues](https://github.com/younghwan91/kr-quant/issues)
 - 📈 업데이트 소식 → [팔로우 @younghwan91](https://github.com/younghwan91)
 
-## 관련 프로젝트 — 한국 주식 퀀트 스택
+## 관련 프로젝트 — 오픈소스 퀀트 스택
 
-시세·펀더멘탈·뉴스 수집 REST API부터 데이터 파이프라인, 백테스트·알파 리서치까지 이어지는 오픈소스 스택의 일부입니다.
+한국·미국 주식과 암호화폐를 아우르는 오픈소스 스택입니다. 각 저장소는 독립적으로 쓸 수 있습니다.
 
-| 프로젝트 | 설명 |
-|---|---|
-| **[kiwoom-rest-api](https://github.com/younghwan91/kiwoom-rest-api)** | 키움증권 REST API Python 라이브러리 — 207개 엔드포인트 + 실시간 WebSocket |
-| **[krx-fundamentals-api](https://github.com/younghwan91/krx-fundamentals-api)** | 국내 기업 펀더멘탈 REST API — 재무제표·투자지표·배당·종목 스크리닝 (DART + KRX + 네이버) |
-| **[krx-news-rest-api](https://github.com/younghwan91/krx-news-rest-api)** | 한국 주식 뉴스·공시 수집 REST API (FastAPI + Redis) |
-| **[quant-airflow](https://github.com/younghwan91/quant-airflow)** | 시세·수급·실적을 TimescaleDB로 수집하는 Airflow 파이프라인 — **상장폐지 종목까지** 담아 생존편향을 막는다 |
-| **[quantbox-engine](https://github.com/younghwan91/quantbox-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
-| **[opt_portfolio](https://github.com/younghwan91/opt_portfolio)** | VAA 기반 전술적 자산배분 백테스트·운용 시스템 |
-| **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
+| 축 | 프로젝트 | 설명 |
+|---|---|---|
+| 🇰🇷 한국 주식 | **[kiwoom-rest-api](https://github.com/younghwan91/kiwoom-rest-api)** | 키움증권 REST API Python 라이브러리 — 국내주식 엔드포인트 전수·실시간 WebSocket, sync + async (`pip install kiwoom-client`) |
+| 🇰🇷 한국 주식 | **[krx-fundamentals-api](https://github.com/younghwan91/krx-fundamentals-api)** | 국내 기업 펀더멘탈 REST API — 재무제표·투자지표·배당·종목 스크리닝 (DART + KRX + 네이버) |
+| 🇰🇷 한국 주식 | **[krx-news-rest-api](https://github.com/younghwan91/krx-news-rest-api)** | 한국 주식 뉴스·공시 수집 REST API (FastAPI + Redis) |
+| 🇰🇷 한국 주식 | **[quant-airflow](https://github.com/younghwan91/quant-airflow)** | 시세·수급·실적을 TimescaleDB 로 수집하는 Airflow 파이프라인 — 상장폐지 종목까지 담아 생존편향을 막는다 |
+| 🇺🇸 미국 주식 | **[opt_portfolio](https://github.com/younghwan91/opt_portfolio)** | 미국주식 팩터 엔진 — point-in-time·생존편향 보정 데이터 위에서 walk-forward 를 Deflated Sharpe 로 게이팅 (+ VAA 자산배분 백테스터) |
+| 🇺🇸 미국 주식 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp 의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
+| ₿ 암호화폐 | **[quantbox-engine](https://github.com/younghwan91/quantbox-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
 
 ## 만든 사람
 
