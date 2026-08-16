@@ -87,13 +87,32 @@ def weekly_count(entries: list[tuple[str, str]]) -> pd.Series:
     return pd.Series(1, index=s).groupby([s.isocalendar().year, s.isocalendar().week]).sum()
 
 
-def gate_sim(fd: np.ndarray, rr: np.ndarray, stop: float, label: str) -> tuple[dict, dict, dict, dict]:
+def gate_sim(
+    fd: np.ndarray,
+    rr: np.ndarray,
+    stop: float,
+    label: str,
+    *,
+    config: dict,
+    log_dir: str,
+) -> tuple[dict, dict, dict, dict]:
     """민감도 스윕 한 칸 — prop_gate(verbose=False) 호출 후 자주 쓰는 조각을 함께 반환.
 
     반환: (rep, cost_sweep[0], folds, distribution). 각 러너의 _sensitivity 가 격자·행
     dict 는 스스로 만들고 이 게이트 호출·추출만 공유한다.
+
+    ``config``/``log_dir`` 은 **필수**다(2026-08-16). 이전에는 둘 다 안 넘겨서 격자
+    셀이 통째로 다중검정 원장을 우회했다 — pullback 은 18칸, pead_concentrated 는
+    27칸을 돌면서 TRIALS.jsonl 에 각각 1줄·2줄만 남았고, ``gate_report`` 는
+    ``n_trials <= 1`` 이면 deflation 을 정확히 0 으로 돌려주므로(``_expected_max_sharpe_h0``)
+    두 알파의 Deflated Sharpe 에 **haircut 이 전혀 걸리지 않았다.** GUARDRAILS §6
+    사전등록 템플릿이 "시도 예정 config 수(그리드는 민감도 전용): N"을 요구하는 이상
+    격자 셀도 시행이다. 원장은 config fingerprint 로 dedupe 하므로 같은 격자를 다시
+    돌려도 N 은 안 부풀려진다.
     """
-    rep = prop_gate(fd, rr, stop, label=label, verbose=False)
+    rep = prop_gate(
+        fd, rr, stop, label=label, config=config, log_dir=log_dir, verbose=False
+    )
     return rep, rep["cost_sweep"][0], rep["folds"], rep["distribution"]
 
 
@@ -194,7 +213,37 @@ def render_gate_report(rep: dict, *, ci_width: bool = False) -> list[str]:
     L.append(f"- 폴드 {fc['n_positive']}/{fc['n_folds']} 양수  monster={gr['monster_share']:.0%}  "
              f"최장연패={gr['max_loss_streak']}")
     L.append("")
+    L.extend(render_deflation(rep))
     return L
+
+
+def render_deflation(rep: dict) -> list[str]:
+    """다중검정 보정(DSR·t-haircut) 블록 — VERDICT 에 기록되는 부분.
+
+    2026-08-16 신설. ``prop_gate(verbose=True)`` 는 이 숫자를 **stdout 으로 출력만** 하고
+    VERDICT 를 쓰는 ``render_gate_report`` 는 통째로 빠뜨리고 있었다. 그래서 원장·DSR·
+    t-haircut 을 다 구현해두고도 **어떤 판정문에도 보정 수치가 남지 않았다** — 터미널을
+    닫으면 사라지는 규율이었다. 이 레포의 상습 실패 모드(만들고 연결 안 함)가 다중검정
+    보정에서 한 번 더 반복된 것이라, 렌더러에 붙여 기록으로 남긴다.
+    """
+    df = rep["gate_report"].get("deflation")
+    if df is None:
+        return []
+    th = df["t_haircut"]
+    return [
+        f"### [6] 다중검정 보정 — 시도 config N={df['n_trials']} (REPORTER, 판정 아님)",
+        "",
+        "선택편향을 깎은 값이다. N 은 원장(`TRIALS.jsonl`)에서 읽으며 사람이 세지 않는다.",
+        "",
+        f"- 건당 Sharpe={df['observed_sharpe']:+.3f}  "
+        f"E[maxSharpe|H0]={df['expected_max_sharpe_h0']:.3f}  "
+        f"**deflated={df['deflated_sharpe']:+.3f}**",
+        f"- P(Sharpe>0)={df['prob_sharpe_gt0']:.1%}  "
+        f"P(Sharpe>SR0)={df['prob_deflated_sharpe']:.1%}",
+        f"- t-haircut ×{th['haircut_multiple']:.2f} "
+        f"(문턱 t {th['base_hurdle_t']:.2f}→{th['adjusted_hurdle_t']:.2f})",
+        "",
+    ]
 
 
 def render_control(rep: dict, ctrl: dict, *, intro: str, actual_label: str) -> list[str]:

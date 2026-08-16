@@ -1,1 +1,19 @@
 {"config": {"adv_floor": 20000.0, "hold_max": 8, "min_gap": 10, "rsi_max": 30.0, "stop": 0.04, "target": 0.05}, "fingerprint": "363894509fcba253"}
+{"config": {"hold": 5, "stop": 0.03, "target": 0.05}, "fingerprint": "bc4124d61772cb69"}
+{"config": {"hold": 8, "stop": 0.03, "target": 0.05}, "fingerprint": "81f0a0ec461bf729"}
+{"config": {"hold": 10, "stop": 0.03, "target": 0.05}, "fingerprint": "766fd8d6b6362e33"}
+{"config": {"hold": 5, "stop": 0.03, "target": 0.08}, "fingerprint": "c84d5cdab74d9e8b"}
+{"config": {"hold": 8, "stop": 0.03, "target": 0.08}, "fingerprint": "9a4a0fae3dc99f4e"}
+{"config": {"hold": 10, "stop": 0.03, "target": 0.08}, "fingerprint": "8a9bdb1698682119"}
+{"config": {"hold": 5, "stop": 0.04, "target": 0.05}, "fingerprint": "ac6825c5124b88d5"}
+{"config": {"hold": 8, "stop": 0.04, "target": 0.05}, "fingerprint": "2800462e99b3ce48"}
+{"config": {"hold": 10, "stop": 0.04, "target": 0.05}, "fingerprint": "8a2942e9cc2c3742"}
+{"config": {"hold": 5, "stop": 0.04, "target": 0.08}, "fingerprint": "5ee0f30a068201ce"}
+{"config": {"hold": 8, "stop": 0.04, "target": 0.08}, "fingerprint": "48a07d7639401605"}
+{"config": {"hold": 10, "stop": 0.04, "target": 0.08}, "fingerprint": "e030ed51e8f6aced"}
+{"config": {"hold": 5, "stop": 0.05, "target": 0.05}, "fingerprint": "53bc6ab883ce69e5"}
+{"config": {"hold": 8, "stop": 0.05, "target": 0.05}, "fingerprint": "ac7824fa12335304"}
+{"config": {"hold": 10, "stop": 0.05, "target": 0.05}, "fingerprint": "3399f74dd58c50f8"}
+{"config": {"hold": 5, "stop": 0.05, "target": 0.08}, "fingerprint": "8fddcd2a9a4dadd3"}
+{"config": {"hold": 8, "stop": 0.05, "target": 0.08}, "fingerprint": "1e7c7068f84d1243"}
+{"config": {"hold": 10, "stop": 0.05, "target": 0.08}, "fingerprint": "7887b867a0b7bac9"}

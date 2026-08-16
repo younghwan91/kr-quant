@@ -535,7 +535,7 @@ def run_all() -> None:
 
     doc = f"""# PEAD Refinement Results
 
-**Date:** 2026-07-13  **Script:** `research/pead_refinement.py`
+**Date:** 2026-07-13  **Script:** `research/experiments/pead_refinement.py`
 **Plan:** `docs/pead-refinement.md` — 사전등록·Guardrails·회계 조화 (RALPLAN-DR consensus)
 
 ## Methodology
@@ -609,7 +609,7 @@ are cost-adjusted (secondary). `trail_pct=1.00` is the no-trail sanity row.
   universe-dependent (full 2,629-code DART set) and in-sample; treat any single
   best cell as a hypothesis, not a promise.
 """
-    out_path = "research/PEAD_REFINEMENT_RESULTS.md"
+    out_path = "research/logs/PEAD_REFINEMENT_RESULTS.md"
     with open(out_path, "w") as f:
         f.write(doc)
     print(f"\n[wrote] {out_path}")
@@ -629,7 +629,7 @@ _COMMANDS = {
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _COMMANDS:
-        print(f"usage: python research/pead_refinement.py "
+        print(f"usage: python research/experiments/pead_refinement.py "
               f"{{{'|'.join(_COMMANDS)}}}", file=sys.stderr)
         return 2
     _COMMANDS[sys.argv[1]]()

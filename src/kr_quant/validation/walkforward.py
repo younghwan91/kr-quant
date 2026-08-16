@@ -2,7 +2,8 @@
 
 Signal-agnostic extraction from ``research/bo_validate.py`` (FOLDS, _wf_oos,
 run_walkforward) and ``research/selective_walkforward.py`` (_fold_slices, _rdist,
-fold-consistency). Everything here takes GENERIC inputs: returns/entry-date arrays
+fold-consistency; 두 원본 모두 추출과 함께 삭제돼 git 이력에만 있다).
+Everything here takes GENERIC inputs: returns/entry-date arrays
 and a ``simulate(params) -> (returns, entry_dates)`` callable. No research imports.
 
 Two design rules encode the "no-lookahead is sacred" principle:

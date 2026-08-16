@@ -1,6 +1,7 @@
 """Bayesian optimization with a robust objective — the anti-overfit core.
 
-Signal-agnostic extraction of the BO machinery from ``research/bo_optimize.py``.
+Signal-agnostic extraction of the BO machinery from ``research/bo_optimize.py``
+(추출과 함께 삭제돼 git 이력에만 있다).
 Every function here operates on GENERIC inputs — a ``simulate`` callable that maps
 a parameter dict to ``(returns, entry_dates)`` arrays, a search ``space``, and an
 entry-date TRAIN boundary. No signal wiring, no imports from ``research/``.

@@ -105,7 +105,9 @@ def _sensitivity(entries: list[tuple[str, str]], p: dict) -> list[dict]:
             for h in (5, 8, 10)]
     for s, tgt, h in grid:
         fd, rr = simulate_pullback_trades(entries, p, stop=s, target=tgt, hold_max=h)
-        rep, cs0, fb, d = gate_sim(fd, rr, s, f"sens_{s}_{tgt}_{h}")
+        rep, cs0, fb, d = gate_sim(
+            fd, rr, s, f"sens_{s}_{tgt}_{h}",
+            config={"stop": s, "target": tgt, "hold": h}, log_dir=OUT_DIR)
         rows.append({
             "stop": s, "target": tgt, "hold": h, "n": rep["n_total"],
             "oos_expR": cs0["oos_expectancy_R"], "win_rate": d["win_rate"],
@@ -238,6 +240,11 @@ def run() -> None:
     print(f"\n[extractor] 원신호(de-dup 전) {n_entries_raw} → de-dup {len(entries)} → "
           f"시뮬 트레이드 {len(rets)}  (주당 중앙값 {weekly_median:.0f}/최대 {weekly_max})")
 
+    # 민감도 격자를 **먼저** 돌린다(2026-08-16). DSR 의 입력 N 은 원장에서 읽는데,
+    # 사전등록 게이트가 격자보다 먼저 실행되면 그 시점 원장에는 자기 자신뿐이라
+    # N=1 -> deflation 0 이 된다. "두 번 돌리면 맞는다"에 의존하지 않도록 순서를 고정한다.
+    sens = _sensitivity(entries, p)
+
     # 사전등록 config 를 넘기면 다중검정 원장(research/logs/pullback_prop/TRIALS.jsonl)에
     # 기록되고 N 이 거기서 읽힌다 — DSR·t-haircut 의 입력을 손으로 세지 않는다.
     rep = prop_gate(fill_dates, rets, PRE_STOP, label="pullback", log_dir=OUT_DIR, config={
@@ -251,9 +258,6 @@ def run() -> None:
 
     # 레짐 정직성.
     regime = regime_split(fill_dates, rets, rep["primary_cost"], PRE_STOP)
-
-    # 탐색적 민감도(2차).
-    sens = _sensitivity(entries, p)
 
     report = _fmt_verdict(rep, ctrl, regime, sens, n_entries_raw, weekly_median, weekly_max)
     os.makedirs(OUT_DIR, exist_ok=True)

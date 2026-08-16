@@ -1,8 +1,8 @@
 # PEAD 정교화 실험 — 사전등록 + 설계 결정 기록
 
 2026-07-13에 수행한 PEAD 3단계 정교화 실험의 **사전등록 기록**과 회계 관례.
-**결과는 `research/PEAD_REFINEMENT_RESULTS.md`(결론: 개선 없음), 스크립트는
-`research/pead_refinement.py`.** 이 문서는 "무엇을 데이터 보기 전에 정해뒀는가"를 남긴다 —
+**결과는 `research/logs/PEAD_REFINEMENT_RESULTS.md`(결론: 개선 없음), 스크립트는
+`research/experiments/pead_refinement.py`.** 이 문서는 "무엇을 데이터 보기 전에 정해뒀는가"를 남긴다 —
 결과 문서의 정직성이 여기에 의존한다.
 
 원 계획서는 RALPLAN-DR 컨센서스로 작성됐고, 마이그레이션 절차 등 실행 스크래치는 로컬에만 있다.
@@ -77,6 +77,6 @@ import 불가 → ~20줄 일회성 복사, 감사용 줄 참조 명시.
 
 ## 결론
 
-세 실험 모두 **개선 없음**. 상세는 `research/PEAD_REFINEMENT_RESULTS.md`.
+세 실험 모두 **개선 없음**. 상세는 `research/logs/PEAD_REFINEMENT_RESULTS.md`.
 후속: 트레일링이 유의미했다면 `staggered_backtest`에 선택적 `trail_pct` 파라미터를 별도 승인 PR로
 추가할 예정이었으나, 개선이 없어 진행하지 않는다.

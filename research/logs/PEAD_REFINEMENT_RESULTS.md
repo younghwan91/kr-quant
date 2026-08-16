@@ -1,6 +1,6 @@
 # PEAD Refinement Results
 
-**Date:** 2026-07-13  **Script:** `research/pead_refinement.py`
+**Date:** 2026-07-13  **Script:** `research/experiments/pead_refinement.py`
 **Plan:** `docs/pead-refinement.md` — 사전등록·Guardrails·회계 조화 (RALPLAN-DR consensus)
 
 ## Methodology
