@@ -208,7 +208,9 @@ def _sensitivity(ctx: dict, floor: float) -> list[dict]:
         ent, ret, _ = extract_concentrated(
             ctx, top_n=tn, hold=h, stop=s, step=REBALANCE_STEP,
             adv_floor=ADV_FLOOR, surprise_floor=floor)
-        rep, cs0, fb, _ = gate_sim(ent, ret, s, f"sens_{tn}_{h}_{s}")
+        rep, cs0, fb, _ = gate_sim(
+            ent, ret, s, f"sens_{tn}_{h}_{s}",
+            config={"top_n": tn, "hold": h, "stop": s}, log_dir=OUT_DIR)
         rows.append({
             "top_n": tn, "hold": h, "stop": s, "n": rep["n_total"],
             "oos_expR": cs0["oos_expectancy_R"],

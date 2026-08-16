@@ -105,7 +105,9 @@ def _sensitivity(entries: list[tuple[str, str]], p: dict) -> list[dict]:
             for h in (5, 8, 10)]
     for s, tgt, h in grid:
         fd, rr = simulate_pullback_trades(entries, p, stop=s, target=tgt, hold_max=h)
-        rep, cs0, fb, d = gate_sim(fd, rr, s, f"sens_{s}_{tgt}_{h}")
+        rep, cs0, fb, d = gate_sim(
+            fd, rr, s, f"sens_{s}_{tgt}_{h}",
+            config={"stop": s, "target": tgt, "hold": h}, log_dir=OUT_DIR)
         rows.append({
             "stop": s, "target": tgt, "hold": h, "n": rep["n_total"],
             "oos_expR": cs0["oos_expectancy_R"], "win_rate": d["win_rate"],

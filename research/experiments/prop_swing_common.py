@@ -87,13 +87,32 @@ def weekly_count(entries: list[tuple[str, str]]) -> pd.Series:
     return pd.Series(1, index=s).groupby([s.isocalendar().year, s.isocalendar().week]).sum()
 
 
-def gate_sim(fd: np.ndarray, rr: np.ndarray, stop: float, label: str) -> tuple[dict, dict, dict, dict]:
+def gate_sim(
+    fd: np.ndarray,
+    rr: np.ndarray,
+    stop: float,
+    label: str,
+    *,
+    config: dict,
+    log_dir: str,
+) -> tuple[dict, dict, dict, dict]:
     """민감도 스윕 한 칸 — prop_gate(verbose=False) 호출 후 자주 쓰는 조각을 함께 반환.
 
     반환: (rep, cost_sweep[0], folds, distribution). 각 러너의 _sensitivity 가 격자·행
     dict 는 스스로 만들고 이 게이트 호출·추출만 공유한다.
+
+    ``config``/``log_dir`` 은 **필수**다(2026-08-16). 이전에는 둘 다 안 넘겨서 격자
+    셀이 통째로 다중검정 원장을 우회했다 — pullback 은 18칸, pead_concentrated 는
+    27칸을 돌면서 TRIALS.jsonl 에 각각 1줄·2줄만 남았고, ``gate_report`` 는
+    ``n_trials <= 1`` 이면 deflation 을 정확히 0 으로 돌려주므로(``_expected_max_sharpe_h0``)
+    두 알파의 Deflated Sharpe 에 **haircut 이 전혀 걸리지 않았다.** GUARDRAILS §6
+    사전등록 템플릿이 "시도 예정 config 수(그리드는 민감도 전용): N"을 요구하는 이상
+    격자 셀도 시행이다. 원장은 config fingerprint 로 dedupe 하므로 같은 격자를 다시
+    돌려도 N 은 안 부풀려진다.
     """
-    rep = prop_gate(fd, rr, stop, label=label, verbose=False)
+    rep = prop_gate(
+        fd, rr, stop, label=label, config=config, log_dir=log_dir, verbose=False
+    )
     return rep, rep["cost_sweep"][0], rep["folds"], rep["distribution"]
 
 

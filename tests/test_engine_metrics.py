@@ -1,8 +1,11 @@
 """Engine metrics — unit + source-equivalence tests (Step 0 of the migration).
 
 Each metric is checked against a known answer plus its edge cases (empty, all-NaN,
-single element, zero-vol), and each is asserted byte-identical to the strategy
-function it was copied from — the pinning guarantee that the extraction is exact.
+single element, zero-vol).
+
+추출 당시 있던 "원본 함수와 바이트 동일" 핀 4건은 2026-08-16 에 제거했다 — 원본
+(``strategies.backtest``/``strategies.pead``)이 엔진을 그대로 재수출하는 별칭이 되면서
+같은 함수 객체를 자기 자신과 비교하는 항진명제가 됐고, 이후 backtest 쪽은 삭제됐다.
 """
 
 from __future__ import annotations
@@ -21,12 +24,6 @@ from kr_quant.engine.metrics import (
     spearman,
     summarize_periods,
 )
-
-# Source functions the engine copied from (equivalence pins).
-from kr_quant.strategies.backtest import _quantile_summary as _src_quantile_summary
-from kr_quant.strategies.backtest import spearman as _src_spearman
-from kr_quant.strategies.pead import _newey_west_t as _src_newey_west_t
-from kr_quant.strategies.pead import _summarize as _src_summarize
 
 _MONTHS = [f"20{y:02d}-{m:02d}" for y in range(18, 24) for m in range(1, 13)]  # 72 months
 
@@ -118,11 +115,6 @@ def test_newey_west_t_drops_nan():
     assert m1 == m2
 
 
-def test_newey_west_t_matches_source():
-    rng = np.random.default_rng(3)
-    x = rng.normal(0.01, 0.02, 100)
-    assert newey_west_t(x, 10) == _src_newey_west_t(x, 10)
-
 
 # --- summarize_periods ----------------------------------------------------------
 
@@ -149,10 +141,6 @@ def test_summarize_payoff_ratio():
     assert abs(s["worst"] - (-0.02)) < 1e-12
 
 
-def test_summarize_matches_source():
-    periods = pd.DataFrame({"net": [0.02, -0.01, 0.03, -0.02, 0.01], "turnover": [0.4] * 5})
-    assert summarize_periods(periods, 40) == _src_summarize(periods, 40)
-
 
 # --- spearman -------------------------------------------------------------------
 
@@ -166,11 +154,6 @@ def test_spearman_monotonic():
 def test_spearman_single_element_is_nan():
     assert np.isnan(spearman(pd.Series([1.0]), pd.Series([2.0])))
 
-
-def test_spearman_matches_source():
-    a = pd.Series([3.0, 1.0, 4.0, 1.5, 5.0])
-    b = pd.Series([2.0, 7.0, 1.0, 8.0, 2.0])
-    assert spearman(a, b) == _src_spearman(a, b)
 
 
 # --- quantile_summary -----------------------------------------------------------
@@ -192,12 +175,6 @@ def test_quantile_summary_too_few_returns_empty():
     assert out.empty
     assert list(out.columns) == ["quantile", "n", "mean_fwd", "hit_rate"]
 
-
-def test_quantile_summary_matches_source():
-    m = _merged(40)
-    a = quantile_summary(m, 4)
-    b = _src_quantile_summary(m, 4)
-    pd.testing.assert_frame_equal(a, b)
 
 
 # --- paired_bootstrap -----------------------------------------------------------

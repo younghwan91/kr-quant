@@ -133,28 +133,41 @@
 
 ## 7. 아키텍처
 
+**심사 기계 (src/kr_quant) — 알파와 무관하게 재사용된다.**
+
 ```
 src/kr_quant/
 ├── storage.py           # 읽기 전용 DB 접근. read_prices/read_earnings가 유일한 정문 —
 │                        #   폐지종목 포함·정정공시 버전을 로딩 시점에 검사한다
 ├── price_adjust.py      # 기업행동 백조정 (airflow DAG가 in-place 실행)
-├── engine/              # 백테스트 엔진: cross-sectional sim, 패널, 메트릭, recipe
+├── engine/              # 백테스트 회계: cross-sectional sim, 패널, 메트릭, recipe
 ├── validation/          # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
 ├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)·trials(다중검정 원장)
-├── strategies/          # pead · accumulation · supply_wave · multi_signal
-├── models/              # graph_flow(그래프 확산) · ensemble_signal(릿지 앙상블)
-├── features/            # fundamentals · short_flow · sector_flow · universe
-└── viz/                 # 수급 시각화
+├── features/            # fundamentals(실적 YoY·정정공시 bitemporal) · universe(PIT)
+└── strategies/pead.py   # 통과한 유일한 알파의 DataFrame 어댑터 (회계는 engine/)
+```
 
-research/                # 리서치 실험 (라이브러리를 호출하는 얇은 스크립트)
-├── signals/             # 신호 정의 (contrarian_retail · operator_flow)
+**심사 대상과 판정 기록 (research/) — 기계에 태워진 가설들.**
+
+```
+research/
+├── signals/             # 신호 정의 (contrarian_retail · pullback_swing)
 ├── experiments/         # 실험 러너 — prop_gate 게이트 하버스로 심사
 └── logs/                # VERDICT · SUMMARY · TRIALS.jsonl (판정·분석·시행 원장)
 ```
 
+> **2026-08-16 정리.** 스크리너·ML·차트 계열(accumulation·backtest·supply_wave·
+> multi_signal·graph_flow·ensemble_signal·viz + 그것만 쓰던 수급/신용/공매도/섹터 피처)
+> 4,400여 줄을 삭제했다. 삭제 이유는 "안 쓰여서"가 아니다 — 전부 `supply_demand JOIN
+> stocks`(상장 마스터와의 INNER JOIN이라 **폐지 종목이 구조적으로 빠진다**) 위에서
+> **분할 미조정** 종가로 돌고 있었다. 즉 이 저장소가 §2에서 강제한다고 적어둔 두 규율을
+> src/ 안에서 스스로 어기던 코드다. GUARDRAILS §0 원칙대로 부탁 대신 **제거**로 막았다.
+
 설계 원칙: `src/kr_quant`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다. 새 알파의 표준 흐름은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
 
-**규율은 부탁이 아니라 린트다.** `scripts/check_guardrails.py`가 CI에서 7가지를 막는다 — (a) src→research import, (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL" 판정 문자열, (d) `storage` 밖에서 raw `SELECT ... FROM earnings`(정정공시 버전이 중복 행으로 샌다), (e) `prop_gate`에 `config=` 누락(원장에 시행이 안 남아 DSR이 계산되지 않는다), (f) `*_gate.py`가 공용 하버스를 안 쓰는 것(음성대조·비용2배·R분포가 조용히 빠진다), (g) 가격 테이블 직접 SELECT(유니버스에서 폐지 종목이 빠진다).
+**규율은 부탁이 아니라 린트다.** `scripts/check_guardrails.py`가 CI에서 8가지를 막는다 — (a) src→research import, (b) VERDICT 없는 `*_gate.py`, (c) 하드코딩 "PASS"/"FAIL" 판정 문자열, (d) `storage` 밖에서 raw `SELECT ... FROM earnings`(정정공시 버전이 중복 행으로 샌다), (e) `prop_gate`/`gate_sim` **호출 지점마다** `config=` 누락(원장에 시행이 안 남아 DSR이 계산되지 않는다), (f) `*_gate.py`가 공용 하버스를 안 쓰는 것(음성대조·비용2배·R분포가 조용히 빠진다), (g) 가격 테이블 직접 SELECT + `supply_demand JOIN stocks`(유니버스에서 폐지 종목이 빠진다), (h) **코드 없는 VERDICT**((b)의 역방향 — 러너가 등록·실재하거나 재현불가를 명시해야 한다).
+
+> **그리고 린트를 검사하는 린트가 있다.** `tests/test_check_guardrails.py`가 각 규칙에 위반을 주입해 *실제로 실패하는지* 확인한다. 이게 없어서 실제로 일이 났다 — 규칙 (e)가 **파일 단위**로 구현돼 있어, 파일 어딘가에 `config=`가 한 번만 있으면 같은 파일의 나머지 게이트 호출이 전부 면제됐다. 그 탓에 민감도 스윕 18~27칸이 원장을 통째로 우회했고 `n_trials ≤ 1`이라 **Deflated Sharpe의 haircut이 0**이었는데 CI는 초록이었다. 규칙이 막으려던 실패 모드를 규칙이 못 보고 있었다(2026-08-16 수정).
 
 이 레포에서 반복된 실패 모드가 "기능은 만들어두고 쓰는 쪽에 연결을 안 함"이었기 때문이다 — purge/embargo·Deflated Sharpe·음성대조 규약이 모두 구현돼 있으면서 한 번도 호출되지 않은 채로 있었다.
 
@@ -171,7 +184,8 @@ uv run ruff check .
 python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 검사 (a)~(g)
 ```
 
-분석 CLI(모두 DB 읽기 전용): `kq-pead`(PEAD 백테스트), `kq-screen`(매집 스크리너, §9), `kq-chart --code 005930`(수급 차트).
+분석 CLI(DB 읽기 전용): `kq-pead` — 게이트를 통과한 유일한 알파의 재현용 백테스트. 이
+저장소는 스크리너 제품이 아니라 검증 프레임워크라 CLI는 이것 하나다.
 
 ## 9. 참고 문헌
 
@@ -180,16 +194,7 @@ python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 
 - Harvey, C. R., & Liu, Y. (2016). *…and the Cross-Section of Expected Returns.* Review of Financial Studies (다중검정 t-haircut).
 - López de Prado, M. (2018). *Advances in Financial Machine Learning* (purged K-fold + embargo).
 
-## 10. 부록 — 매집 스크리너
-
-주가가 좁은 범위에서 횡보하는 동안 외국인·기관이 순매수하고 개인이 순매도하는 와이코프식 매집 구간을 점수화하는 1차 스크리너다. 점수 = (외국인+기관 누적 순매수 ÷ 평균거래량) ÷ 변동범위. 이는 검증된 알파가 아니라 **탐색용 스크리너**이며, 아래 그림은 단일 짧은 윈도우(2026-05-15~06-12, 19거래일)의 **in-sample 예시**로 성과 주장이 아니다.
-
-![매집 후보 상위 종목](docs/images/ranking.png)
-![매집 점수 vs 후속 수익률](docs/images/backtest.png)
-
-> 매집 신호는 돌파를 보장하지 않으며, 롤링 아웃오브샘플·거래비용·생존편향을 통제한 정식 백테스트가 아니다. 재생성: `python scripts/make_figures.py`.
-
-## 11. 데이터 스키마 (읽기 전용)
+## 10. 데이터 스키마 (읽기 전용)
 
 | 테이블 | 용도 |
 |---|---|
@@ -204,7 +209,7 @@ python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 
 
 테이블 소유·마이그레이션은 [quant-airflow](https://github.com/younghwan91/quant-airflow)가 담당한다.
 
-## 12. 범위와 한계
+## 11. 범위와 한계
 
 > 이 저장소는 **수익을 파는 곳이 아니다.** §4의 수치도 백테스트 결과이며, 기여는 그 수치가 아니라 그것을 얻고 검증한 절차에 있다.
 
