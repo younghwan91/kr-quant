@@ -5,4 +5,10 @@
 ML·차트 전략(accumulation·backtest·supply_wave·multi_signal·graph_flow·ensemble_signal)은
 2026-08-16 에 삭제했다 — 생존자 전용 유니버스 위에서 분할 미조정 종가로 돌아, 이
 저장소가 강제한다고 적어둔 규율을 스스로 어기고 있었기 때문이다(git 이력에 있다).
+
+``lowvol`` (저변동 팩터), ``combo`` (역변동성 결합), ``hedge`` (인버스 ETF 시장헤지)는
+scalp-it 에서 이관한 **후보** 어댑터다 — 같은 :mod:`kr_quant.engine` 회계를 재사용하고
+단위 테스트를 붙였으나, 이 저장소의 정식 게이트 배터리(``research/experiments/*_gate.py``
++ ``prop_gate``)로는 **아직 재심사되지 않았다.** "게이트를 통과한 알파는 PEAD 하나"는
+그대로다. 방법·수치는 ``docs/lowvol-strategy.md``·``docs/combo-book.md`` 참조.
 """
