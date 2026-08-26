@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from kr_quant.storage import connect, market_cap_asof
 
 
@@ -100,4 +102,74 @@ def test_market_cap_asof_bulk_matches_per_row_on_zero_shares(tmp_path):
     assert pd.isna(out.iloc[0])                       # 0 행이 이긴 종목 → 결측
     assert out.iloc[1] == 20000 * 500000              # 정상 종목은 그대로
     assert pd.isna(out.iloc[0]) == (market_cap_asof(con, "005930", "2026-02-01") is None)
+    con.close()
+
+
+def _supply_schema(con):
+    # connect() 가 이미 실 스키마(17컬럼)를 만든다 — 없을 때만 최소 형태로 보강한다.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS supply_demand("
+        "code TEXT, date TEXT, individual REAL, foreign_ REAL, institution REAL, source TEXT)")
+    con.commit()
+
+
+def _insert_supply(con, code, date, individual, foreign_, institution, source):
+    con.execute(
+        "INSERT INTO supply_demand(code, date, individual, foreign_, institution, source) "
+        "VALUES (?,?,?,?,?,?)",
+        (code, date, individual, foreign_, institution, source))
+    con.commit()
+
+
+def test_read_supply_demand_blocks_silent_individual_survivorship(tmp_path):
+    """개인 수급 + 폐지 커버리지는 현 데이터로 양립 불가 — 조용히 넘기지 않는다."""
+    from kr_quant.storage import read_supply_demand
+
+    con = connect(tmp_path / "t.db")
+    _supply_schema(con)
+    with pytest.raises(AssertionError, match="individual"):
+        read_supply_demand(con, cols=("code", "date", "individual"))
+    con.close()
+
+
+def test_read_supply_demand_allows_individual_when_declared(tmp_path):
+    from kr_quant.storage import read_supply_demand
+
+    con = connect(tmp_path / "t.db")
+    _supply_schema(con)
+    _insert_supply(con, "005930", "2026-08-26", 10.0, 5.0, -15.0, "kiwoom")
+    df = read_supply_demand(con, cols=("code", "date", "individual"),
+                            allow_individual_survivorship=True)
+    assert len(df) == 1
+    con.close()
+
+
+def test_read_supply_demand_catches_missing_delisted(tmp_path):
+    """폐지 종목 수급이 구간에 있는데 결과에 없으면 터진다."""
+    from kr_quant.storage import _assert_supply_has_delisted
+
+    con = connect(tmp_path / "t.db")
+    _supply_schema(con)
+    _insert_supply(con, "900010", "2026-01-05", None, 3.0, 4.0, "naver")   # 폐지분
+    _insert_supply(con, "005930", "2026-01-05", 1.0, 2.0, 3.0, "kiwoom")
+
+    import pandas as pd
+    survivors_only = pd.DataFrame({"code": ["005930"], "date": ["2026-01-05"]})
+    with pytest.raises(AssertionError, match="폐지 종목 수급"):
+        _assert_supply_has_delisted(con, survivors_only, start=None, end=None)
+    con.close()
+
+
+def test_read_supply_demand_window_scopes_the_delisted_expectation(tmp_path):
+    """'오늘 하루' 시점 조회는 그 구간에 폐지분이 없으므로 헛되이 터지지 않는다."""
+    from kr_quant.storage import read_supply_demand
+
+    con = connect(tmp_path / "t.db")
+    _supply_schema(con)
+    _insert_supply(con, "900010", "2026-01-05", None, 3.0, 4.0, "naver")   # 오래전 폐지
+    _insert_supply(con, "005930", "2026-08-26", None, 2.0, 3.0, "kiwoom")
+
+    df = read_supply_demand(con, cols=("code", "date", "institution"),
+                            start="2026-08-26", end="2026-08-26")
+    assert list(df["code"]) == ["005930"]
     con.close()

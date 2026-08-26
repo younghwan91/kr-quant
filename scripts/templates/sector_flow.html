@@ -1,0 +1,393 @@
+<title>국장 자금 흐름</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#fbfbfc; --card:#ffffff; --sunk:#f4f5f8;
+  --ink:#14161a; --ink-2:#5a6070; --ink-3:#8b91a1;
+  --line:#e4e7ee; --line-2:#eef0f5;
+  --buy:#e34948;  --sell:#2a78d6;  --zero:#f0efec;
+  --buy-soft:#fdeceb; --sell-soft:#e9f1fc;
+  --focus:#2a78d6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
+    --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
+    --line:#2a2f38; --line-2:#232830;
+    --buy:#e66767; --sell:#3987e5; --zero:#383835;
+    --buy-soft:#332223; --sell-soft:#1b2634;
+    --focus:#3987e5;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
+  --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
+  --line:#2a2f38; --line-2:#232830;
+  --buy:#e66767; --sell:#3987e5; --zero:#383835;
+  --buy-soft:#332223; --sell-soft:#1b2634;
+  --focus:#3987e5;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:28px 20px 64px; display:flex; flex-direction:column; gap:22px}
+.num{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums}
+.figure{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}  /* 큰 단독 수치 — 등폭 숫자 금지 */
+
+/* ---- header ---- */
+header{display:flex; flex-direction:column; gap:10px}
+.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+h1{margin:0; font-size:clamp(26px,4vw,36px); font-weight:700; letter-spacing:-.02em; text-wrap:balance}
+.subline{display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:var(--ink-2); font-size:13.5px}
+.chip{
+  display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+  font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--sunk); color:var(--ink-2);
+}
+.chip.live{border-color:var(--buy); color:var(--buy); background:var(--buy-soft)}
+.chip .dot{width:6px; height:6px; border-radius:50%; background:currentColor}
+
+/* ---- stat tiles ---- */
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:10px}
+.tile{
+  background:var(--card); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; display:flex; flex-direction:column; gap:5px; position:relative; overflow:hidden;
+}
+.tile::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--line)}
+.tile.pos::before{background:var(--buy)} .tile.neg::before{background:var(--sell)}
+.tile .k{font-size:12px; color:var(--ink-2); font-weight:500}
+.tile .v{font-size:23px; font-weight:600; letter-spacing:-.01em}
+.tile .u{font-size:11.5px; color:var(--ink-3)}
+.pos{color:var(--buy)} .neg{color:var(--sell)}
+
+/* ---- controls ---- */
+.controls{display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between}
+.seg{display:inline-flex; background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:3px; gap:2px}
+.seg button{
+  font:inherit; font-size:13px; font-weight:500; padding:6px 13px; border:0; border-radius:6px;
+  background:transparent; color:var(--ink-2); cursor:pointer;
+}
+.seg button[aria-pressed="true"]{background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg button:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+.hint{font-size:12.5px; color:var(--ink-3)}
+
+/* ---- diverging chart ---- */
+.panel{background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.panel h2{margin:0; padding:15px 18px 12px; font-size:14.5px; font-weight:600; border-bottom:1px solid var(--line-2)}
+.panel h2 small{font-weight:400; color:var(--ink-3); font-size:12.5px; margin-left:7px}
+.rows{padding:8px 6px 12px}
+.row{
+  display:grid; grid-template-columns:104px 1fr 94px; align-items:center; gap:10px;
+  padding:3px 12px; border:0; background:none; width:100%; text-align:left;
+  font:inherit; color:inherit; cursor:pointer; border-radius:7px;
+}
+.row:hover,.row:focus-visible{background:var(--sunk); outline:none}
+.row[aria-current="true"]{background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line)}
+.row .name{font-size:13px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.row[aria-current="true"] .name{color:var(--ink); font-weight:600}
+.track{position:relative; height:22px}
+.axis{position:absolute; top:-4px; bottom:-4px; width:1px; background:var(--line); left:50%}
+.bar{position:absolute; top:4px; height:14px; border-radius:3px}
+.bar.p{background:var(--buy); border-radius:0 4px 4px 0}
+.bar.n{background:var(--sell); border-radius:4px 0 0 4px}
+.row .val{font-size:12.5px; text-align:right; font-weight:500}
+.ret{font-size:11px; color:var(--ink-3); margin-left:5px}
+.row .val .ret{color:var(--ink-3)}  /* 막대 색과 경쟁시키지 않는다 */
+
+/* ---- detail ---- */
+.two{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media (max-width:860px){ .two{grid-template-columns:1fr} .row{grid-template-columns:84px 1fr 84px} }
+.lst{padding:6px 8px 12px; display:flex; flex-direction:column}
+.lst .li{display:grid; grid-template-columns:1fr auto auto; gap:9px; align-items:center; padding:6px 11px; border-radius:6px}
+.lst .li:hover{background:var(--sunk)}
+.lst .nm{font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.lst .nm span{color:var(--ink-3); font-size:11px; margin-left:5px}
+.lst .amt{font-size:12.5px; font-weight:500; text-align:right; min-width:74px}
+.lst .rt{font-size:11.5px; text-align:right; min-width:52px; color:var(--ink-2)}
+.det-bars{display:flex; flex-direction:column; gap:7px; padding:12px 16px 16px}
+.db{display:grid; grid-template-columns:52px 1fr 72px; gap:9px; align-items:center; font-size:12.5px}
+.db .dbn{color:var(--ink-2)}
+.db .dbt{position:relative; height:12px; background:var(--sunk); border-radius:3px}
+.db .dbb{position:absolute; top:0; height:12px; border-radius:3px}
+
+/* ---- table ---- */
+.tblwrap{overflow-x:auto}
+table{border-collapse:collapse; width:100%; font-size:12.5px}
+th,td{padding:7px 12px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line-2)}
+th:first-child,td:first-child{text-align:left}
+thead th{
+  position:sticky; top:0; background:var(--card); color:var(--ink-2); font-weight:600;
+  font-size:11px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid var(--line);
+}
+tbody tr:hover{background:var(--sunk)}
+
+/* ---- tooltip ---- */
+#tip{
+  position:fixed; z-index:50; pointer-events:none; opacity:0; transition:opacity .1s;
+  background:var(--card); border:1px solid var(--line); border-radius:9px;
+  padding:10px 13px; font-size:12.5px; box-shadow:0 8px 26px rgba(0,0,0,.16); min-width:184px;
+}
+#tip .tt{font-weight:600; margin-bottom:6px; font-size:13px}
+#tip .tr{display:flex; justify-content:space-between; gap:20px; line-height:1.75}
+#tip .tk{color:var(--ink-2)}
+
+/* ---- notes ---- */
+.notes{border-left:3px solid var(--line); padding:2px 0 2px 15px; display:flex; flex-direction:column; gap:7px}
+.notes p{margin:0; font-size:12.5px; color:var(--ink-2)}
+.notes b{color:var(--ink); font-weight:600}
+@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">KR MARKET · SECTOR FLOW</div>
+    <h1>국장 자금 흐름</h1>
+    <div class="subline">
+      <span class="num" id="hdr-date"></span>
+      <span id="hdr-chip"></span>
+      <span id="hdr-names" class="num"></span>
+    </div>
+  </header>
+
+  <section class="tiles" id="tiles"></section>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="투자주체 선택" id="seg-actor"></div>
+    <div class="seg" role="group" aria-label="정렬 기준" id="seg-sort"></div>
+  </div>
+
+  <section class="panel">
+    <h2 id="chart-title">섹터별 순매수<small>막대를 누르면 종목이 열립니다 · 단위 억원</small></h2>
+    <div class="rows" id="rows"></div>
+  </section>
+
+  <div class="two">
+    <section class="panel">
+      <h2 id="d-buy">가장 많이 담은 종목</h2>
+      <div class="lst" id="lst-buy"></div>
+    </section>
+    <section class="panel">
+      <h2 id="d-sell">가장 많이 던진 종목</h2>
+      <div class="lst" id="lst-sell"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2 id="d-detail">기관 세부<small>어떤 기관이 샀나 · 단위 억원</small></h2>
+    <div class="det-bars" id="detbars"></div>
+  </section>
+
+  <section class="panel">
+    <h2>전체 표<small>모든 섹터 · 단위 억원</small></h2>
+    <div class="tblwrap"><table id="tbl"></table></div>
+  </section>
+
+  <div class="notes">
+    <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 종가를 곱해 금액을 복원했다. 실제 체결은 하루 종일 여러 가격에 일어나므로 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
+    <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채우기 때문에 둘을 DB 만으로는 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
+    <p><b>빨강이 순매수, 파랑이 순매도다</b> — 국내 관행을 따랐다(서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 기관 합계는 세부 7종 합이 아니라 <span class="num">institution</span> 컬럼을 그대로 쓴다(93.6% 만 일치).</p>
+    <p><b>유니버스는 현재 상장 종목이다</b>(<span class="num">source='kiwoom'</span>). 개인·기관세부가 폐지 종목에는 없어서, 소스를 안 좁히면 지표마다 분모가 달라진다. 오늘 하루를 보는 화면이라 이 선택이 맞지만, 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
+  </div>
+</div>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = __DATA__;
+const ACTORS = [
+  {k:"inst_eok",    label:"기관",     tot:"total_inst_eok"},
+  {k:"foreign_eok", label:"외국인",   tot:"total_foreign_eok"},
+  {k:"indiv_eok",   label:"개인",     tot:"total_indiv_eok"},
+  {k:"etc_eok",     label:"기타법인", tot:"total_etc_eok"},
+];
+const SORTS = [{k:"flow",label:"순매수순"},{k:"turnover",label:"거래대금순"},{k:"ret",label:"등락순"}];
+const DETAIL = [["fnnc_invt_eok","금투"],["insrnc_eok","보험"],["invtrt_eok","투신"],
+                ["bank_eok","은행"],["penfnd_etc_eok","연기금"],["samo_fund_eok","사모"]];
+
+let actor = "inst_eok", sortBy = "flow", picked = null;
+
+const eok = n => (n>=0?"+":"−") + Math.abs(n).toLocaleString("ko-KR",{maximumFractionDigits:0});
+const pct = n => (n>=0?"+":"−") + Math.abs(n).toFixed(2) + "%";
+const cls = n => n>=0 ? "pos" : "neg";
+const el  = (t,c,x) => { const e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; };
+
+/* header */
+document.getElementById("hdr-date").textContent = DATA.date;
+document.getElementById("hdr-names").textContent = DATA.n_names.toLocaleString("ko-KR") + "종목 · 거래대금 " + Math.round(DATA.total_turnover_eok).toLocaleString("ko-KR") + "억";
+const chip = el("span", DATA.finalized ? "chip" : "chip live");
+chip.append(el("span","dot"), document.createTextNode(DATA.finalized ? "확정" : "장중 · 미확정"));
+chip.title = DATA.finalized ? "16:50 KST 이후 전 종목 재수집이 끝난 확정 데이터" : "16:50 KST 이전이라 부분 데이터일 수 있다";
+document.getElementById("hdr-chip").append(chip);
+
+/* tiles */
+const tiles = document.getElementById("tiles");
+tiles.append(tile("거래대금", Math.round(DATA.total_turnover_eok).toLocaleString("ko-KR"), "억원", null));
+ACTORS.forEach(a => tiles.append(tile(a.label, eok(DATA[a.tot]), "억원 순매수", DATA[a.tot])));
+function tile(k, v, u, sign){
+  const d = el("div","tile" + (sign==null?"":(sign>=0?" pos":" neg")));
+  d.append(el("div","k",k));
+  const val = el("div","v figure",v); if(sign!=null) val.classList.add(cls(sign));
+  d.append(val, el("div","u",u));
+  return d;
+}
+
+/* segmented controls */
+build("seg-actor", ACTORS.map(a=>[a.k,a.label]), () => actor, v => { actor=v; render(); });
+build("seg-sort",  SORTS.map(s=>[s.k,s.label]),  () => sortBy, v => { sortBy=v; render(); });
+function build(id, opts, get, set){
+  const box = document.getElementById(id);
+  opts.forEach(([k,label]) => {
+    const b = el("button",null,label);
+    b.dataset.k = k;
+    b.addEventListener("click", () => set(k));
+    box.append(b);
+  });
+  box._sync = () => [...box.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.k===get())));
+}
+
+/* tooltip */
+const tip = document.getElementById("tip");
+function showTip(e, s){
+  tip.replaceChildren();
+  tip.append(el("div","tt", s.sector || "(미분류)"));
+  ACTORS.forEach(a => {
+    const r = el("div","tr");
+    r.append(el("span","tk",a.label));
+    const v = el("span","num "+cls(s[a.k]), eok(s[a.k])+"억"); r.append(v); tip.append(r);
+  });
+  const r2 = el("div","tr");
+  r2.append(el("span","tk","등락(거래대금가중)"), el("span","num "+cls(s.ret_pct), pct(s.ret_pct)));
+  tip.append(r2);
+  const r3 = el("div","tr");
+  r3.append(el("span","tk","거래대금"), el("span","num", Math.round(s.turnover_eok).toLocaleString("ko-KR")+"억"));
+  tip.append(r3);
+  tip.style.opacity = 1;
+  moveTip(e);
+}
+function moveTip(e){
+  const pad=14, w=tip.offsetWidth, h=tip.offsetHeight;
+  let x=e.clientX+pad, y=e.clientY+pad;
+  if(x+w>innerWidth-8) x=e.clientX-w-pad;
+  if(y+h>innerHeight-8) y=e.clientY-h-pad;
+  tip.style.left=x+"px"; tip.style.top=y+"px";
+}
+const hideTip = () => tip.style.opacity = 0;
+
+/* main render */
+function sorted(){
+  const s = [...DATA.sectors];
+  if(sortBy==="flow")     s.sort((a,b)=>b[actor]-a[actor]);
+  if(sortBy==="turnover") s.sort((a,b)=>b.turnover_eok-a.turnover_eok);
+  if(sortBy==="ret")      s.sort((a,b)=>b.ret_pct-a.ret_pct);
+  return s;
+}
+function render(){
+  document.getElementById("seg-actor")._sync();
+  document.getElementById("seg-sort")._sync();
+  const label = ACTORS.find(a=>a.k===actor).label;
+  document.getElementById("chart-title").firstChild.textContent = "섹터별 " + label + " 순매수";
+
+  const list = sorted();
+  const max = Math.max(...DATA.sectors.map(s=>Math.abs(s[actor])), 1);
+  const rows = document.getElementById("rows");
+  rows.replaceChildren();
+
+  list.forEach(s => {
+    const b = el("button","row");
+    b.type="button";
+    b.setAttribute("aria-current", String(picked===s.sector));
+    b.append(el("div","name", s.sector || "(미분류)"));
+
+    const track = el("div","track");
+    track.append(el("div","axis"));
+    const v = s[actor], w = Math.abs(v)/max*50;
+    const bar = el("div","bar "+(v>=0?"p":"n"));
+    if(v>=0){ bar.style.left="50%"; } else { bar.style.right="50%"; }
+    bar.style.width = Math.max(w,0.35)+"%";
+    track.append(bar);
+    b.append(track);
+
+    const val = el("div","val");
+    val.append(el("span","num "+cls(v), eok(v)));
+    val.append(el("span","ret", pct(s.ret_pct)));
+    b.append(val);
+
+    b.addEventListener("mouseenter", e=>showTip(e,s));
+    b.addEventListener("mousemove", moveTip);
+    b.addEventListener("mouseleave", hideTip);
+    b.addEventListener("focus", e=>showTip({clientX:innerWidth/2, clientY:120}, s));
+    b.addEventListener("blur", hideTip);
+    b.addEventListener("click", ()=>{ picked = picked===s.sector ? null : s.sector; render(); });
+    rows.append(b);
+  });
+
+  renderDetail(list);
+  renderTable(list);
+}
+
+function renderDetail(list){
+  const s = DATA.sectors.find(x=>x.sector===picked) || list[0];
+  const nm = s.sector || "(미분류)";
+  document.getElementById("d-buy").firstChild.textContent  = nm + " — 기관이 담은 종목";
+  document.getElementById("d-sell").firstChild.textContent = nm + " — 기관이 던진 종목";
+  document.getElementById("d-detail").firstChild.textContent = nm + " — 기관 세부 ";
+
+  fill("lst-buy",  s.top.buys);
+  fill("lst-sell", [...s.top.sells].reverse());
+  function fill(id, arr){
+    const box = document.getElementById(id); box.replaceChildren();
+    arr.forEach(t => {
+      const li = el("div","li");
+      const nmv = el("div","nm", t.name);
+      nmv.append(el("span",null,t.code));
+      li.append(nmv);
+      li.append(el("div","amt num "+cls(t.inst_eok), eok(t.inst_eok)));
+      li.append(el("div","rt num "+cls(t.ret_pct), pct(t.ret_pct)));
+      box.append(li);
+    });
+  }
+
+  const box = document.getElementById("detbars"); box.replaceChildren();
+  const dmax = Math.max(...DETAIL.map(([k])=>Math.abs(s[k]||0)), 1);
+  DETAIL.forEach(([k,label]) => {
+    const v = s[k]||0;
+    const d = el("div","db");
+    d.append(el("div","dbn",label));
+    const t = el("div","dbt");
+    const bb = el("div","dbb");
+    bb.style.background = v>=0 ? "var(--buy)" : "var(--sell)";
+    bb.style.width = Math.abs(v)/dmax*50+"%";
+    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
+    t.append(bb); d.append(t);
+    d.append(el("div","num "+cls(v), eok(v)));
+    box.append(d);
+  });
+}
+
+function renderTable(list){
+  const t = document.getElementById("tbl"); t.replaceChildren();
+  const head = ["섹터","종목","거래대금","기관","외국인","개인","기타법인","등락"];
+  const thead = el("thead"), tr = el("tr");
+  head.forEach(h=>tr.append(el("th",null,h)));
+  thead.append(tr); t.append(thead);
+  const tb = el("tbody");
+  list.forEach(s => {
+    const r = el("tr");
+    r.append(el("td",null,s.sector||"(미분류)"));
+    r.append(el("td","num",s.n));
+    r.append(el("td","num",Math.round(s.turnover_eok).toLocaleString("ko-KR")));
+    ["inst_eok","foreign_eok","indiv_eok","etc_eok"].forEach(k=>r.append(el("td","num "+cls(s[k]),eok(s[k]))));
+    r.append(el("td","num "+cls(s.ret_pct),pct(s.ret_pct)));
+    tb.append(r);
+  });
+  t.append(tb);
+}
+
+render();
+</script>

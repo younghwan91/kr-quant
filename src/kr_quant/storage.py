@@ -433,6 +433,116 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
     return df
 
 
+SUPPLY_TABLE = "supply_demand"
+_SUPPLY_READ_COLS = ("code", "date", "individual", "foreign_", "institution")
+#: 기관 세부 8종. 키움 소스에만 있고 네이버 폐지 백필에는 없다.
+INSTITUTION_DETAIL_COLS = ("fnnc_invt", "insrnc", "invtrt", "bank",
+                           "penfnd_etc", "samo_fund", "natn")
+
+
+#: 네이버 폐지 백필이 채우는 컬럼. 나머지는 전부 NULL 이다.
+NAVER_SUPPLY_COLS = ("code", "date", "close", "flu_rt", "acc_trde_qty",
+                     "foreign_", "institution", "source")
+#: 키움 소스에만 있는 컬럼 — 이걸 쓰면 유니버스가 현재 상장분으로 좁아진다.
+KIWOOM_ONLY_SUPPLY_COLS = ("individual", "etc_corp") + INSTITUTION_DETAIL_COLS
+
+
+def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
+                       start: "str | None" = None, end: "str | None" = None,
+                       sources: "tuple[str, ...] | None" = None,
+                       require_delisted: bool = True,
+                       allow_individual_survivorship: bool = False):
+    """수급 패널 정문 — 가격의 :func:`read_prices` 에 대응하는 자리.
+
+    이 테이블에는 오랫동안 정문이 없었다. 그래서 소비자들이 ``supply_demand JOIN
+    stocks`` 로 읽었는데 ``stocks`` 는 **현재 상장** 마스터라 WHERE 절이 없어도 폐지
+    종목이 구조적으로 빠졌고, 검증 스택은 넘겨받은 표본만 보므로 모든 게이트가 초록인
+    채로 성적만 부풀었다(GUARDRAILS §4 공백 2). 그 코드는 2026-08-16 에 삭제됐고,
+    이 함수가 그 자리를 대신한다.
+
+    **소스별로 컬럼이 반쪽이다.** 키움(현재 상장)은 11개 분류를 다 주지만, 네이버
+    폐지 백필은 **외국인·기관 순매매량만** 준다 — ``individual`` 이 NULL 이다. 따라서
+    ``individual`` 을 쓰면서 폐지 종목을 함께 담는 것은 **현재 데이터로 불가능**하고,
+    ``individual IS NOT NULL`` 로 거르는 순간 조용히 생존편향이 들어온다. 그 선택을
+    호출자가 **명시**하게 만드는 것이 이 함수의 존재 이유다.
+
+    Args:
+        con: 열린 연결.
+        cols: 반환 컬럼(기본 :data:`_SUPPLY_READ_COLS`). 기관 세부는
+            :data:`INSTITUTION_DETAIL_COLS` 를 붙여 요청한다.
+        start: 조회 시작일(``YYYY-MM-DD``, 포함). ``None`` 이면 처음부터.
+        end: 조회 종료일(포함). ``None`` 이면 끝까지.
+        require_delisted: 조회 **구간 안에** 수급이 존재하는 폐지 종목이 결과에도
+            담겼는지 검사한다. 구간을 좁히면 기대치도 그 구간으로 좁혀지므로,
+            "오늘 하루" 같은 시점 조회에서 헛되이 터지지 않는다.
+        allow_individual_survivorship: ``individual`` 을 요청하면서 폐지 종목 커버리지를
+            포기한다고 **명시**할 때 ``True``. 명시 없이 둘을 함께 요구하면
+            ``AssertionError`` 로 막는다 — 조용한 생존편향보다 시끄러운 실패가 낫다.
+
+    Returns: pandas DataFrame.
+    """
+    import pandas as pd
+
+    use = tuple(cols or _SUPPLY_READ_COLS)
+    kiwoom_only = tuple(c for c in use if c in KIWOOM_ONLY_SUPPLY_COLS)
+    if kiwoom_only and require_delisted and not allow_individual_survivorship:
+        raise AssertionError(
+            f"{', '.join(kiwoom_only)} 는 키움 소스에만 있고 네이버 폐지 백필에는 "
+            "NULL 이라, 폐지 종목을 함께 담을 수 없다. 더 고약한 건 **지표마다 "
+            "유니버스가 달라진다**는 점이다 — institution 으로 집계하면 폐지분이 들어오고 "
+            "individual 로 집계하면 같은 종목이 NULL 로 빠져서, 두 막대를 나란히 그리면 "
+            "분모가 다른 걸 비교하게 된다. 개인·기관세부가 꼭 필요하면 "
+            "sources=('kiwoom',) 로 유니버스를 명시적으로 좁히고 "
+            "allow_individual_survivorship=True 로 생존편향을 감수한다고 적어라."
+        )
+
+    ph = "%s" if _is_pg(con) else "?"
+    where, params = [], []
+    if start is not None:
+        where.append(f"date >= {ph}"); params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}"); params.append(end)
+    if sources is not None:
+        where.append(f"source IN ({', '.join([ph] * len(sources))})")
+        params.extend(sources)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    sel = ", ".join(use)
+    df = pd.read_sql_query(  # noqa: S608 — 컬럼은 모듈 상수, 날짜는 파라미터 바인딩
+        f"SELECT {sel} FROM {SUPPLY_TABLE}{clause}", con, params=tuple(params) or None)
+    if require_delisted:
+        _assert_supply_has_delisted(con, df, start=start, end=end)
+    return df
+
+
+def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
+    """조회 구간에 수급이 있는 폐지 종목이 결과에도 담겼는지 확인."""
+    ph = "%s" if _is_pg(con) else "?"
+    where, params = ["source = " + ph], ["naver"]
+    if start is not None:
+        where.append(f"date >= {ph}"); params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}"); params.append(end)
+    sql = (f"SELECT DISTINCT code FROM {SUPPLY_TABLE} "  # noqa: S608 — 모듈 상수
+           f"WHERE {' AND '.join(where)}")
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            expected = {r[0] for r in cur.fetchall()}
+    else:
+        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+    if not expected:
+        return  # 그 구간에 폐지 종목 수급이 아예 없다 — 요구할 수 없다.
+    if "code" not in getattr(df, "columns", []):
+        return  # code 를 안 뽑았으면 검사할 수단이 없다.
+    if not (expected & set(df["code"].astype(str))):
+        raise AssertionError(
+            f"{SUPPLY_TABLE} 조회 구간에 폐지 종목 수급 {len(expected)}개가 있는데 "
+            f"결과엔 하나도 없다 — stocks(현재 상장 마스터) 조인이나 "
+            f"individual IS NOT NULL 필터가 걸렸을 수 있다. 의도한 것이면 "
+            f"require_delisted=False 로 명시하라."
+        )
+
+
 def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
     """조회 결과가 폐지 종목을 담고 있는지 확인(DB 에 있는 경우에 한해)."""
     ph = "%s" if _is_pg(con) else "?"
