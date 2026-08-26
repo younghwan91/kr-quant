@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from .panels import panel_pivot, resolve_signal
+from .panels import price_arrays, resolve_signal
 from .sim_crosssectional import rank_tilt_backtest
 
 
@@ -55,12 +55,8 @@ class ExperimentConfig:
 
 
 def _run_cross_sectional(config: ExperimentConfig, prices, earnings, shares=None):
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     sig, age = resolve_signal(earnings, config.signal_panel, codes, dates)
 
     rows: list[dict] = []

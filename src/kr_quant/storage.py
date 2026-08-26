@@ -21,12 +21,38 @@ from typing import Any
 _PG_PREFIXES = ("postgresql://", "postgres://")
 
 
+def load_env_db() -> str:
+    """**명시적 opt-in** — CWD 의 ``.env`` 에서 KR_QUANT_DB 를 읽어 환경에 실어준다.
+
+    러너마다 복붙돼 있던 .env 파서의 유일한 본체다. 부르는 쪽이 명시적으로 부를 때만
+    동작한다 — :func:`db_default` 는 이걸 부르지 않는다. 그래야 KR_QUANT_DB 를
+    export 하지 않은 셸이 여전히 로컬 sqlite 폴백을 **보장**받는다(공유 운영 DB 로
+    조용히 붙어버리면 안 된다).
+
+    값을 ``os.environ`` 에 되실어 이후 ``db_default()`` 와 하위 프로세스가 본다.
+    설정된 게 없으면 ``""``.
+    """
+    v = os.environ.get("KR_QUANT_DB")
+    if v:
+        return v
+    env_file = Path(".env")
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("KR_QUANT_DB"):
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v:
+                    os.environ["KR_QUANT_DB"] = v
+                    return v
+    return ""
+
+
 def db_default() -> str:
     """CLI ``--db`` flag default: ``KR_QUANT_DB`` env var if set, else local sqlite.
 
     Lets an analysis-only checkout point at the shared TimescaleDB once (via
     ``.env``/``export KR_QUANT_DB=postgresql://...``) instead of passing
-    ``--db`` on every command.
+    ``--db`` on every command. ``.env`` 을 스스로 읽지는 않는다 — :func:`load_env_db`
+    를 명시적으로 부른 호출자만 그 경로를 탄다.
     """
     return os.environ.get("KR_QUANT_DB") or str(default_db_path())
 

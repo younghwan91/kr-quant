@@ -27,7 +27,7 @@ from __future__ import annotations
 import pandas as pd
 
 from ..engine.metrics import newey_west_t, summarize_periods
-from ..engine.panels import panel_pivot, resolve_signal
+from ..engine.panels import panel_pivot, price_arrays, resolve_signal
 from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest, staggered_tranche_backtest
 
 # Backward-compat re-exports (the metric/panel logic now lives in the engine).
@@ -97,12 +97,8 @@ def pead_backtest(
         ``sharpe`` (annualized, net), ``t_stat`` (full-sample net), ``mean_net``,
         ``hit_rate``, ``cum_net`` and ``avg_turnover``.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     yoy, age = resolve_signal(earnings_panel, signal_panel, codes, dates)
     return rank_tilt_backtest(
         C, V, yoy, dates, horizon=horizon, adv_floor=adv_floor, adv_window=adv_window,
@@ -146,12 +142,8 @@ def staggered_backtest(
     (``summary`` includes ``payoff_ratio``); ``turnover``/``best``/``worst`` are on
     the ``step``-period excess series.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     sig_m, _ = resolve_signal(earnings_panel, signal_panel, codes, dates)
     capm = (
         cap_panel.pivot_table(index="code", columns="date", values="market_cap", aggfunc="first")
@@ -194,12 +186,8 @@ def pead_rank_ic(
         ``{"ic_mean", "ic_nw_t", "n_days", "frac_positive", "regimes"}`` where
         ``regimes`` is a list of ``{"start", "end", "ic_mean", "nw_t"}`` dicts.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     yoy, age = resolve_signal(earnings_panel, signal_panel, codes, dates)
     return rank_ic(
         C, V, yoy, dates, horizon=horizon, adv_floor=adv_floor, adv_window=adv_window,
@@ -254,13 +242,11 @@ def recommend_holdings(
         DataFrame (``code``, ``yoy``, ``cap_rank``, ``adv``) of the recommended
         equal-weight book, best signal first.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     t = dates.index(asof) if asof else len(dates) - 1
-    codes = list(close.index)
-    adv = tval.reindex(index=codes, columns=dates).to_numpy(float)[:, max(0, t - adv_window):t].mean(axis=1)
-    price_t = close.to_numpy(float)[:, t]
+    adv = V[:, max(0, t - adv_window):t].mean(axis=1)
+    price_t = C[:, t]
     sh = shares.rename(columns={shares.columns[-1]: "sh"}).sort_values("date").groupby("code")["sh"].last()
     cap = pd.Series(price_t, index=codes) * sh.reindex(codes)
     yoy = (

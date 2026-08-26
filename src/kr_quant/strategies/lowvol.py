@@ -28,7 +28,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..engine.panels import lookup_panel, panel_pivot
+from ..engine.panels import lookup_panel, price_arrays
 from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest
 from ..features.volatility import VOL_WINDOW, realized_vol_panel
 
@@ -90,12 +90,8 @@ def lowvol_backtest(
         ``(periods, summary)`` — same schema as
         :func:`kr_quant.strategies.pead.pead_backtest`.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     if signal_panel is None:
         vp = realized_vol_panel(prices, window=vol_window)
         vp["signal"] = -vp["vol"]
@@ -123,12 +119,8 @@ def lowvol_rank_ic(
 
     Mirrors :func:`kr_quant.strategies.pead.pead_rank_ic`; see it for semantics.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     vp = realized_vol_panel(prices, window=vol_window)
     vp["signal"] = -vp["vol"]
     sig = lookup_panel(vp[["code", "date", "signal"]], "signal", codes, dates)
@@ -170,15 +162,11 @@ def select_lowvol_portfolio(
         ``close``, ``weight``) — ``side`` in {"long", "short"}, ``weight`` equal
         within each leg. Empty if the universe is too thin at ``asof``.
     """
-    close = panel_pivot(prices, "close")
-    tval = panel_pivot(prices, "trade_value")
-    dates = list(close.columns)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     if not dates:
         return _empty_book()
     t = dates.index(asof) if asof else len(dates) - 1
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
 
     lo = max(0, t - vol_window)
     rets = C[:, lo + 1:t + 1] / C[:, lo:t] - 1.0

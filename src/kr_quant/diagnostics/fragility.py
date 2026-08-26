@@ -44,11 +44,12 @@ def max_loss_streak(R: np.ndarray, *, entry: np.ndarray | None = None, loss_thr:
     if entry is not None:
         R = R[np.argsort(np.asarray(entry))]  # 시간순 (실제 겪는 순서)
     R = R[np.isfinite(R)]
-    streak = mx = 0
-    for x in R:
-        streak = streak + 1 if x <= loss_thr else 0
-        mx = max(mx, streak)
-    return int(mx)
+    loss = R <= loss_thr
+    if not loss.any():
+        return 0
+    # 연패 런 길이 = 손실 누적수 - 직전 승리 시점의 누적수(런별 오프셋).
+    csum = np.cumsum(loss)
+    return int((csum - np.maximum.accumulate(np.where(loss, 0, csum)))[loss].max())
 
 
 def tail_removal(R: np.ndarray, *, k: int = 5) -> dict:

@@ -45,6 +45,7 @@ from prop_swing_common import dedup_gap, load_env_db, weekly_count
 from kr_quant.engine.panels import panel_pivot
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
 from kr_quant.storage import connect, db_default, read_earnings, read_prices
+from kr_quant.validation.optimization import TRAIN_HI
 from kr_quant.validation.walkforward import FOLDS
 
 # --- Parameters -------------------------------------------------------------
@@ -52,7 +53,6 @@ PRICE_TABLE = "daily_bars_adjusted"       # split-adjusted (raw daily_bars forbi
 ADV_WINDOW = 20                            # trailing days for ADV
 ADV_FLOOR = 20000.0                        # trade_value units (~repo "liquid mid-large")
 MIN_GAP = 10                               # min trading-day gap between same-code entries
-TRAIN_HI = "2022-01-01"                    # global TRAIN boundary (entry<this = in-sample)
 # Untouched final-confirmation window (R1) — never a search knob.
 UNTOUCHED_LO, UNTOUCHED_HI = "2025-07-01", "2026-07-01"
 # PEAD rebalance cadence (mirrors pead BASELINE step/start).
