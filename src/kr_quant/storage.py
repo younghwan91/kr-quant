@@ -445,7 +445,8 @@ def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
     is looked up as the most recent row with ``date <= date`` — never a row
     dated after the given date — to avoid lookahead bias (e.g. a stock split
     recorded later must not be applied retroactively to an earlier market cap).
-    Returns ``None`` if either lookup is empty.
+    Returns ``None`` if either lookup is empty, or if shares outstanding is
+    non-positive (treated as missing — a listed name cannot have 0 shares).
     """
     ph = "%s" if _is_pg(con) else "?"
     cur = con.cursor()
@@ -468,7 +469,12 @@ def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
         return None
     shares = shares_row[0]
 
-    if close is None or shares is None:
+    # 0 주식수는 "진짜 0"이 아니라 결측이다 — 상장돼 있으면 0 일 수 없다. 가드가 None 만
+    # 보면 close*0 = 0 이 정상 시총으로 나가고, 이걸 분모로 쓰는 소비자에서 inf 가 난다.
+    # 게다가 조회가 `date <= 조회일 ORDER BY date DESC LIMIT 1` 이라 0 행이 한 번 들어오면
+    # 그 종목의 최신 점이 되어 이후 모든 조회를 이긴다. 상류(quant-airflow collectors)가
+    # 2026-08-27 에 막았지만 이 테이블에는 kiwoom·dart·krx + 수동 백필이 함께 쓴다.
+    if close is None or shares is None or shares <= 0:
         return None
     return close * shares
 
@@ -541,5 +547,8 @@ def market_cap_asof_bulk(con: Any, df: Any) -> Any:
         direction="backward",
     )
     merged = merged.sort_values("_row")
+    # per-row 와 동일 semantics: 주식수가 0 이하면 결측으로 떨어뜨린다(더 오래된 유효
+    # 행으로 대체하지 않는다 — 그러면 두 함수의 결과가 갈린다).
+    merged.loc[merged["shares_outstanding"] <= 0, "shares_outstanding"] = float("nan")
     market_cap = (merged["close"] * merged["shares_outstanding"]).to_numpy()
     return pd.Series(market_cap, index=df.index)
