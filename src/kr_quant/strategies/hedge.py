@@ -19,8 +19,9 @@ individual-short L/S is the theoretical *ceiling*.
 stocks only — no ETF bars over 2016–2026. So the inverse leg is *synthesized*
 from the market proxy: ``r_inverse = −leverage × r_market − fee``. A real KODEX
 인버스 also carries futures-roll and tracking drag beyond its ~0.64%/yr TER, so
-the synthetic hedge is a mild *upper* bound on the hedged book. See
-``docs/combo-book.md``.
+the synthetic hedge is a mild *upper* bound on the hedged book. The combo deployment book — reproduced
+performance tables and fitted weights — is kept out of this public repo; only the
+library and its tests live here.
 
 Pure Series in -> Series out (no DB), unit-testable.
 """

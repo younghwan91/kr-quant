@@ -179,7 +179,7 @@ src/kr_quant/
 └── strategies/          # pead.py = 통과한 유일한 알파의 DataFrame 어댑터 (회계는 engine/).
                          #   lowvol·combo·hedge 는 scalp-it 에서 이관한 **후보** 어댑터로
                          #   정식 게이트 배터리(prop_gate)로는 아직 재심사되지 않았다
-                         #   (docs/lowvol-strategy.md · docs/combo-book.md)
+                         #   (docs/lowvol-strategy.md; 결합 북 수치는 비공개)
 ```
 
 **심사 대상과 판정 기록 (research/) — 기계에 태워진 가설들.**
@@ -221,8 +221,9 @@ python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 
 
 분석 CLI(DB 읽기 전용): `kq-pead` — 게이트를 통과한 유일한 알파의 재현용 백테스트. 이
 저장소는 스크리너 제품이 아니라 검증 프레임워크라 설치되는 CLI 엔트리포인트는 이것
-하나다. 그 밖에 후보 전략 재현 스크립트 `scripts/combo_book.py`(PEAD ⊕ 저변동 결합 +
-인버스 ETF 헤지, 역시 DB 읽기 전용)가 있다.
+하나다. 후보 전략(저변동·결합·인버스헤지)의 **배포북** — 재현 성적표와 적합된 비중 —
+은 판정문이 아니라 따라 할 수 있는 레시피라 이 공개 저장소에 싣지 않는다. 라이브러리
+(`strategies/{lowvol,combo,hedge}`·`features/volatility`)와 테스트는 여기 그대로 있다.
 
 ## 9. 참고 문헌
 

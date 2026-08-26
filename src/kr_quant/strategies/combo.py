@@ -10,8 +10,9 @@ Provenance: ported from scalp-it combo note #32. The headline scalp-it result
 travels with it: the dramatic inverse correlation that motivated the combo
 (note #31's quarterly −0.73) did **not** reproduce under a single marking engine
 (monthly net corr came out ≈ +0.17). So the real driver of the improvement is
-inverse-vol weighting damping low-vol's large ~34% vol, not a −0.73 offset. See
-``docs/combo-book.md``.
+inverse-vol weighting damping low-vol's large ~34% vol, not a −0.73 offset. The combo deployment book — reproduced
+performance tables and fitted weights — is kept out of this public repo; only the
+library and its tests live here.
 
 Pure Series in -> Series out (no DB), unit-testable.
 """

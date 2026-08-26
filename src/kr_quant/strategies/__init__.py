@@ -10,5 +10,6 @@ ML·차트 전략(accumulation·backtest·supply_wave·multi_signal·graph_flow�
 scalp-it 에서 이관한 **후보** 어댑터다 — 같은 :mod:`kr_quant.engine` 회계를 재사용하고
 단위 테스트를 붙였으나, 이 저장소의 정식 게이트 배터리(``research/experiments/*_gate.py``
 + ``prop_gate``)로는 **아직 재심사되지 않았다.** "게이트를 통과한 알파는 PEAD 하나"는
-그대로다. 방법·수치는 ``docs/lowvol-strategy.md``·``docs/combo-book.md`` 참조.
+그대로다. 방법은 ``docs/lowvol-strategy.md`` 참조 — 결합 북의 재현 성적표와 적합된
+비중은 배포 레시피라 이 공개 저장소에 두지 않는다.
 """
