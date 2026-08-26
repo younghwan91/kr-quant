@@ -77,7 +77,6 @@ PRE_STOP = 0.04                          # 1차 하드손절폭 (= R 정규화 �
 PRE_TARGET = 0.05                        # 1차 이익목표
 PRE_HOLD_MAX = 8                         # 1차 시간청산(거래일)
 
-TRAIN_HI = "2022-01-01"
 OUT_DIR = "research/logs/pullback_prop"
 
 

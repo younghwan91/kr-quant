@@ -60,6 +60,7 @@ from prop_swing_common import (
 
 from kr_quant.diagnostics.fragility import monster_share
 from kr_quant.diagnostics.r_distribution import dist_shape
+from kr_quant.validation.optimization import TRAIN_HI
 
 # ===========================================================================
 # 사전등록 1차 CONFIG (R1) — 게이트 출력을 보기 전에 못박음. 이것이 THE 테스트.
@@ -84,7 +85,6 @@ PRE_SURPRISE_Q = 0.90              # TRAIN top-decile YoY 절대 floor(전방 �
 
 REBALANCE_STEP = BASELINE["step"]           # 20 — pead BASELINE 과 동일 카덴스
 ADV_FLOOR = BASELINE["adv_floor"]           # 20000 (~20B KRW) — 동일 유니버스
-TRAIN_HI = "2022-01-01"                      # no-lookahead 경계(진입<이 날짜 = TRAIN)
 OUT_DIR = "research/logs/pead_concentrated"
 
 

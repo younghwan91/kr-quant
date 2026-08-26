@@ -41,10 +41,10 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from kr_quant.engine.panels import price_arrays
 from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
 from kr_quant.storage import connect, db_default, read_earnings, read_prices
 from kr_quant.strategies.pead import (
-    _panel,
     _resolve_signal,
     _summarize,
     staggered_backtest,
@@ -229,12 +229,8 @@ def run_horizon_sweep(prices=None, yoy_panel=None, best_threshold: float = 0.0) 
 # ---------------------------------------------------------------------------
 def _context(prices, earnings_panel, signal_panel=None, adv_window=ADV_WINDOW) -> dict:
     """Build the panels/arrays exactly as ``staggered_backtest`` does (pead.py:223-233)."""
-    close = _panel(prices, "close")
-    tval = _panel(prices, "trade_value")
-    dates = list(close.columns)
-    codes = list(close.index)
-    C = close.to_numpy(float)
-    V = tval.reindex(index=codes, columns=dates).to_numpy(float)
+    pa = price_arrays(prices)
+    C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
     nD = len(dates)
     adv = np.full_like(C, np.nan)
     for j in range(adv_window, nD):

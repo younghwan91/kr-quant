@@ -32,7 +32,6 @@ docs/pead-refinement.md / MULTI_ALPHA.md §"반드시 지킬 전제" #1).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 import numpy as np
@@ -40,14 +39,13 @@ import pandas as pd
 
 
 def _load_env_db() -> str:
-    """``.env``의 KR_QUANT_DB를 로드해 반환(셸에 export 안 돼 있어도 동작)."""
-    v = os.environ.get("KR_QUANT_DB")
-    if not v and os.path.exists(".env"):
-        for line in open(".env"):
-            if line.startswith("KR_QUANT_DB"):
-                v = line.split("=", 1)[1].strip().strip('"').strip("'")
-                os.environ["KR_QUANT_DB"] = v
-    return v or ""
+    """``.env``의 KR_QUANT_DB를 로드해 반환(셸에 export 안 돼 있어도 동작).
+
+    파싱 본체는 kr_quant.storage.load_env_db 하나뿐이다.
+    """
+    from kr_quant.storage import load_env_db
+
+    return load_env_db()
 
 
 # --- Baseline parameters ----------------------------------------------------

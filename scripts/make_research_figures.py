@@ -38,6 +38,8 @@ matplotlib.use("Agg")
 import matplotlib.font_manager as fm  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
+from kr_quant.validation.optimization import TRAIN_HI  # noqa: E402 — sys.path 부트스트랩 뒤
+
 # --- Korean font (repo 관례: NanumGothic 우선, 없으면 Noto Sans CJK KR 폴백) -----
 _FONT_CANDS = [
     (str(fp), "NanumGothic")
@@ -76,7 +78,6 @@ DIFFUSE = "#3d6a99"  # 확산형(기관) — muted blue
 TRAIN = "#a7c0d8"    # 표본내 — light blue
 OOS = "#2f5d86"      # 표본외 — deep blue (강조: 정직한 OOS)
 
-TRAIN_HI = "2022-01-01"   # entry < → TRAIN, 이상 → OOS (kr_quant.validation.optimization)
 STOP = 0.10               # 하드손절폭 (R = 수익 / STOP)
 
 

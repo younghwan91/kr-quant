@@ -38,10 +38,10 @@ from kr_quant.diagnostics.fragility import fragility_report, monster_share
 from kr_quant.diagnostics.trials import count_trials, record_trial
 from kr_quant.diagnostics.gate_report import gate_report
 from kr_quant.diagnostics.r_distribution import dist_shape, r_multiples
-from kr_quant.validation.walkforward import FOLDS, _expectancy, entry_mask, slice_by_entry
+from kr_quant.validation.optimization import TRAIN_HI
+from kr_quant.validation.walkforward import FOLDS, _expectancy, entry_mask
 
 COSTS = (0.0046, 0.008, 0.010, 0.015)   # 왕복비용 스윕: 46 / 80 / 100 / 150 bp
-TRAIN_HI = "2022-01-01"                  # no-lookahead 경계 (진입 < 이 날짜 = TRAIN)
 UNTOUCHED_LO = "2025-07-01"              # R1 held-out 최종창 하한 (탐색 중 미접촉)
 UNTOUCHED_HI = "2026-07-01"              # R1 held-out 최종창 상한
 
@@ -64,16 +64,31 @@ def _ledger_target(label: str, log_dir: str | None) -> tuple[str, "str | None"]:
     return p.name, str(p.parent)
 
 
-def _fold_rows(entry: np.ndarray, R: np.ndarray, folds, train_hi: str) -> list[dict]:
+def _fold_masks(entry: np.ndarray, folds) -> list[np.ndarray]:
+    """폴드별 TEST 진입일 마스크. entry·folds 에만 의존하고 R 에는 의존하지 않는다.
+
+    비용 스윕이 같은 폴드를 비용마다 다시 자르므로(=같은 문자열 비교를 5회 반복),
+    호출부가 한 번 만들어 재사용한다. 값은 slice_by_entry 와 동일하다.
+    """
+    return [entry_mask(entry, f.test_lo, f.test_hi) for f in folds]
+
+
+def _fold_rows(
+    entry: np.ndarray, R: np.ndarray, folds, train_hi: str,
+    masks: list[np.ndarray] | None = None,
+) -> list[dict]:
     """폴드별 TEST 슬라이스 통계(재최적화 없음, 고정 R). R2 의 inside-train 플래그 부착.
 
     각 dict: test_window, n, expectancy_R, positive(bool), inside_train(bool).
     inside_train = fold.test_lo < train_hi → 이 폴드는 clean OOS 가 아니다(R2).
+    ``masks`` 를 주면 :func:`_fold_masks` 결과를 재사용한다(숫자 동일).
     """
+    if masks is None:
+        masks = _fold_masks(entry, folds)
     rows: list[dict] = []
-    for f in folds:
+    for f, m in zip(folds, masks):
         sl, sh = f.test_lo, f.test_hi
-        r = slice_by_entry(R, entry, sl, sh)
+        r = R[m]
         r = r[np.isfinite(r)]
         rows.append({
             "test_window": f"{sl[:7]}~{sh[:7]}",
@@ -174,13 +189,14 @@ def prop_gate(
 
     # === (1) 슬리피지 스윕 — 비용별 OOS 기대값 R + 폴드 일관성 ===
     oos_mask = entry_mask(entry, lo=train_hi)
+    fold_masks = _fold_masks(entry, folds)     # 비용마다 다시 자르지 않는다(값 동일)
     cost_sweep: list[dict] = []
     cost_curve: dict[float, float] = {}
     for c in costs:
         R_c = (ret - c) / stop                      # 정렬 유지(진입일과 1:1) → 폴드 슬라이스 가능
         oos_R = r_multiples(ret[oos_mask] - c, stop)  # OOS 집계는 r_multiples(비유한 제거)
         oos_exp = _expectancy(oos_R)
-        rows_c = _fold_rows(entry, R_c, folds, train_hi)
+        rows_c = _fold_rows(entry, R_c, folds, train_hi, fold_masks)
         raw_pos, raw_val = _consistency(rows_c, clean_only=False)
         clean_pos, clean_val = _consistency(rows_c, clean_only=True)
         cost_sweep.append({
@@ -195,7 +211,7 @@ def prop_gate(
 
     # === 기준 비용에서의 정렬된 R (섹션 2·3·4·5 공용) ===
     R_primary = (ret - primary_cost) / stop
-    prim_rows = _fold_rows(entry, R_primary, folds, train_hi)
+    prim_rows = _fold_rows(entry, R_primary, folds, train_hi, fold_masks)
     raw_pos, raw_val = _consistency(prim_rows, clean_only=False)
     clean_pos, clean_val = _consistency(prim_rows, clean_only=True)
 

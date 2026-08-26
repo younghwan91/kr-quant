@@ -109,7 +109,7 @@ uv run python examples/pead_sweep_via_recipe.py     # 레시피로 PEAD 파라�
 ![진입 시점 모멘텀 강도 → 사후 기대수익](docs/images/apriori_momentum.png)
 *진입 시점 모멘텀 강도로 나눈 5분위별 사후 기대수익. Q5가 Q1을 크게 상회하는 우상향 관계가 TRAIN·OOS 둘 다에서 성립한다(개별 분위는 노이즈로 다소 비단조적이다).*
 
-분석 코드: [`research/experiments/pead_gate.py`](research/experiments/pead_gate.py), 게이트 하버스: `prop_gate`.
+분석 코드: [`research/experiments/contrarian_distribution.py`](research/experiments/contrarian_distribution.py)(계산은 `kr_quant.diagnostics.r_distribution.conviction_analysis`), 게이트 하버스: `prop_gate`.
 
 ## 4. 통과 사례 — PEAD와 멀티-알파 북
 
@@ -174,8 +174,12 @@ src/kr_quant/
 ├── engine/              # 백테스트 회계: cross-sectional sim, 패널, 메트릭, recipe
 ├── validation/          # walk-forward·민감도·BO 목적함수·purge/embargo·생존편향 검사
 ├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)·trials(다중검정 원장)
-├── features/            # fundamentals(실적 YoY·정정공시 bitemporal) · universe(PIT)
-└── strategies/pead.py   # 통과한 유일한 알파의 DataFrame 어댑터 (회계는 engine/)
+├── features/            # fundamentals(실적 YoY·정정공시 bitemporal) · universe(PIT) ·
+│                        #   volatility(직전 60일 실현변동성 — 저변동 팩터 원재료)
+└── strategies/          # pead.py = 통과한 유일한 알파의 DataFrame 어댑터 (회계는 engine/).
+                         #   lowvol·combo·hedge 는 scalp-it 에서 이관한 **후보** 어댑터로
+                         #   정식 게이트 배터리(prop_gate)로는 아직 재심사되지 않았다
+                         #   (docs/lowvol-strategy.md; 결합 북 수치는 비공개)
 ```
 
 **심사 대상과 판정 기록 (research/) — 기계에 태워진 가설들.**
@@ -216,7 +220,10 @@ python scripts/check_guardrails.py   # 경계·판정·정문·하버스 규율 
 ```
 
 분석 CLI(DB 읽기 전용): `kq-pead` — 게이트를 통과한 유일한 알파의 재현용 백테스트. 이
-저장소는 스크리너 제품이 아니라 검증 프레임워크라 CLI는 이것 하나다.
+저장소는 스크리너 제품이 아니라 검증 프레임워크라 설치되는 CLI 엔트리포인트는 이것
+하나다. 후보 전략(저변동·결합·인버스헤지)의 **배포북** — 재현 성적표와 적합된 비중 —
+은 판정문이 아니라 따라 할 수 있는 레시피라 이 공개 저장소에 싣지 않는다. 라이브러리
+(`strategies/{lowvol,combo,hedge}`·`features/volatility`)와 테스트는 여기 그대로 있다.
 
 ## 9. 참고 문헌
 

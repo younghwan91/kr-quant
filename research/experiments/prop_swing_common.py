@@ -12,7 +12,6 @@ Step 1(minervini) / Step 2(pullback) / Step 3(pead_concentrated) 러너와 Step 
 
 from __future__ import annotations
 
-import os
 
 import numpy as np
 import pandas as pd
@@ -20,19 +19,16 @@ import pandas as pd
 # 형제 모듈(같은 research/experiments) — 스크립트 실행시 그 디렉터리가 sys.path[0].
 from prop_gate import prop_gate
 
+from kr_quant.storage import load_env_db as _load_env_db
+
 
 def load_env_db() -> None:
     """.env 의 KR_QUANT_DB 를 환경에 실어줌(셸에 export 안 돼 있어도 동작).
 
-    이미 환경에 있거나 .env 가 없으면 아무것도 안 한다. 러너들이 connect(db_default())
-    전에 부르던 동일 관용을 한 곳으로 모은 것.
+    파싱 본체는 kr_quant.storage.load_env_db 하나뿐이다 — 러너마다 복붙돼 있던
+    .env 파서를 라이브러리로 밀어넣은 결과(db_default 가 같은 경로를 쓴다).
     """
-    if os.environ.get("KR_QUANT_DB") or not os.path.exists(".env"):
-        return
-    for line in open(".env"):
-        if line.startswith("KR_QUANT_DB"):
-            os.environ["KR_QUANT_DB"] = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
+    _load_env_db()
 
 
 def regime_split(fill_dates: np.ndarray, rets: np.ndarray, cost: float, stop: float) -> dict:

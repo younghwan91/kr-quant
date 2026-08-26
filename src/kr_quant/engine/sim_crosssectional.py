@@ -173,7 +173,16 @@ def staggered_tranche_backtest(
     # delisting_exit 가 꺼져 있으면 만들지 않는다(메모리·시간 낭비 방지).
     C_ff = pd.DataFrame(C).ffill(axis=1).to_numpy(float) if delisting_exit else None
 
+    # eligible/book 는 t 의 순수함수라 메모이즈해도 숫자가 안 바뀐다. 스태거링이
+    # book(t - k*step) 로 지난 리밸런스일을 다시 부르므로, 캐시가 없으면 같은 날의
+    # 전유니버스 스캔(+시총 argsort)이 트랜치 수만큼 반복된다.
+    _elig_cache: dict[int, np.ndarray] = {}
+    _book_cache: dict[int, np.ndarray | None] = {}
+
     def eligible(t: int) -> np.ndarray:
+        cached = _elig_cache.get(t)
+        if cached is not None:
+            return cached
         ok = np.isfinite(sig_m[:, t]) & (adv[:, t] >= adv_floor)
         if capm is not None and cap_rank is not None:
             liq = np.where(ok & np.isfinite(capm[:, t]))[0]
@@ -182,19 +191,23 @@ def staggered_tranche_backtest(
             mask = np.zeros(C.shape[0], bool)
             mask[tier] = True
             ok = ok & mask
+        _elig_cache[t] = ok
         return ok
 
     def book(t: int) -> np.ndarray | None:
+        if t in _book_cache:
+            return _book_cache[t]
         ok = eligible(t)
         if ok.sum() < min_names:
+            _book_cache[t] = None
             return None
         idx = np.where(ok)[0]
-        return idx[np.argsort(-sig_m[idx, t])[:top_n]]
+        out = idx[np.argsort(-sig_m[idx, t])[:top_n]]
+        _book_cache[t] = out
+        return out
 
     rows: list[dict] = []
-    for t in range(start_index, nD - step - 1):
-        if (t - start_index) % step != 0:
-            continue
+    for t in range(start_index, nD - step - 1, step):
         uni = np.where(eligible(t))[0]
         if uni.size < min_names:
             continue
