@@ -180,6 +180,66 @@ def layer_b(payload: dict, db: str | None) -> None:
 
 # ─────────────────────────────────────────────── C. 계산
 
+def layer_d(D: dict, P: dict, html: str) -> None:
+    """D. **부류 검사** — 오늘 나온 버그들이 전부 같은 모양이었다:
+    *계산에 들어가는 두 값이 서로 다른 집합·시점·파라미터에서 나오는데 아무도
+    검사하지 않는다.* 개별 증상이 아니라 그 부류를 막는다.
+
+    실제 사례(전부 실측으로 확인됨):
+      · 분모 시점 불일치 — 구간말이 1년 전인데 오늘 시총으로 나눔(중앙값 1.33배)
+      · 분모 집합 불일치 — 수익률은 지수 있는 시장만, 시총은 모든 시장(겹침 0인 섹터 2개)
+      · 표 헤더 ≠ 셀 개수 — 같은 실수가 두 번(열이 한 칸씩 밀림)
+      · 라벨 ≠ 실제 계산 — 민감도 config 는 바뀌는데 시뮬레이션은 동일
+    """
+    print("\nD. 부류 — 두 값이 같은 집합·시점에서 나오는가")
+
+    # ① 분모의 **시점**: 월별 시총이 구간말 월을 덮는가
+    cbm = P.get("cap_by_month", {})
+    if cbm:
+        months = {m for mk in cbm.values() for sec in mk.values() for m in sec}
+        want = {d[:7] for d in P["dates"]}
+        chk("D", "월별 시총이 페이로드 전 구간의 월을 덮는가", want <= months,
+            f"부족한 월 {sorted(want - months)[:3]}")
+    else:
+        chk("D", "월별 시총 계열 존재", False, "cap_by_month 없음 — 임의 구간 분모가 틀어진다")
+
+    # ② 분모의 **집합**: 지수가 있는 시장과 시총 집계 시장이 같은가
+    bad = []
+    for m in P["markets"]:
+        for sec in P["sectors"]:
+            has_idx = bool(P["iret"].get(m, {}).get(sec))
+            has_cap = bool(P["cap"].get(m, {}).get(sec))
+            if has_idx and not has_cap:
+                bad.append(f"{m}/{sec}")
+    chk("D", "지수 있는 (시장,섹터)에 시총도 있는가", not bad, ", ".join(bad[:3]))
+
+    # ③ **라벨 ≠ 계산**: 표에 실린 a 가 그 행의 임펄스/시총과 실제로 일치하는가
+    #    (라벨만 바뀌고 값이 안 바뀌는 부류를 잡는다)
+    mismatch = 0
+    for B in D["blocks"].values():
+        for r in B["rows"]:
+            if r.get("a_idx") is None or not r.get("cap_idx"):
+                continue
+            if abs(r["a_idx"] - r["inst"] / r["cap_idx"] * 100) > TOL_EXACT:
+                mismatch += 1
+    chk("D", "표의 가속도 = 그 행의 임펄스/시총", mismatch == 0, f"{mismatch}건")
+
+    # ④ **블록 간 값이 실제로 달라야 한다** — 창을 바꿨는데 값이 완전히 같으면
+    #    파라미터가 계산에 도달하지 않는다는 신호다(민감도 격자가 그 모양이었다).
+    keys = sorted(D["blocks"])
+    same = []
+    for i in range(len(keys) - 1):
+        a, b = D["blocks"][keys[i]], D["blocks"][keys[i + 1]]
+        if keys[i].split("|")[1] != keys[i + 1].split("|")[1]:
+            continue
+        va = [r.get("inst") for r in a["rows"]]
+        vb = [r.get("inst") for r in b["rows"]]
+        if va == vb:
+            same.append(f"{keys[i]} == {keys[i+1]}")
+    chk("D", "창이 다르면 값도 다른가(파라미터가 계산에 도달하는가)", not same,
+        ", ".join(same[:2]))
+
+
 def layer_c(D: dict, html: str) -> None:
     print("\nC. 계산 — 표의 구조와 값이 정합한가")
     # ⚠️ 표가 둘 이상이므로 `rows.forEach` 로 찾으면 안 된다 — 종합 표(ctbl)가
@@ -250,6 +310,7 @@ def main() -> int:
     layer_a(D)
     layer_b(payload, a.db if a.db_check else None)
     layer_c(D, html)
+    layer_d(D, payload, html)
 
     print(f"\n검사 {CHECKS}건 · 실패 {len(FAILS)}건")
     if FAILS:

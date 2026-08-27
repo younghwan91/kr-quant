@@ -239,13 +239,28 @@ function flow(sec,act){ // 일별 배열 합(시장 합산)
   mkts().forEach(m=>{const a=D.flows[m]?.[sec]?.[act]; if(a) for(let i=0;i<NDATE;i++) out[i]+=a[i];});
   return out;
 }
-function capOf(sec){ let c=0; mkts().forEach(m=>c+=(D.cap[m]?.[sec]||0)); return c; }
+/** 섹터 시가총액 — **구간말 월** 기준. 페이로드 마지막 날짜 하나만 쓰면, 과거로
+ *  끝나는 구간의 유량을 오늘 시총으로 나누게 된다(실측: 구간말 2025-08 에서
+ *  오늘/그때 비가 중앙값 1.33배, 27개 중 9개가 1.5배 이상 → 가속도가 그만큼
+ *  작게 나왔다). 그 월의 값이 없으면 페이로드 구간말 시총으로 폴백한다. */
+function capOf(sec){
+  const ym=D.dates[i1].slice(0,7);
+  let c=0;
+  mkts().forEach(m=>{
+    const byM=D.cap_by_month?.[m]?.[sec];
+    c += (byM && byM[ym] != null) ? byM[ym] : (D.cap[m]?.[sec]||0);
+  });
+  return c;
+}
 /** 지수 수익률과 **같은 시장 집합**의 시총. `retOf` 는 업종지수가 있는 시장만
  *  가중하는데 `capOf` 는 모든 시장을 더해서, 지수가 한쪽 시장에만 있는 섹터에서는
  *  분자(자금흐름)와 분모(수익률)의 시장 집합이 어긋났다. 기타제조·출판/매체복제는
  *  겹침이 0 이라 코스닥 자금흐름을 거래소 지수에 맞대고 있었다. */
 function capOfIdx(sec){ let c=0;
-  mkts().forEach(m=>{ if(D.iret[m]?.[sec]) c+=(D.cap[m]?.[sec]||0); });
+  const ym=D.dates[i1].slice(0,7);
+  mkts().forEach(m=>{ if(D.iret[m]?.[sec]){
+    const byM=D.cap_by_month?.[m]?.[sec];
+    c += (byM && byM[ym] != null) ? byM[ym] : (D.cap[m]?.[sec]||0); } });
   return c; }
 function accelIdxOf(sec){ const c=capOfIdx(sec); if(!c) return null;
   let t=0; mkts().forEach(m=>{ if(D.iret[m]?.[sec]){ const a=D.flows[m]?.[sec]?.[actor];

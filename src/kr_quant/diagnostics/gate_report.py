@@ -43,15 +43,26 @@ def _bootstrap_ci(R: np.ndarray, *, n_boot: int, seed: int, ci: float) -> tuple[
 
 
 def _cost_edge_dies(cost_curve: Mapping | Sequence) -> float | None:
-    """엣지가 죽는 비용 — 기대값 R 이 처음으로 ≤0 이 되는 최소 비용. 안 죽으면 None.
+    """엣지가 죽는 비용 — 기대값 R 이 처음으로 ≤0 이 되는 최소 비용.
+
+    반환값 셋을 구분한다: 비용(죽는 지점) · ``None``(전 구간 생존) ·
+    ``nan``(잴 수 없음 — 유효한 관측이 하나도 없다). 마지막을 ``None`` 과 묶으면
+    빈 표본이 "생존" 으로 보고된다.
 
     ``cost_curve``: {비용: 기대값R} 매핑 또는 (비용, 기대값R) 시퀀스. 비용 오름차순으로 검사.
     """
     items = sorted(cost_curve.items()) if isinstance(cost_curve, Mapping) else sorted(cost_curve)
+    seen = False
     for cost, exp in items:
+        # NaN 은 "안 죽었다" 가 아니라 "잴 수 없었다" 다. `NaN <= 0` 이 False 라
+        # 그냥 두면 **표본이 빈 곡선이 '전 구간 생존' 으로 출력된다** — 유니버스가
+        # 비어 폴드가 n=0 인 상황에서 정확히 그 모양이 나온다.
+        if exp != exp:          # NaN
+            continue
+        seen = True
         if exp <= 0:
             return float(cost)
-    return None
+    return None if seen else float("nan")
 
 
 # --- 다중검정 보정 (§4·5·11) — Deflated Sharpe + Harvey-Liu t-haircut ------------

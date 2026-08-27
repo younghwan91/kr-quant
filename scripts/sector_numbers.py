@@ -20,8 +20,16 @@ import tempfile
 WINDOWS = ((5, "5일"), (20, "20일"), (60, "60일"), (120, "120일"))
 
 
-def load_payload(db: str, days: int) -> dict:
-    """sector_flow 의 JSON 페이로드를 재사용한다 — 집계 로직을 두 벌 두지 않는다."""
+def load_payload(db: str, days: int, cached: str | None = None) -> dict:
+    """sector_flow 의 JSON 페이로드를 재사용한다 — 집계 로직을 두 벌 두지 않는다.
+
+    ``cached`` 를 주면 그 파일을 읽는다. 안 주면 sector_flow 를 새로 돌리는데,
+    월별 시총 계산 때문에 한 번이 수 분이라 일일 배치에서는 반드시 재사용해야 한다
+    (안 그러면 같은 페이로드를 세 번 만든다).
+    """
+    if cached and os.path.exists(cached):
+        with open(cached, encoding="utf-8") as f:
+            return json.load(f)
     here = os.path.dirname(os.path.abspath(__file__))
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp = f.name
@@ -311,8 +319,9 @@ def main():
     ap.add_argument("--db", default=os.environ.get("KR_QUANT_DB", ""))
     ap.add_argument("--days", type=int, default=260)
     ap.add_argument("--html", required=True)
+    ap.add_argument("--payload", help="이미 만든 sector_flow JSON 을 재사용")
     a = ap.parse_args()
-    P = load_payload(a.db, a.days)
+    P = load_payload(a.db, a.days, a.payload)
     data = build(P)
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "sector_numbers.html"), encoding="utf-8") as f:

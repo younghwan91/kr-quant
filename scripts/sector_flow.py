@@ -100,7 +100,8 @@ def attach_daily_cap(con, df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def index_returns(con, dates: list[str], sectors, markets) -> dict:
+def index_returns(con, dates: list[str], sectors, markets,
+                  members: dict | None = None) -> dict:
     """KRX 업종지수의 일별 수익률 — 섹터 수익률의 **실측 기준선**.
 
     처음엔 종목 등락률을 섹터로 집계해 썼는데, 그러면 가중치 선택이 그대로 오차가
@@ -126,7 +127,16 @@ def index_returns(con, dates: list[str], sectors, markets) -> dict:
                    .reindex(dates).astype(float).ffill())
             r = ser.pct_change() * 100.0
             lookup[m][name] = [None if pd.isna(v) else round(float(v), 4) for v in r]
-    return {m: {s: lookup[m].get(s) for s in sectors} for m in markets}
+    # ⚠️ 그 시장에 **종목이 하나도 없는** (시장,섹터)에는 지수를 붙이지 않는다.
+    # 이름만 맞으면 매핑되던 이전 판본에서는 거래소/기타제조·거래소/출판매체복제·
+    # 코스닥/제조 처럼 구성종목이 0 인 칸에 지수가 달렸고, 자금흐름이 0 인 칸의
+    # 수익률만 살아 있어 "다른 바구니를 맞대는" 부류가 만들어졌다.
+    # 근원에서 끊는다 — 소비자마다 걸러내면 한 곳을 빠뜨린다.
+    def _has(mk: str, sec: str) -> bool:
+        return not members or bool(members.get(mk, {}).get(sec))
+
+    return {m: {s: (lookup[m].get(s) if _has(m, s) else None) for s in sectors}
+            for m in markets}
 
 
 def sector_cap(con, df: pd.DataFrame, last_date: str) -> pd.DataFrame:
@@ -137,7 +147,31 @@ def sector_cap(con, df: pd.DataFrame, last_date: str) -> pd.DataFrame:
     return codes.dropna(subset=["cap"])
 
 
-def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame) -> dict:
+def sector_cap_monthly(con, df: pd.DataFrame, dates: list[str]) -> dict:
+    """월말 시점별 섹터 시가총액 — 임의 구간의 분모.
+
+    이전 판본은 페이로드 **마지막 날짜**의 시총 하나만 실었다. 뷰어는 시작·종료일을
+    직접 고를 수 있으므로, 1년 전으로 끝나는 구간의 유량을 **오늘** 시총으로 나누게
+    된다. 실측: 구간말이 2025-08 일 때 오늘/그때 시총 비가 중앙값 1.33배,
+    27개 중 9개가 1.5배 이상 — 그만큼 가속도가 작게 나왔다.
+    """
+    months: dict[str, str] = {}
+    for d in dates:
+        months[d[:7]] = d                      # 각 월의 마지막 거래일
+    codes = df[["code", "sector", "market"]].drop_duplicates("code")
+    out: dict = {}
+    for ym, last in sorted(months.items()):
+        q = codes[["code"]].copy()
+        q["date"] = last
+        q["cap"] = market_cap_asof_bulk(con, q).to_numpy() / EOK
+        m = q.merge(codes, on="code").dropna(subset=["cap"])
+        for (mk, sec), g in m.groupby(["market", "sector"]):
+            out.setdefault(mk, {}).setdefault(sec, {})[ym] = round(float(g["cap"].sum()), 1)
+    return out
+
+
+def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame,
+                  cap_monthly: dict | None = None) -> dict:
     sectors = sorted(df["sector"].unique())
     markets = sorted(df["market"].dropna().unique())
     di = {d: i for i, d in enumerate(dates)}
@@ -247,6 +281,7 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame) -> dic
         "retw": rw,
         "iret": INDEX_RET,
         "cap": cap,
+        "cap_by_month": cap_monthly or {},
         "names": names,
         "n_names": int(df["code"].nunique()),
         "finalized": _finalized(dates[-1]),
@@ -260,17 +295,33 @@ def main():
     ap.add_argument("--days", type=int, default=DEFAULT_DAYS)
     ap.add_argument("--json")
     ap.add_argument("--html")
+    ap.add_argument("--from-json", help="이미 만든 페이로드를 읽어 HTML 만 낸다")
     a = ap.parse_args()
+
+    if a.from_json:
+        with open(a.from_json, encoding="utf-8") as f:
+            payload = json.load(f)
+        tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "templates", "sector_flow.html")
+        with open(tpl, encoding="utf-8") as f:
+            html = f.read()
+        with open(a.html, "w", encoding="utf-8") as f:
+            f.write(html.replace("__DATA__", json.dumps(payload, ensure_ascii=False)))
+        print(f"wrote {a.html}  (재사용: {a.from_json})")
+        return
 
     con = connect(a.db)
     df, dates = load(con, a.days)
     df = attach_daily_cap(con, df)
     caps = sector_cap(con, df, dates[-1])
     global INDEX_RET
+    members = {m: dict(g.groupby("sector")["code"].nunique())
+               for m, g in df.groupby("market")}
     INDEX_RET = index_returns(con, dates, sorted(df["sector"].unique()),
-                              sorted(df["market"].dropna().unique()))
+                              sorted(df["market"].dropna().unique()), members)
+    cap_monthly = sector_cap_monthly(con, df, dates)
     con.close()
-    payload = build_payload(df, dates, caps)
+    payload = build_payload(df, dates, caps, cap_monthly)
     covered = sum(1 for m in payload["markets"] for s in payload["sectors"]
                   if payload["iret"][m].get(s))
     print(f"업종지수 커버리지: {covered} / "

@@ -133,3 +133,20 @@ def test_max_drawdown_counts_the_opening_loss():
     assert max_drawdown(np.array([0.10, 0.10])) == pytest.approx(0.0)
     # 중간 고점 이후 하락은 종전과 동일하게 잡힌다
     assert max_drawdown(np.array([0.50, -0.50])) == pytest.approx(-0.50)
+
+
+def test_cost_edge_dies_distinguishes_empty_from_surviving():
+    """회귀 — 빈 표본이 "전 구간 생존" 으로 새면 안 된다.
+
+    `NaN <= 0` 이 False 라, 관측이 하나도 없는 비용 곡선이 그냥 두면 None(생존)을
+    돌려준다. 유니버스가 비어 폴드가 n=0 인 상황에서 정확히 그 모양이 나온다.
+    """
+    from kr_quant.diagnostics.gate_report import _cost_edge_dies
+
+    nan = float("nan")
+    assert _cost_edge_dies({0.0046: 0.5, 0.008: 0.2}) is None          # 진짜 생존
+    assert _cost_edge_dies({0.0046: 0.5, 0.008: -0.1}) == pytest.approx(0.008)
+    got = _cost_edge_dies({0.0046: nan, 0.008: nan})                   # 잴 수 없음
+    assert got != got, "빈 표본은 nan 이어야 한다 (None 이면 '생존' 으로 읽힌다)"
+    # 일부만 NaN 이면 유효한 값으로 판정한다
+    assert _cost_edge_dies({0.0046: nan, 0.008: -0.1}) == pytest.approx(0.008)
