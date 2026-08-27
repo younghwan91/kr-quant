@@ -71,7 +71,9 @@ def build(prices: pd.DataFrame, sd: pd.DataFrame):
     return close, adv, flow
 
 
-def trades(con, close, adv, flow, mass: str = "cap"):
+def trades(con, close, adv, flow, mass: str = "cap", *,
+           win: int = PRE_WIN, lag: int = PRE_LAG, topq: float = PRE_TOPQ,
+           hold: int = PRE_HOLD, step: int = PRE_STEP):
     """``mass="cap"`` = 시가총액(v1), ``"adv"`` = 직전 평균 거래대금(v2).
 
     v2 의 질량은 **두 유량 창보다 앞선** 구간에서 잰다. 분자와 분모를 같은 창에서
@@ -87,7 +89,7 @@ def trades(con, close, adv, flow, mass: str = "cap"):
     # 누적합으로 창 합을 O(1) 에 — Σ_{a..b} = cs[b+1] − cs[a]
     cs = np.vstack([np.zeros(F.shape[1]), np.nancumsum(np.nan_to_num(F), axis=0)])
 
-    rebal = list(range(START_I, len(dates) - PRE_HOLD - 1, PRE_STEP))
+    rebal = list(range(START_I, len(dates) - hold - 1, step))
     capmap = {}
     if mass == "cap":
         caps = pd.concat([pd.DataFrame({"code": codes, "date": dates[t]}) for t in rebal],
@@ -103,19 +105,19 @@ def trades(con, close, adv, flow, mass: str = "cap"):
         else:
             m = A[t - MASS_LAG] / 100.0        # 백만원 → 억원 (일평균 거래대금)
         cap = m
-        recent = cs[t + 1] - cs[t + 1 - PRE_WIN]                  # 최근 20일 유입
-        prior = cs[t + 1 - PRE_LAG] - cs[t + 1 - PRE_LAG - PRE_WIN]
+        recent = cs[t + 1] - cs[t + 1 - win]                       # 최근 win 일 유입
+        prior = cs[t + 1 - lag] - cs[t + 1 - lag - win]
         with np.errstate(invalid="ignore", divide="ignore"):
             sig = (recent - prior) / cap                           # Δ가속도 (배수)
         ok = (A[t] >= ADV_FLOOR) & np.isfinite(sig) & np.isfinite(C[t + 1]) \
-            & np.isfinite(C[t + 1 + PRE_HOLD]) & (cap > 0)
+            & np.isfinite(C[t + 1 + hold]) & (cap > 0)
         n = int(ok.sum())
         if n < 30:
             continue
         idx = np.where(ok)[0]
-        k = max(1, int(round(n * PRE_TOPQ)))
+        k = max(1, int(round(n * topq)))
         pick = idx[np.argsort(sig[idx])[::-1][:k]]
-        r = C[t + 1 + PRE_HOLD, pick] / C[t + 1, pick] - 1.0
+        r = C[t + 1 + hold, pick] / C[t + 1, pick] - 1.0
         ent_d += [dates[t + 1]] * len(pick)
         rets += list(r)
         sigs += list(sig[pick])
@@ -140,18 +142,29 @@ def run(date_from: str | None = None, mass: str = "cap"):
     print(f"트레이드 {len(ret)}건 · {min(ent)} ~ {max(ent)}")
 
     # 민감도 격자를 **먼저** — 원장 N 이 사전등록 게이트보다 앞서 쌓여야 DSR 이 걸린다.
+    # ⚠️ 2026-08-27 수정. 이전 판본은 win·topq·stop 을 **라벨 dict 에만** 넣고
+    # trades() 에 넘기지 않았다. 트레이드는 모듈 상수로 한 번만 계산됐으므로
+    # 격자 전체가 **동일한 계산**이었고, 민감도는 어디에서도 산출되지 않은 채
+    # 원장 N 만 부풀렸다. 린트 (e)는 config= 가 있어 통과했다 — 글자는 검사하고
+    # 취지는 놓친 사례다. 이제 칸마다 실제로 다시 시뮬레이션하고 결과를 보고한다.
     grid = []
-    for win, topq, stop in ((10, PRE_TOPQ, PRE_STOP), (40, PRE_TOPQ, PRE_STOP),
-                            (PRE_WIN, 0.05, PRE_STOP), (PRE_WIN, PRE_TOPQ, 0.05),
-                            (PRE_WIN, PRE_TOPQ, PRE_STOP)):
-        g = dict(win=win, topq=topq, hold=PRE_HOLD, stop=stop,
+    for gwin, gtopq, gstop in ((10, PRE_TOPQ, PRE_STOP), (40, PRE_TOPQ, PRE_STOP),
+                               (PRE_WIN, 0.05, PRE_STOP), (PRE_WIN, PRE_TOPQ, 0.05)):
+        g = dict(win=gwin, lag=PRE_LAG, topq=gtopq, hold=PRE_HOLD, stop=gstop,
                  step=PRE_STEP, adv_floor=ADV_FLOOR, mass=mass)
-        if g == dict(win=PRE_WIN, topq=PRE_TOPQ, hold=PRE_HOLD, stop=PRE_STOP,
-                     step=PRE_STEP, adv_floor=ADV_FLOOR, mass=mass):
+        con2 = connect(db)
+        gent, gret, _ = trades(con2, close, adv, flow, mass=mass,
+                               win=gwin, topq=gtopq)
+        con2.close()
+        if date_from is not None:
+            keep = gent >= date_from
+            gent, gret = gent[keep], gret[keep]
+        if len(gret) < 30:
+            print(f"  [민감도] {g} — 트레이드 {len(gret)}건, 건너뜀")
             continue
-        prop_gate(ent, ret, PRE_STOP, label="inst_flow_accel_sens",
-                  log_dir=OUT_DIR, config=g, verbose=False)
-        grid.append(g)
+        grep = prop_gate(gent, gret, gstop, label="inst_flow_accel_sens",
+                         log_dir=OUT_DIR, config=g, verbose=False)
+        grid.append((g, len(gret), grep))
 
     rep = prop_gate(ent, ret, PRE_STOP, label="inst_flow_accel", log_dir=OUT_DIR, config={
         "win": PRE_WIN, "lag": PRE_LAG, "topq": PRE_TOPQ, "hold": PRE_HOLD,
@@ -159,6 +172,23 @@ def run(date_from: str | None = None, mass: str = "cap"):
     })
     ctrl = random_entry_control(ent, ret, PRE_STOP, n_per_draw=len(ret),
                                 n_draws=200, seed=7)
+
+    # 민감도는 **보고돼야** 민감도다. 이전 판본은 verbose=False 리포트를 버렸다.
+    # 민감도는 **보고돼야** 민감도다. 이전 판본은 verbose=False 리포트를 버렸다.
+    def _oos(r):
+        cs = r.get("cost_sweep") or [{}]
+        return cs[0].get("oos_expectancy_R")
+
+    print("\n민감도 격자 — 칸마다 다시 시뮬레이션 (승자선택 금지 · 기준비용 OOS expR)")
+    print("  win topq  stop |     n | OOS expR")
+    print(f"  {PRE_WIN:3d} {PRE_TOPQ:.2f} {PRE_STOP:.2f} | {len(ret):5d} | "
+          f"{_oos(rep):+.3f}   ←사전등록")
+    for g, n, r in grid:
+        v = _oos(r)
+        v = f"{v:+.3f}" if v is not None else "  n/a"
+        print(f"  {g['win']:3d} {g['topq']:.2f} {g['stop']:.2f} | {n:5d} | {v}")
+    if not grid:
+        print("  (격자 없음)")
     return rep, ctrl
 
 

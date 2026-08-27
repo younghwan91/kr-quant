@@ -122,10 +122,17 @@ def rotation_null(
 ) -> tuple[list[float], float]:
     """Null distribution from every circular rotation of the state sequence.
 
-    Rotating the state in time preserves its duty cycle, run-length structure and
-    switch count **exactly**, and destroys only its alignment with returns. So a
-    real timing edge shows up as the un-rotated value beating the rotated ones;
-    plain exposure reduction shows up as the rotations matching it.
+    The state is first restricted to the months actually evaluated (after the lag
+    and the intersection with ``monthly_ret``), then rotated. Rotating a fixed
+    vector is a permutation of the same elements, so duty cycle and run-length
+    structure are preserved exactly and switch count up to the wrap point; only
+    the alignment with returns is destroyed. So a real timing edge shows up as the
+    un-rotated value beating the rotated ones; plain exposure reduction shows up
+    as the rotations matching it.
+
+    Rotating *before* restricting — as an earlier version did — lets a different
+    subsequence enter the evaluation window on each rotation, so the very
+    quantities the null is supposed to hold fixed drift instead.
 
     Args:
         monthly_ret: Book return by month.
@@ -137,18 +144,33 @@ def rotation_null(
     Returns:
         ``(null_values, actual_value)`` — one null per non-trivial rotation.
     """
-    actual_ret, _ = apply_switch(monthly_ret, state_monthly,
-                                 switch_cost=switch_cost, lag=lag)
-    actual = float(metric_fn(actual_ret))
+    # ⚠️ 상태를 **평가창으로 먼저 자른 뒤** 회전한다.
+    # 이전 판본은 전체 state_monthly 를 회전하고 apply_switch 안에서 북 인덱스로
+    # reindex 했다. 상태가 북보다 길면 회전마다 다른 부분수열이 평가창에 들어와
+    # 듀티사이클·스위치 횟수가 **보존되지 않았다**(실측: 듀티 0.663 → 회전들은
+    # 0.584~0.703, 스위치 51 → 45~59). 널이 보존해야 할 바로 그 양이 흔들리면
+    # "노출 축소가 아니라 타이밍인가" 를 가릴 수 없다.
+    # 먼저 자르면 회전은 같은 원소들의 순열이므로 duty·switch 가 정확히 불변이다.
+    r = monthly_ret.astype(float).sort_index()
+    e = state_monthly.astype(float).sort_index().shift(lag).reindex(r.index)
+    keep = e.notna() & r.notna()
+    if not keep.any():
+        return [], float("nan")
+    ret_w = r[keep]
+    # 평가에 실제로 쓰인(lag 적용 후) 노출만 남긴다.
+    used = e[keep]
+    used.index = ret_w.index
 
-    vals = state_monthly.astype(float).to_numpy()
-    idx = state_monthly.index
+    def _score(exposure: pd.Series) -> float:
+        prev = exposure.shift(1).fillna(0.0)
+        cost = switch_cost * (exposure - prev).abs()
+        return float(metric_fn(exposure * ret_w - cost))
+
+    actual = _score(used)
+    vals = used.to_numpy()
     nulls: list[float] = []
     for k in range(1, len(vals)):
-        rotated = pd.Series(np.roll(vals, k), index=idx)
-        rr, _ = apply_switch(monthly_ret, rotated, switch_cost=switch_cost, lag=lag)
-        if len(rr) >= 6:
-            nulls.append(float(metric_fn(rr)))
+        nulls.append(_score(pd.Series(np.roll(vals, k), index=ret_w.index)))
     return nulls, actual
 
 

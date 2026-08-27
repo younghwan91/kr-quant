@@ -193,7 +193,7 @@ tbody tr:hover{background:var(--sunk)}
   </section>
 
   <section class="panel">
-    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다 · 미반응 = 실제 Δv − k·(J/m)</small></h2>
+    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다 · 미반응 = 다른 섹터 대비 덜 간 정도(횡단면)</small></h2>
     <div class="rows" id="rows"></div>
   </section>
 
@@ -209,6 +209,7 @@ tbody tr:hover{background:var(--sunk)}
   <div class="notes">
     <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 그날 종가를 곱해 금액을 복원했다. 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
     <p><b>비중 변화는 구간 누적 순매수 ÷ 구간말 시가총액이다.</b> 기관 지분율이 몇 %p 올랐나에 대한 근사이지 실제 보유잔고가 아니다. 시총이 작은 섹터는 분모가 작아 크게 튄다 — 종목 수와 거래대금을 같이 보라.</p>
+    <p><b>미반응은 횡단면 편차다.</b> 절대 수익이 아니라 <em>다른 섹터 대비</em> 돈은 더 받았는데 덜 갔는지를 잰다. 처음엔 원점 통과 회귀로 잡았는데, 절편이 없어 시장 전체 드리프트가 전부 잔차로 밀렸다 — 지수평균 +16.3% 구간에서 24개 중 23개가 음수, −11.2% 구간에서 22개가 양수였다. 부호가 섹터 정보가 아니라 장세를 따라가면 지표로 쓸 수 없다.</p>
     <p><b>수익률은 KRX 업종지수 실측이다.</b> 종목 등락률을 직접 집계하면 가중치 선택이 그대로 오차가 된다 — 같은 날 거래대금 가중은 급등주에 가중치를 몰아 20거래일 +102% 를 만들었고, 전일 시총 가중으로 바꿔도 60일 구간에서 지수 대비 중앙값 17%p 벌어졌다. 업종지수가 없는 6개 섹터(보험·증권·부동산·전기가스·기타제조·출판)는 <b>미반응 랭킹에서 제외</b>한다 — 두 정의를 섞지 않는다.</p>
     <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채워 둘을 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
     <p><b>빨강이 순매수, 파랑이 순매도다</b>(국내 관행 · 서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 유니버스는 현재 상장 종목이며(<span class="num">source='kiwoom'</span>), 개인·기관세부가 폐지 종목에 없어 소스를 좁혔다 — 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
@@ -239,6 +240,17 @@ function flow(sec,act){ // 일별 배열 합(시장 합산)
   return out;
 }
 function capOf(sec){ let c=0; mkts().forEach(m=>c+=(D.cap[m]?.[sec]||0)); return c; }
+/** 지수 수익률과 **같은 시장 집합**의 시총. `retOf` 는 업종지수가 있는 시장만
+ *  가중하는데 `capOf` 는 모든 시장을 더해서, 지수가 한쪽 시장에만 있는 섹터에서는
+ *  분자(자금흐름)와 분모(수익률)의 시장 집합이 어긋났다. 기타제조·출판/매체복제는
+ *  겹침이 0 이라 코스닥 자금흐름을 거래소 지수에 맞대고 있었다. */
+function capOfIdx(sec){ let c=0;
+  mkts().forEach(m=>{ if(D.iret[m]?.[sec]) c+=(D.cap[m]?.[sec]||0); });
+  return c; }
+function accelIdxOf(sec){ const c=capOfIdx(sec); if(!c) return null;
+  let t=0; mkts().forEach(m=>{ if(D.iret[m]?.[sec]){ const a=D.flows[m]?.[sec]?.[actor];
+    if(a) for(let i=i0;i<=i1;i++) t+=a[i]; } });
+  return t/c*100; }
 function sum(arr,a,b){ let s=0; for(let i=a;i<=b;i++) s+=arr[i]; return s; }
 function windowVal(sec,act){
   if(metric==="resid"){ const r=RES&&RES.out[sec];
@@ -270,11 +282,22 @@ function accelOf(sec){ const c=capOf(sec); return c?sum(flow(sec,actor),i0,i1)/c
 /** 힘 대비 얼마나 움직였나의 잔차. 원점을 지나는 최소제곱 기울기 k 를 구해
  *  Δv − k·(J/m) 를 낸다. 음수 = 힘은 들어왔는데 아직 안 움직인 섹터. */
 function residuals(){
-  let sxy=0,sxx=0; const A={},R={},out={};
-  const use=D.sectors.filter(hasIdx);
-  use.forEach(s=>{const x=accelOf(s),y=retOf(s); A[s]=x; R[s]=y; sxy+=x*y; sxx+=x*x;});
+  // **횡단면 편차**로 잡는다. 원점 통과 회귀는 절편이 없어 시장 전체 드리프트를
+  // 흡수할 데가 없고, 그게 전부 잔차로 밀려 모든 섹터를 같은 방향으로 민다
+  // (실측: 지수평균 +16.3% 구간에서 24개 중 23개 음수, −11.2% 구간에서 22개 양수).
+  // 부호가 섹터 정보가 아니라 장세를 따라가면 지표로 못 쓴다. 양변을 평균 대비
+  // 편차로 놓으면 드리프트가 상쇄되고 "다른 섹터 대비 덜 갔나" 만 남는다.
+  const A={},R={},out={};
+  // 회귀에는 지수와 **같은 시장 집합**의 가속도를 쓴다(accelIdxOf).
+  const use=D.sectors.filter(s=>hasIdx(s)&&accelIdxOf(s)!=null);
+  if(!use.length) return {k:0,out,A,R,use};
+  use.forEach(s=>{A[s]=accelIdxOf(s); R[s]=retOf(s);});
+  const abar=use.reduce((t,s)=>t+A[s],0)/use.length;
+  const rbar=use.reduce((t,s)=>t+R[s],0)/use.length;
+  let sxy=0,sxx=0;
+  use.forEach(s=>{const dx=A[s]-abar, dy=R[s]-rbar; sxy+=dx*dy; sxx+=dx*dx;});
   const k=sxx?sxy/sxx:0;
-  use.forEach(s=>out[s]=R[s]-k*A[s]);
+  use.forEach(s=>out[s]=(R[s]-rbar)-k*(A[s]-abar));
   return {k,out,A,R,use};
 }
 let RES=null;

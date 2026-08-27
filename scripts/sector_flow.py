@@ -211,9 +211,23 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame) -> dic
         ret[m][s][di[d]] = round(float((g["ret"] * g["cap_lag"]).sum() / w) if w else 0.0, 3)
         rw[m][s][di[d]] = round(w, 1)
 
+    # (시장, 섹터)별 실제 종목 수 — 표에서 "섹터로 읽을 만한가" 를 가리는 기준.
+    counts = {m: {} for m in markets}
+    for (m, sec), g in df.groupby(["market", "sector"], sort=False):
+        if m in counts:
+            counts[m][sec] = int(g["code"].nunique())
+
+    # (시장, 섹터)별 실제 종목 수 — 표에서 "섹터로 읽을 만한가" 를 가리는 기준.
+    counts = {m: {} for m in markets}
+    for (m, sec), g in df.groupby(["market", "sector"], sort=False):
+        if m in counts:
+            counts[m][sec] = int(g["code"].nunique())
+
     return {
         "dates": dates,
         "sectors": sectors,
+        "n_by_sector": counts,
+        "n_by_sector": counts,
         "markets": markets,
         "flows": flows,
         "detail": detail,

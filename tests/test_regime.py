@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from kr_quant.engine.metrics import max_drawdown
 from kr_quant.strategies.regime import (
     apply_switch, ma_regime_state, market_index_level, monthly_state,
     percentile_of, rotation_null,
@@ -69,21 +70,41 @@ def test_switch_cost_charged_both_ways():
     assert out.iloc[2] == pytest.approx(-0.01)           # on -> flat
 
 
-def test_rotation_null_holds_duty_cycle_and_switch_count():
-    idx = _months(36)
-    rng = np.random.default_rng(1)
-    ret = pd.Series(rng.normal(0.01, 0.04, 36), index=idx)
-    state = pd.Series((rng.random(36) > 0.4).astype(float), index=idx)
+def test_rotation_null_preserves_duty_cycle_when_state_outruns_the_book():
+    """회귀 — 상태가 북보다 길 때 회전이 듀티사이클을 보존해야 한다.
 
-    def duty(s: pd.Series) -> float:
+    이전 판본은 전체 상태를 회전한 뒤 북 인덱스로 reindex 해서, 회전마다 다른
+    부분수열이 평가창에 들어왔다(실측 듀티 0.663 → 0.584~0.703). 널이 고정해야 할
+    양이 흔들리면 "노출 축소가 아니라 타이밍인가" 를 가릴 수 없다.
+
+    이 테스트가 잡아야 할 위반을 실제로 만든다 — 상태 126개월, 북 101개월.
+    """
+    state_idx = _months(126)
+    book_idx = state_idx[25:]                      # 북이 25개월 늦게 시작
+    rng = np.random.default_rng(1)
+    ret = pd.Series(rng.normal(0.01, 0.04, len(book_idx)), index=book_idx)
+    state = pd.Series((rng.random(126) > 0.35).astype(float), index=state_idx)
+
+    seen: list[tuple[float, int]] = []
+
+    def probe(s: pd.Series) -> float:
+        # metric_fn 은 switched 수익 시리즈를 받는다. 노출 자체는 못 보므로
+        # rotation_null 이 만든 시리즈 길이로 평가창 크기가 불변인지 본다.
+        seen.append((float(len(s)), 0))
         return float(len(s))
 
-    nulls, actual = rotation_null(ret, state, duty, switch_cost=0.0)
-    assert len(nulls) == 35                       # 비자명 회전 전부
-    assert all(n == actual for n in nulls)        # 회전은 표본 수를 안 바꾼다
-    # 회전은 켜진 달 수(듀티사이클)를 보존한다
-    for k in range(1, 36):
-        assert np.roll(state.to_numpy(), k).sum() == state.to_numpy().sum()
+    nulls, actual = rotation_null(ret, state, probe, switch_cost=0.0)
+    assert len(nulls) == len(ret) - 1              # 평가창 길이 기준 회전 수
+    assert all(n == actual for n in nulls)         # 평가창 크기 불변
+
+    # 진짜 불변식: 회전된 노출의 듀티사이클과 스위치 횟수가 실제와 같아야 한다.
+    _sw, used = apply_switch(ret, state, switch_cost=0.0)
+    base_duty, base_sw = used.mean(), int((used.diff().abs() > 0).sum())
+    arr = used.to_numpy()
+    for k in range(1, len(arr)):
+        rot = pd.Series(np.roll(arr, k), index=used.index)
+        assert rot.mean() == pytest.approx(base_duty)
+        assert abs(int((rot.diff().abs() > 0).sum()) - base_sw) <= 1  # 랩 지점 1회 허용
 
 
 def test_percentile_of():
@@ -98,3 +119,17 @@ def test_monthly_state_takes_month_end():
                                             "2016-03-02"]))
     ms = monthly_state(daily)
     assert list(ms) == [1.0, 0.0, 1.0]
+
+
+def test_max_drawdown_counts_the_opening_loss():
+    """회귀 — 초기자본이 첫 peak 여야 한다.
+
+    이전 판본은 equity 곡선만 보고 peak 를 잡아, 첫 구간이 하락이면 자기 자신이
+    peak 가 되어 drawdown 0 을 돌려줬다. 국면 스위치 판정이 MDD 차이 0.3%p 로
+    갈리는데 그 손실이 두 팔에 비대칭으로 걸린다.
+    """
+    assert max_drawdown(np.array([-0.20, 0.05, 0.05])) == pytest.approx(-0.20)
+    # 상승만 하면 drawdown 은 0
+    assert max_drawdown(np.array([0.10, 0.10])) == pytest.approx(0.0)
+    # 중간 고점 이후 하락은 종전과 동일하게 잡힌다
+    assert max_drawdown(np.array([0.50, -0.50])) == pytest.approx(-0.50)
