@@ -103,13 +103,16 @@ svg{display:block; width:100%; height:auto; overflow:visible}
 
 /* ranking rows */
 .rows{padding:7px 6px 11px; max-height:520px; overflow-y:auto}
-.row{display:grid; grid-template-columns:112px 1fr 92px; align-items:center; gap:9px;
+.row{display:grid; grid-template-columns:158px 1fr 92px; align-items:center; gap:9px;
   padding:3px 11px; border:0; background:none; width:100%; text-align:left; font:inherit; color:inherit;
   cursor:pointer; border-radius:6px}
 .row:hover,.row:focus-visible{background:var(--sunk); outline:none}
 .row[aria-current="true"]{background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line)}
+.row .namebox{min-width:0; display:flex; flex-direction:column; gap:1px}
 .row .name{font-size:12.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.row .drv{font-size:10.5px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .row[aria-current="true"] .name{color:var(--ink); font-weight:600}
+@media (max-width:900px){.row .drv{display:none}}
 .track{position:relative; height:20px}
 .axis{position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--line); left:50%}
 .bb{position:absolute; top:4px; height:12px}
@@ -190,12 +193,12 @@ tbody tr:hover{background:var(--sunk)}
   </section>
 
   <section class="panel">
-    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다</small></h2>
+    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다 · 미반응 = 실제 Δv − k·(J/m)</small></h2>
     <div class="rows" id="rows"></div>
   </section>
 
   <div class="two">
-    <section class="panel"><h2 id="d-buy">담은 종목</h2><div class="lst" id="lst-buy"></div></section>
+    <section class="panel"><h2 id="d-buy">담은 종목<small>섹터 대표종목 = 거래대금 상위 ∪ 기관 순매수 상위</small></h2><div class="lst" id="lst-buy"></div></section>
     <section class="panel"><h2 id="d-sell">던진 종목</h2><div class="lst" id="lst-sell"></div></section>
   </div>
 
@@ -206,6 +209,7 @@ tbody tr:hover{background:var(--sunk)}
   <div class="notes">
     <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 그날 종가를 곱해 금액을 복원했다. 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
     <p><b>비중 변화는 구간 누적 순매수 ÷ 구간말 시가총액이다.</b> 기관 지분율이 몇 %p 올랐나에 대한 근사이지 실제 보유잔고가 아니다. 시총이 작은 섹터는 분모가 작아 크게 튄다 — 종목 수와 거래대금을 같이 보라.</p>
+    <p><b>수익률은 KRX 업종지수 실측이다.</b> 종목 등락률을 직접 집계하면 가중치 선택이 그대로 오차가 된다 — 같은 날 거래대금 가중은 급등주에 가중치를 몰아 20거래일 +102% 를 만들었고, 전일 시총 가중으로 바꿔도 60일 구간에서 지수 대비 중앙값 17%p 벌어졌다. 업종지수가 없는 6개 섹터(보험·증권·부동산·전기가스·기타제조·출판)는 <b>미반응 랭킹에서 제외</b>한다 — 두 정의를 섞지 않는다.</p>
     <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채워 둘을 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
     <p><b>빨강이 순매수, 파랑이 순매도다</b>(국내 관행 · 서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 유니버스는 현재 상장 종목이며(<span class="num">source='kiwoom'</span>), 개인·기관세부가 폐지 종목에 없어 소스를 좁혔다 — 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
   </div>
@@ -216,7 +220,7 @@ tbody tr:hover{background:var(--sunk)}
 const D = __DATA__;
 const ACTORS=[["inst","기관"],["forgn","외국인"],["indiv","개인"],["etc","기타법인"]];
 const PRESETS=[[1,"1일"],[5,"5일"],[20,"20일"],[60,"60일"],[120,"120일"],[0,"전체"]];
-const METRICS=[["amt","금액"],["share","비중 %p"]];
+const METRICS=[["amt","임펄스 억"],["share","가속도 %p"],["resid","미반응"]];
 const NDATE=D.dates.length;
 
 let market="전체", actor="inst", metric="share", picked=null;
@@ -236,10 +240,42 @@ function flow(sec,act){ // 일별 배열 합(시장 합산)
 }
 function capOf(sec){ let c=0; mkts().forEach(m=>c+=(D.cap[m]?.[sec]||0)); return c; }
 function sum(arr,a,b){ let s=0; for(let i=a;i<=b;i++) s+=arr[i]; return s; }
-function windowVal(sec,act){ const t=sum(flow(sec,act),i0,i1);
+function windowVal(sec,act){
+  if(metric==="resid"){ const r=RES&&RES.out[sec];
+    return r==null?-Infinity:-r; }  // 미반응이 클수록 위로, 지수 없는 섹터는 맨 아래
+
+  const t=sum(flow(sec,act),i0,i1);
   if(metric==="amt") return t; const c=capOf(sec); return c?t/c*100:0; }
+/** 구간 누적 수익률(%) — **KRX 업종지수** 기준. 지수가 없는 섹터는 null 이며
+ *  잔차 랭킹에서 제외한다(자체 집계와 섞으면 정의가 달라진다). */
+function retOf(sec){
+  let acc=1, any=false;
+  for(let i=i0;i<=i1;i++){
+    let num=0,den=0;
+    mkts().forEach(m=>{const r=D.iret[m]?.[sec]?.[i], w=D.retw[m]?.[sec]?.[i];
+      if(r!=null&&w){num+=r*w; den+=w; any=true;}});
+    acc*=1+(den?num/den:0)/100;
+  }
+  return any?(acc-1)*100:null;
+}
+/** 지수 수익률이 실제로 산출되는 섹터인가 — 배열 존재만 보면 그 시장에 종목이
+ *  없어 가중치가 0 인 경우를 놓친다. 값이 나오는지로 판정한다. */
+const hasIdx=sec=>retOf(sec)!=null;
+function accelOf(sec){ const c=capOf(sec); return c?sum(flow(sec,actor),i0,i1)/c*100:0; }
+/** 힘 대비 얼마나 움직였나의 잔차. 원점을 지나는 최소제곱 기울기 k 를 구해
+ *  Δv − k·(J/m) 를 낸다. 음수 = 힘은 들어왔는데 아직 안 움직인 섹터. */
+function residuals(){
+  let sxy=0,sxx=0; const A={},R={},out={};
+  const use=D.sectors.filter(hasIdx);
+  use.forEach(s=>{const x=accelOf(s),y=retOf(s); A[s]=x; R[s]=y; sxy+=x*y; sxx+=x*x;});
+  const k=sxx?sxy/sxx:0;
+  use.forEach(s=>out[s]=R[s]-k*A[s]);
+  return {k,out,A,R,use};
+}
+let RES=null;
 function unit(){ return metric==="amt"?"억":"%p"; }
 function fmt(v){ return metric==="amt"?amt(v):pp(v); }
+function fmt2(v){ return pp(v); }
 
 /* ---------- controls ---------- */
 function seg(id,opts,get,set){
@@ -276,6 +312,16 @@ function tipMove(e){const p=13,w=tip.offsetWidth,h=tip.offsetHeight;
   tip.style.left=x+"px"; tip.style.top=y+"px";}
 const tipHide=()=>tip.style.opacity=0;
 
+function drivers(sec,k){ // 구간 내 그 섹터에서 해당 주체 순매수 상위/하위 종목
+  const rows=[];
+  for(const code in D.names){const r=D.names[code];
+    if(r.sector!==sec) continue;
+    if(market!=="전체"&&r.market!==market) continue;
+    rows.push({code,name:r.name,v:sum(r[k],i0,i1)});}
+  rows.sort((a,b)=>b.v-a.v);
+  return rows;
+}
+
 /* ---------- heatmap ---------- */
 const NB=26; // 시간 버킷 수
 function buckets(){
@@ -291,7 +337,7 @@ function renderHeat(order){
   grid.style.gridTemplateColumns=`120px repeat(${bk.length},minmax(14px,1fr))`;
   const vals=new Map(); let mx=0;
   order.forEach(s=>{const f=flow(s,actor); const c=capOf(s);
-    const row=bk.map(([a,z])=>{const t=sum(f,a,z); return metric==="amt"?t:(c?t/c*100:0);});
+    const row=bk.map(([a,z])=>{const t=sum(f,a,z); return metric==="amt"?t:(c?t/c*100:0);});  // resid 는 구간 스칼라라 시계열은 가속도로 그린다
     vals.set(s,row); row.forEach(v=>mx=Math.max(mx,Math.abs(v)));});
   mx=mx||1;
   order.forEach(s=>{
@@ -365,10 +411,16 @@ function render(){
   document.getElementById("hdr-range").textContent=D.dates[i0]+" ~ "+D.dates[i1];
   document.getElementById("hdr-meta").textContent=(i1-i0+1)+"거래일 · "+D.n_names.toLocaleString("ko-KR")+"종목";
   document.getElementById("rk-title").firstChild.textContent=
-    "구간 누적 "+label+" 순매수 — "+(metric==="amt"?"금액순":"비중 상승순");
+    metric==="resid" ? label+" 미반응순 — 돈은 들어왔는데(가속>0) 아직 안 간 섹터"
+    : "구간 누적 "+label+" — "+(metric==="amt"?"임펄스(금액)순":"가속도(비중) 상승순");
   document.getElementById("ln-title").firstChild.textContent=label+" 누적 추이";
 
-  const order=[...D.sectors].sort((a,b)=>windowVal(b,actor)-windowVal(a,actor));
+  RES=residuals();
+  let order=[...D.sectors].sort((a,b)=>windowVal(b,actor)-windowVal(a,actor));
+  // 미반응 랭킹은 (a) 업종지수가 있고 (b) 실제로 **자금이 들어온**(가속>0) 섹터만 본다.
+  // 잔차는 대칭이라 그냥 두면 "기관이 팔았는데 더 빠진" 섹터까지 미반응으로 올라오는데,
+  // 그건 "돈은 들어왔는데 아직 안 간" 과 정반대 상황이다.
+  if(metric==="resid") order=order.filter(s=>hasIdx(s)&&accelOf(s)>0);
   if(!picked||!D.sectors.includes(picked)) picked=order[0];
 
   renderTiles();
@@ -378,23 +430,32 @@ function render(){
   const mx=Math.max(...order.map(s=>Math.abs(windowVal(s,actor))),1e-9);
   const rows=document.getElementById("rows"); rows.replaceChildren();
   order.forEach(s=>{
-    const v=windowVal(s,actor), other=metric==="amt"?(capOf(s)?sum(flow(s,actor),i0,i1)/capOf(s)*100:0)
-                                                   :sum(flow(s,actor),i0,i1);
+    const v=windowVal(s,actor);
+    const other=metric==="amt"?accelOf(s):(metric==="share"?sum(flow(s,actor),i0,i1):accelOf(s));
+    const osuf=metric==="amt"?"%p":(metric==="share"?"억":"%p 가속");
     const b=el("button","row"); b.type="button"; b.setAttribute("aria-current",String(picked===s));
-    b.append(el("div","name",s));
+    const nb=el("div","namebox"); nb.append(el("div","name",s));
+    const dv=drivers(s,actor);
+    const lead=(v>=0?dv.slice(0,2):dv.slice(-2).reverse()).filter(x=>Math.abs(x.v)>0);
+    nb.append(el("div","drv", lead.length?lead.map(x=>x.name).join(" · "):"—"));
+    b.append(nb);
     const tr=el("div","track"); tr.append(el("div","axis"));
     const bb=el("div","bb "+(v>=0?"p":"n"));
     if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
     bb.style.width=Math.max(Math.abs(v)/mx*50,0.3)+"%"; tr.append(bb); b.append(tr);
     const val=el("div","val");
     val.append(el("span","num "+cls(v),fmt(v)));
-    val.append(el("span","sub num",metric==="amt"?pp(other)+"%p":amt(other)+"억"));
+    val.append(el("span","sub num",(metric==="share"?amt(other):pp(other))+osuf));
     b.append(val);
     b.addEventListener("mouseenter",e=>tipShow(e,s,[
       ["기간",D.dates[i0]+" ~ "+D.dates[i1]],
       ...ACTORS.map(([k,ko])=>{const t=sum(flow(s,k),i0,i1); return [ko,amt(t)+"억",cls(t)];}),
       ["거래대금",amt(sum(flow(s,"tv"),i0,i1)).replace("+","")+"억"],
-      ["시가총액",amt(capOf(s)).replace("+","")+"억"]]));
+      ["시가총액",amt(capOf(s)).replace("+","")+"억"],
+      ["가속도 J/m",pp(accelOf(s))+"%p",cls(accelOf(s))],
+      ...(hasIdx(s)?[["실제 Δv (KRX지수)",pp(retOf(s))+"%",cls(retOf(s))],
+                     ["미반응 잔차",pp(-RES.out[s])+"%p",cls(-RES.out[s])]]:[["수익률","업종지수 없음"]]),
+      ...drivers(s,actor).slice(0,3).map(x=>["↑ "+x.name,amt(x.v)+"억",cls(x.v)])]));
     b.addEventListener("mousemove",tipMove); b.addEventListener("mouseleave",tipHide);
     b.addEventListener("click",()=>{picked=s; render();});
     rows.append(b);
@@ -420,17 +481,12 @@ function renderNames(){
   const label=ACTORS.find(a=>a[0]===actor)[1];
   document.getElementById("d-buy").firstChild.textContent=picked+" — "+label+"이 담은 종목";
   document.getElementById("d-sell").firstChild.textContent=picked+" — "+label+"이 던진 종목";
-  const rows=[];
-  for(const code in D.names){const r=D.names[code];
-    if(r.sector!==picked) continue;
-    if(market!=="전체"&&r.market!==market) continue;
-    rows.push({code,name:r.name,v:sum(r[actor],i0,i1),tv:sum(r.tv,i0,i1)});}
-  rows.sort((a,b)=>b.v-a.v);
+  const rows=drivers(picked,actor).map(x=>({...x,tv:sum(D.names[x.code].tv,i0,i1)}));
   fill("lst-buy",rows.slice(0,6));
   fill("lst-sell",rows.slice(-6).reverse());
   function fill(id,arr){
     const box=document.getElementById(id); box.replaceChildren();
-    if(!arr.length){const p=el("div","li"); p.append(el("div","nm","거래대금 상위 "+Object.keys(D.names).length+"종목 안에 이 섹터 종목이 없다"));
+    if(!arr.length){const p=el("div","li"); p.append(el("div","nm","이 시장에 해당 섹터 대표종목이 없다"));
       box.append(p); return;}
     arr.forEach(t=>{const li=el("div","li");
       const nm=el("div","nm",t.name); nm.append(el("span",null,t.code)); li.append(nm);
