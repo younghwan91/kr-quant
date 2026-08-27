@@ -30,7 +30,8 @@ from prop_gate import prop_gate, random_entry_control  # noqa: E402
 
 from kr_quant.engine.panels import panel_pivot  # noqa: E402
 from kr_quant.storage import (  # noqa: E402
-    connect, db_default, market_cap_asof_bulk, read_prices, read_supply_demand)
+    SHARES_RESIDUAL_OK, connect, db_default, market_cap_asof_bulk, read_prices,
+    read_supply_demand, shares_backfill_pending)
 
 OUT_DIR = "research/logs/inst_flow_accel"
 
@@ -45,34 +46,6 @@ ADV_FLOOR = 5000.0    # 백만원 = 50억
 ADV_WIN = 20
 START_I = 80          # 워밍업(질량창 20 + LAG 20 + WIN 20 + 여유)
 MASS_LAG = 40         # v2: 질량을 두 유량 창보다 앞선 [t−59..t−40] 에서 잰다
-
-
-#: 백필이 끝나도 남는 몫 — DART 에 해당 연도 보고서가 아예 없는 종목(실측 60).
-#: 이 수 근처면 정상 종료, 그보다 크게 많으면 백필이 아직 도는 중이다.
-SHARES_RESIDUAL_OK = 80
-
-
-def shares_backfill_pending(con) -> int:
-    """과거 상장주식수가 아직 없는 **상장** 종목 수. 완료되면 60 근처로 수렴한다.
-
-    이 검사가 있는 이유: v1 이 VOID 로 끝난 원인이 정확히 "분모 데이터가 시대별로
-    다르게 비어 있는데 러너가 그걸 모르고 돌린 것"이었다. 유니버스를 고른 건
-    신호가 아니라 데이터 존재 여부였고, 배터리는 좋아 보이는 숫자(+1.057R)를 냈다.
-    커버리지 숫자를 세는 게 아니라 **그 데이터로 값이 나오는 종목**을 센다
-    (GUARDRAILS §4-2 의 교훈 — 커버리지는 초록인데 한 행도 안 쓰였던 사고).
-    """
-    cur = con.cursor()
-    cur.execute("""
-        SELECT count(*) FROM (
-          SELECT b.code FROM daily_bars b
-          WHERE b.source <> 'naver'
-            AND b.date BETWEEN '2016-01-01' AND '2025-12-31'
-          GROUP BY b.code
-          HAVING NOT EXISTS (
-            SELECT 1 FROM shares_outstanding_history s
-            WHERE s.code = b.code AND s.date < '2026-01-01')
-        ) t""")
-    return int(cur.fetchone()[0])
 
 
 def load(db: str):

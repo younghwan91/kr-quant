@@ -574,6 +574,37 @@ def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
         )
 
 
+#: 과거 주식수 백필이 끝나도 남는 몫 — DART 에 해당 연도 보고서가 아예 없는 종목.
+SHARES_RESIDUAL_OK = 80
+
+
+def shares_backfill_pending(con: Any) -> int:
+    """과거 상장주식수가 아직 없는 **상장** 종목 수. 완료되면 60 근처로 수렴한다.
+
+    시총을 분모로 쓰는 연구는 이 값을 먼저 봐야 한다. 백필이 도는 중이면 유니버스가
+    **시대별로 다르게** 좁혀지고, 그 상태의 판정은 신호가 아니라 처리 진행률을 잰다.
+    실제로 그렇게 한 번 무효가 났다 — 분모가 5종목만 풀리던 구간에서 배터리가
+    +1.057R·승률 73% 를 냈고, 유니버스를 고른 건 신호가 아니라 데이터 존재 여부였다.
+
+    커버리지 숫자가 아니라 **그 데이터로 값이 나오는 종목**을 센다(§4-2 의 교훈 —
+    커버리지는 초록인데 한 행도 안 쓰였던 사고).
+
+    Returns: 미처리 종목 수. :data:`SHARES_RESIDUAL_OK` 이하면 정상 종료로 본다.
+    """
+    cur = con.cursor()
+    cur.execute("""
+        SELECT count(*) FROM (
+          SELECT b.code FROM daily_bars b
+          WHERE b.source <> 'naver'
+            AND b.date BETWEEN '2016-01-01' AND '2025-12-31'
+          GROUP BY b.code
+          HAVING NOT EXISTS (
+            SELECT 1 FROM shares_outstanding_history s
+            WHERE s.code = b.code AND s.date < '2026-01-01')
+        ) t""")  # noqa: S608 — 리터럴 상수만, 사용자 입력 없음
+    return int(cur.fetchone()[0])
+
+
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
     """Market cap for ``code`` on exactly ``date``: close * shares outstanding.
 
