@@ -249,11 +249,16 @@ function windowVal(sec,act){
 /** 구간 누적 수익률(%) — **KRX 업종지수** 기준. 지수가 없는 섹터는 null 이며
  *  잔차 랭킹에서 제외한다(자체 집계와 섞으면 정의가 달라진다). */
 function retOf(sec){
+  // 거래소·코스닥 지수를 합치는 가중치는 **구간말 섹터 시총(상수)** 을 쓴다.
+  // 일별 시총을 쓰면 안 된다 — shares_outstanding_history 가 2026년 이전에 연 200종목
+  // 남짓이라 가중치가 0 이 되고, 그 날들이 누적에서 조용히 빠진다(실측: 260일 중 149일).
   let acc=1, any=false;
+  const w={}; let tot=0;
+  mkts().forEach(m=>{const c=D.cap[m]?.[sec]||0; if(c&&D.iret[m]?.[sec]){w[m]=c; tot+=c;}});
+  if(!tot) return null;
   for(let i=i0;i<=i1;i++){
     let num=0,den=0;
-    mkts().forEach(m=>{const r=D.iret[m]?.[sec]?.[i], w=D.retw[m]?.[sec]?.[i];
-      if(r!=null&&w){num+=r*w; den+=w; any=true;}});
+    for(const m in w){const r=D.iret[m][sec][i]; if(r!=null){num+=r*w[m]; den+=w[m]; any=true;}}
     acc*=1+(den?num/den:0)/100;
   }
   return any?(acc-1)*100:null;
