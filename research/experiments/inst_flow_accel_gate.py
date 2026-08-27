@@ -43,7 +43,8 @@ PRE_TOPQ = 0.10       # 상위 10% 롱
 PRE_STOP = 0.08       # 하드손절 8% (R 정규화 분모)
 ADV_FLOOR = 5000.0    # 백만원 = 50억
 ADV_WIN = 20
-START_I = 60          # 워밍업(WIN+LAG+여유)
+START_I = 80          # 워밍업(질량창 20 + LAG 20 + WIN 20 + 여유)
+MASS_LAG = 40         # v2: 질량을 두 유량 창보다 앞선 [t−59..t−40] 에서 잰다
 
 
 def load(db: str):
@@ -70,7 +71,14 @@ def build(prices: pd.DataFrame, sd: pd.DataFrame):
     return close, adv, flow
 
 
-def trades(con, close, adv, flow):
+def trades(con, close, adv, flow, mass: str = "cap"):
+    """``mass="cap"`` = 시가총액(v1), ``"adv"`` = 직전 평균 거래대금(v2).
+
+    v2 의 질량은 **두 유량 창보다 앞선** 구간에서 잰다. 분자와 분모를 같은 창에서
+    재면 둘이 함께 움직여 신호가 뭉개지고, 물리적으로도 질량은 힘보다 먼저 정해져
+    있어야 한다. adv 는 rolling(20).mean() 이므로 ``adv[t − MASS_LAG]`` 가 곧
+    [t−59..t−40] 평균이다. 단위는 백만원이라 억원으로 맞춘다(÷100).
+    """
     dates = list(close.index)
     codes = np.array(close.columns)
     C = close.to_numpy(float)
@@ -80,15 +88,21 @@ def trades(con, close, adv, flow):
     cs = np.vstack([np.zeros(F.shape[1]), np.nancumsum(np.nan_to_num(F), axis=0)])
 
     rebal = list(range(START_I, len(dates) - PRE_HOLD - 1, PRE_STEP))
-    caps = pd.concat([pd.DataFrame({"code": codes, "date": dates[t]}) for t in rebal],
-                     ignore_index=True)
-    caps["cap"] = market_cap_asof_bulk(con, caps).to_numpy() / 1e8            # 억원
-    capmap = {(r.code, r.date): r.cap for r in caps.itertuples()}
+    capmap = {}
+    if mass == "cap":
+        caps = pd.concat([pd.DataFrame({"code": codes, "date": dates[t]}) for t in rebal],
+                         ignore_index=True)
+        caps["cap"] = market_cap_asof_bulk(con, caps).to_numpy() / 1e8        # 억원
+        capmap = {(r.code, r.date): r.cap for r in caps.itertuples()}
 
     ent_d, rets, sigs = [], [], []
     for t in rebal:
         d = dates[t]
-        cap = np.array([capmap.get((c, d), np.nan) for c in codes])
+        if mass == "cap":
+            m = np.array([capmap.get((c, d), np.nan) for c in codes])
+        else:
+            m = A[t - MASS_LAG] / 100.0        # 백만원 → 억원 (일평균 거래대금)
+        cap = m
         recent = cs[t + 1] - cs[t + 1 - PRE_WIN]                  # 최근 20일 유입
         prior = cs[t + 1 - PRE_LAG] - cs[t + 1 - PRE_LAG - PRE_WIN]
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -108,14 +122,14 @@ def trades(con, close, adv, flow):
     return np.array(ent_d), np.array(rets, float), np.array(sigs, float)
 
 
-def run(date_from: str | None = None, out: str | None = None):
+def run(date_from: str | None = None, mass: str = "cap"):
     """``date_from`` 을 주면 그 이후 진입만 남긴다 — 시총이 실제로 계산되는 구간으로
     좁혀 **기술 통계**를 보기 위한 것이다. 폴드·손안댄창이 무너지므로 **판정이 아니다.**
     사전등록 신호는 한 글자도 바뀌지 않는다(분모를 갈아끼우면 사후 선택이 된다)."""
     db = os.environ.get("KR_QUANT_DB") or db_default()
     con, prices, sd = load(db)
     close, adv, flow = build(prices, sd)
-    ent, ret, _sig = trades(con, close, adv, flow)
+    ent, ret, _sig = trades(con, close, adv, flow, mass=mass)
     con.close()
     if date_from:
         keep = ent >= date_from
@@ -127,19 +141,21 @@ def run(date_from: str | None = None, out: str | None = None):
 
     # 민감도 격자를 **먼저** — 원장 N 이 사전등록 게이트보다 앞서 쌓여야 DSR 이 걸린다.
     grid = []
-    for win in (10, 20, 40):
-        for topq in (0.05, 0.10):
-            if (win, topq) == (PRE_WIN, PRE_TOPQ):
-                continue
-            g = dict(win=win, topq=topq, hold=PRE_HOLD, stop=PRE_STOP,
-                     step=PRE_STEP, adv_floor=ADV_FLOOR)
-            prop_gate(ent, ret, PRE_STOP, label="inst_flow_accel_sens",
-                      log_dir=OUT_DIR, config=g, verbose=False)
-            grid.append(g)
+    for win, topq, stop in ((10, PRE_TOPQ, PRE_STOP), (40, PRE_TOPQ, PRE_STOP),
+                            (PRE_WIN, 0.05, PRE_STOP), (PRE_WIN, PRE_TOPQ, 0.05),
+                            (PRE_WIN, PRE_TOPQ, PRE_STOP)):
+        g = dict(win=win, topq=topq, hold=PRE_HOLD, stop=stop,
+                 step=PRE_STEP, adv_floor=ADV_FLOOR, mass=mass)
+        if g == dict(win=PRE_WIN, topq=PRE_TOPQ, hold=PRE_HOLD, stop=PRE_STOP,
+                     step=PRE_STEP, adv_floor=ADV_FLOOR, mass=mass):
+            continue
+        prop_gate(ent, ret, PRE_STOP, label="inst_flow_accel_sens",
+                  log_dir=OUT_DIR, config=g, verbose=False)
+        grid.append(g)
 
     rep = prop_gate(ent, ret, PRE_STOP, label="inst_flow_accel", log_dir=OUT_DIR, config={
         "win": PRE_WIN, "lag": PRE_LAG, "topq": PRE_TOPQ, "hold": PRE_HOLD,
-        "stop": PRE_STOP, "step": PRE_STEP, "adv_floor": ADV_FLOOR,
+        "stop": PRE_STOP, "step": PRE_STEP, "adv_floor": ADV_FLOOR, "mass": mass,
     })
     ctrl = random_entry_control(ent, ret, PRE_STOP, n_per_draw=len(ret),
                                 n_draws=200, seed=7)
@@ -151,5 +167,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="date_from",
                     help="이 날짜 이후 진입만 (기술 통계용 — 판정 아님)")
+    ap.add_argument("--mass", default="cap", choices=("cap", "adv"),
+                    help="질량: cap=시가총액(v1), adv=직전 평균 거래대금(v2)")
     a = ap.parse_args()
-    run(a.date_from)
+    run(a.date_from, a.mass)

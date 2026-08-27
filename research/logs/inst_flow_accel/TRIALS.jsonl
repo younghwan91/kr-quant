@@ -4,3 +4,8 @@
 {"config": {"adv_floor": 5000.0, "hold": 21, "step": 21, "stop": 0.08, "topq": 0.05, "win": 40}, "fingerprint": "a2319e16e67b78db"}
 {"config": {"adv_floor": 5000.0, "hold": 21, "step": 21, "stop": 0.08, "topq": 0.1, "win": 40}, "fingerprint": "0c5bedd276a7fcb5"}
 {"config": {"adv_floor": 5000.0, "hold": 21, "lag": 20, "step": 21, "stop": 0.08, "topq": 0.1, "win": 20}, "fingerprint": "0fdbc3da42bfb9a9"}
+{"config": {"adv_floor": 5000.0, "hold": 21, "mass": "adv", "step": 21, "stop": 0.08, "topq": 0.1, "win": 10}, "fingerprint": "536fa1c241ef7548"}
+{"config": {"adv_floor": 5000.0, "hold": 21, "mass": "adv", "step": 21, "stop": 0.08, "topq": 0.1, "win": 40}, "fingerprint": "d64838f775bd2686"}
+{"config": {"adv_floor": 5000.0, "hold": 21, "mass": "adv", "step": 21, "stop": 0.08, "topq": 0.05, "win": 20}, "fingerprint": "19946a96c144ad32"}
+{"config": {"adv_floor": 5000.0, "hold": 21, "mass": "adv", "step": 21, "stop": 0.05, "topq": 0.1, "win": 20}, "fingerprint": "a63a0d2be5f69829"}
+{"config": {"adv_floor": 5000.0, "hold": 21, "lag": 20, "mass": "adv", "step": 21, "stop": 0.08, "topq": 0.1, "win": 20}, "fingerprint": "d2d91a5a7cb7c6e5"}
