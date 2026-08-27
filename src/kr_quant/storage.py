@@ -574,8 +574,9 @@ def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
         )
 
 
-#: 과거 주식수 백필이 끝나도 남는 몫 — DART 에 해당 연도 보고서가 아예 없는 종목.
-SHARES_RESIDUAL_OK = 80
+#: 백필 완료 후 허용 잔여. 상류가 영구 결측 종목에 ``backfill_markers`` 를 찍어주므로
+#: 완료 상태의 기대값은 0 이다. 마커가 없는 구버전 DB 를 위해 여유만 둔다.
+SHARES_RESIDUAL_OK = 10
 
 
 def shares_backfill_pending(con: Any) -> int:
@@ -592,7 +593,18 @@ def shares_backfill_pending(con: Any) -> int:
     Returns: 미처리 종목 수. :data:`SHARES_RESIDUAL_OK` 이하면 정상 종료로 본다.
     """
     cur = con.cursor()
-    cur.execute("""
+    # 상류(quant-airflow)가 "재조회해도 안 나오는" 종목에 backfill_markers 를 찍는다.
+    # 그걸 빼야 **"아직 안 한 일" 과 "영구히 못 할 일" 이 구분된다** — 안 빼면 완료
+    # 상태에서도 잔여가 남아 게이트가 영원히 중단된다(실측 106건).
+    has_marker = False
+    try:
+        cur.execute("SELECT to_regclass('backfill_markers')")
+        has_marker = cur.fetchone()[0] is not None
+    except Exception:  # noqa: BLE001 — 구버전 DB·sqlite 는 마커 테이블이 없다
+        con.rollback() if hasattr(con, "rollback") else None
+    marker = ("AND NOT EXISTS (SELECT 1 FROM backfill_markers k WHERE k.code = b.code)"
+              if has_marker else "")
+    cur.execute(f"""
         SELECT count(*) FROM (
           SELECT b.code FROM daily_bars b
           WHERE b.source <> 'naver'
@@ -601,6 +613,7 @@ def shares_backfill_pending(con: Any) -> int:
           HAVING NOT EXISTS (
             SELECT 1 FROM shares_outstanding_history s
             WHERE s.code = b.code AND s.date < '2026-01-01')
+          {marker}
         ) t""")  # noqa: S608 — 리터럴 상수만, 사용자 입력 없음
     return int(cur.fetchone()[0])
 
