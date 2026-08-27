@@ -1,4 +1,4 @@
-<title>국장 자금 흐름</title>
+<title>섹터 자금 흐름 추적</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
@@ -8,9 +8,9 @@
   --ground:#fbfbfc; --card:#ffffff; --sunk:#f4f5f8;
   --ink:#14161a; --ink-2:#5a6070; --ink-3:#8b91a1;
   --line:#e4e7ee; --line-2:#eef0f5;
-  --buy:#e34948;  --sell:#2a78d6;  --zero:#f0efec;
+  --buy:#e34948; --sell:#2a78d6;
   --buy-soft:#fdeceb; --sell-soft:#e9f1fc;
-  --focus:#2a78d6;
+  --ctx:#c9cdd8; --focus:#2a78d6;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
@@ -18,9 +18,9 @@
     --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
     --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
     --line:#2a2f38; --line-2:#232830;
-    --buy:#e66767; --sell:#3987e5; --zero:#383835;
+    --buy:#e66767; --sell:#3987e5;
     --buy-soft:#332223; --sell-soft:#1b2634;
-    --focus:#3987e5;
+    --ctx:#3a404c; --focus:#3987e5;
   }
 }
 :root[data-theme="dark"]{
@@ -28,366 +28,453 @@
   --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
   --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
   --line:#2a2f38; --line-2:#232830;
-  --buy:#e66767; --sell:#3987e5; --zero:#383835;
+  --buy:#e66767; --sell:#3987e5;
   --buy-soft:#332223; --sell-soft:#1b2634;
-  --focus:#3987e5;
+  --ctx:#3a404c; --focus:#3987e5;
 }
 *{box-sizing:border-box}
-body{
-  margin:0; background:var(--ground); color:var(--ink);
+body{margin:0; background:var(--ground); color:var(--ink);
   font-family:"IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
-}
-.wrap{max-width:1180px; margin:0 auto; padding:28px 20px 64px; display:flex; flex-direction:column; gap:22px}
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased}
+.wrap{max-width:1280px; margin:0 auto; padding:26px 18px 64px; display:flex; flex-direction:column; gap:18px}
 .num{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums}
-.figure{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}  /* 큰 단독 수치 — 등폭 숫자 금지 */
-
-/* ---- header ---- */
-header{display:flex; flex-direction:column; gap:10px}
-.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
-h1{margin:0; font-size:clamp(26px,4vw,36px); font-weight:700; letter-spacing:-.02em; text-wrap:balance}
-.subline{display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:var(--ink-2); font-size:13.5px}
-.chip{
-  display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
-  font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--sunk); color:var(--ink-2);
-}
-.chip.live{border-color:var(--buy); color:var(--buy); background:var(--buy-soft)}
-.chip .dot{width:6px; height:6px; border-radius:50%; background:currentColor}
-
-/* ---- stat tiles ---- */
-.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:10px}
-.tile{
-  background:var(--card); border:1px solid var(--line); border-radius:10px;
-  padding:14px 16px; display:flex; flex-direction:column; gap:5px; position:relative; overflow:hidden;
-}
-.tile::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--line)}
-.tile.pos::before{background:var(--buy)} .tile.neg::before{background:var(--sell)}
-.tile .k{font-size:12px; color:var(--ink-2); font-weight:500}
-.tile .v{font-size:23px; font-weight:600; letter-spacing:-.01em}
-.tile .u{font-size:11.5px; color:var(--ink-3)}
+.figure{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
 .pos{color:var(--buy)} .neg{color:var(--sell)}
 
-/* ---- controls ---- */
-.controls{display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between}
-.seg{display:inline-flex; background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:3px; gap:2px}
-.seg button{
-  font:inherit; font-size:13px; font-weight:500; padding:6px 13px; border:0; border-radius:6px;
-  background:transparent; color:var(--ink-2); cursor:pointer;
-}
-.seg button[aria-pressed="true"]{background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08)}
-.seg button:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
-.hint{font-size:12.5px; color:var(--ink-3)}
+header{display:flex; flex-direction:column; gap:8px}
+.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+h1{margin:0; font-size:clamp(25px,3.6vw,34px); font-weight:700; letter-spacing:-.02em; text-wrap:balance}
+.subline{display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:var(--ink-2); font-size:13px}
+.chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+  font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--sunk); color:var(--ink-2)}
+.chip.live{border-color:var(--buy); color:var(--buy); background:var(--buy-soft)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 
-/* ---- diverging chart ---- */
+/* controls — 차트 카드 밖, 한 줄 */
+.bar{display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center;
+  padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:11px}
+.grp{display:flex; align-items:center; gap:8px}
+.grp>.lab{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+.seg{display:inline-flex; background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:3px; gap:2px}
+.seg button{font:inherit; font-size:12.5px; font-weight:500; padding:5px 11px; border:0; border-radius:5px;
+  background:transparent; color:var(--ink-2); cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg button:focus-visible,select:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+select{font:inherit; font-size:12.5px; padding:5px 8px; border-radius:7px; border:1px solid var(--line);
+  background:var(--sunk); color:var(--ink); font-family:"IBM Plex Mono",monospace}
+.rangeinfo{font-size:12.5px; color:var(--ink-3)}
+
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr)); gap:9px}
+.tile{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 15px;
+  display:flex; flex-direction:column; gap:3px; position:relative; overflow:hidden}
+.tile::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--line)}
+.tile.pos::before{background:var(--buy)} .tile.neg::before{background:var(--sell)}
+.tile .k{font-size:11.5px; color:var(--ink-2); font-weight:500}
+.tile .v{font-size:21px; font-weight:600; letter-spacing:-.01em}
+.tile .u{font-size:11px; color:var(--ink-3)}
+
 .panel{background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden}
-.panel h2{margin:0; padding:15px 18px 12px; font-size:14.5px; font-weight:600; border-bottom:1px solid var(--line-2)}
-.panel h2 small{font-weight:400; color:var(--ink-3); font-size:12.5px; margin-left:7px}
-.rows{padding:8px 6px 12px}
-.row{
-  display:grid; grid-template-columns:104px 1fr 94px; align-items:center; gap:10px;
-  padding:3px 12px; border:0; background:none; width:100%; text-align:left;
-  font:inherit; color:inherit; cursor:pointer; border-radius:7px;
-}
+.panel h2{margin:0; padding:14px 17px 11px; font-size:14px; font-weight:600; border-bottom:1px solid var(--line-2);
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:8px}
+.panel h2 small{font-weight:400; color:var(--ink-3); font-size:12px}
+.legend{margin-left:auto; display:flex; gap:12px; align-items:center; font-size:11.5px; color:var(--ink-2); font-weight:400}
+.legend i{display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px}
+
+/* heatmap */
+.hm{overflow-x:auto; padding:10px 14px 14px}
+.hmgrid{display:grid; gap:2px; min-width:660px}
+.hmlab{font-size:11.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  padding-right:8px; display:flex; align-items:center; justify-content:flex-end}
+.hmrow{display:contents}
+.hmc{height:19px; border-radius:2px; cursor:pointer; background:var(--sunk)}
+.hmc:hover{outline:2px solid var(--ink); outline-offset:-1px}
+.hmax{font-size:10px; color:var(--ink-3); text-align:center; white-space:nowrap; padding-top:4px}
+.hmsel{outline:2px solid var(--ink); outline-offset:-1px}
+
+/* line */
+.chart{padding:6px 14px 12px}
+svg{display:block; width:100%; height:auto; overflow:visible}
+.gl{stroke:var(--line-2); stroke-width:1}
+.zl{stroke:var(--line); stroke-width:1}
+.ctxln{fill:none; stroke:var(--ctx); stroke-width:1; opacity:.55}
+.mainln{fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round}
+.tk{font-size:10px; fill:var(--ink-3)}
+.endlab{font-size:11.5px; font-weight:600}
+
+/* ranking rows */
+.rows{padding:7px 6px 11px; max-height:520px; overflow-y:auto}
+.row{display:grid; grid-template-columns:112px 1fr 92px; align-items:center; gap:9px;
+  padding:3px 11px; border:0; background:none; width:100%; text-align:left; font:inherit; color:inherit;
+  cursor:pointer; border-radius:6px}
 .row:hover,.row:focus-visible{background:var(--sunk); outline:none}
 .row[aria-current="true"]{background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line)}
-.row .name{font-size:13px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.row .name{font-size:12.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .row[aria-current="true"] .name{color:var(--ink); font-weight:600}
-.track{position:relative; height:22px}
-.axis{position:absolute; top:-4px; bottom:-4px; width:1px; background:var(--line); left:50%}
-.bar{position:absolute; top:4px; height:14px; border-radius:3px}
-.bar.p{background:var(--buy); border-radius:0 4px 4px 0}
-.bar.n{background:var(--sell); border-radius:4px 0 0 4px}
-.row .val{font-size:12.5px; text-align:right; font-weight:500}
-.ret{font-size:11px; color:var(--ink-3); margin-left:5px}
-.row .val .ret{color:var(--ink-3)}  /* 막대 색과 경쟁시키지 않는다 */
+.track{position:relative; height:20px}
+.axis{position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--line); left:50%}
+.bb{position:absolute; top:4px; height:12px}
+.bb.p{background:var(--buy); border-radius:0 4px 4px 0}
+.bb.n{background:var(--sell); border-radius:4px 0 0 4px}
+.row .val{font-size:12px; text-align:right; font-weight:500}
+.row .val .sub{font-size:10.5px; color:var(--ink-3); margin-left:5px}
 
-/* ---- detail ---- */
-.two{display:grid; grid-template-columns:1fr 1fr; gap:16px}
-@media (max-width:860px){ .two{grid-template-columns:1fr} .row{grid-template-columns:84px 1fr 84px} }
-.lst{padding:6px 8px 12px; display:flex; flex-direction:column}
-.lst .li{display:grid; grid-template-columns:1fr auto auto; gap:9px; align-items:center; padding:6px 11px; border-radius:6px}
-.lst .li:hover{background:var(--sunk)}
-.lst .nm{font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.lst .nm span{color:var(--ink-3); font-size:11px; margin-left:5px}
-.lst .amt{font-size:12.5px; font-weight:500; text-align:right; min-width:74px}
-.lst .rt{font-size:11.5px; text-align:right; min-width:52px; color:var(--ink-2)}
-.det-bars{display:flex; flex-direction:column; gap:7px; padding:12px 16px 16px}
-.db{display:grid; grid-template-columns:52px 1fr 72px; gap:9px; align-items:center; font-size:12.5px}
-.db .dbn{color:var(--ink-2)}
-.db .dbt{position:relative; height:12px; background:var(--sunk); border-radius:3px}
-.db .dbb{position:absolute; top:0; height:12px; border-radius:3px}
+.two{display:grid; grid-template-columns:1fr 1fr; gap:15px}
+@media (max-width:900px){.two{grid-template-columns:1fr} .row{grid-template-columns:90px 1fr 80px}}
+.lst{padding:6px 8px 11px}
+.li{display:grid; grid-template-columns:1fr auto auto; gap:9px; align-items:center; padding:5px 11px; border-radius:6px}
+.li:hover{background:var(--sunk)}
+.nm{font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.nm span{color:var(--ink-3); font-size:10.5px; margin-left:5px}
+.amt{font-size:12px; font-weight:500; text-align:right; min-width:72px}
+.rt{font-size:11px; text-align:right; min-width:46px; color:var(--ink-3)}
+.det-bars{display:flex; flex-direction:column; gap:6px; padding:11px 15px 15px}
+.db{display:grid; grid-template-columns:48px 1fr 70px; gap:9px; align-items:center; font-size:12px}
+.db .dbt{position:relative; height:11px; background:var(--sunk); border-radius:3px}
+.db .dbb{position:absolute; top:0; height:11px; border-radius:3px}
 
-/* ---- table ---- */
-.tblwrap{overflow-x:auto}
-table{border-collapse:collapse; width:100%; font-size:12.5px}
-th,td{padding:7px 12px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line-2)}
+.tblwrap{overflow-x:auto; max-height:460px}
+table{border-collapse:collapse; width:100%; font-size:12px}
+th,td{padding:6px 11px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line-2)}
 th:first-child,td:first-child{text-align:left}
-thead th{
-  position:sticky; top:0; background:var(--card); color:var(--ink-2); font-weight:600;
-  font-size:11px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid var(--line);
-}
+thead th{position:sticky; top:0; background:var(--card); color:var(--ink-2); font-weight:600;
+  font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid var(--line)}
 tbody tr:hover{background:var(--sunk)}
 
-/* ---- tooltip ---- */
-#tip{
-  position:fixed; z-index:50; pointer-events:none; opacity:0; transition:opacity .1s;
-  background:var(--card); border:1px solid var(--line); border-radius:9px;
-  padding:10px 13px; font-size:12.5px; box-shadow:0 8px 26px rgba(0,0,0,.16); min-width:184px;
-}
-#tip .tt{font-weight:600; margin-bottom:6px; font-size:13px}
-#tip .tr{display:flex; justify-content:space-between; gap:20px; line-height:1.75}
-#tip .tk{color:var(--ink-2)}
+#tip{position:fixed; z-index:60; pointer-events:none; opacity:0; transition:opacity .1s;
+  background:var(--card); border:1px solid var(--line); border-radius:9px; padding:9px 12px;
+  font-size:12px; box-shadow:0 8px 26px rgba(0,0,0,.18); min-width:180px}
+#tip .tt{font-weight:600; margin-bottom:5px; font-size:12.5px}
+#tip .tr{display:flex; justify-content:space-between; gap:18px; line-height:1.7}
+#tip .tk2{color:var(--ink-2)}
 
-/* ---- notes ---- */
-.notes{border-left:3px solid var(--line); padding:2px 0 2px 15px; display:flex; flex-direction:column; gap:7px}
-.notes p{margin:0; font-size:12.5px; color:var(--ink-2)}
+.notes{border-left:3px solid var(--line); padding:2px 0 2px 14px; display:flex; flex-direction:column; gap:6px}
+.notes p{margin:0; font-size:12px; color:var(--ink-2)}
 .notes b{color:var(--ink); font-weight:600}
-@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <div class="eyebrow">KR MARKET · SECTOR FLOW</div>
-    <h1>국장 자금 흐름</h1>
+    <div class="eyebrow">KR MARKET · CUMULATIVE SECTOR FLOW</div>
+    <h1>섹터 자금 흐름 추적</h1>
     <div class="subline">
-      <span class="num" id="hdr-date"></span>
+      <span class="num" id="hdr-range"></span>
       <span id="hdr-chip"></span>
-      <span id="hdr-names" class="num"></span>
+      <span class="num" id="hdr-meta"></span>
     </div>
   </header>
 
-  <section class="tiles" id="tiles"></section>
-
-  <div class="controls">
-    <div class="seg" role="group" aria-label="투자주체 선택" id="seg-actor"></div>
-    <div class="seg" role="group" aria-label="정렬 기준" id="seg-sort"></div>
+  <div class="bar">
+    <div class="grp"><span class="lab">기간</span><div class="seg" id="seg-preset" role="group" aria-label="기간 프리셋"></div></div>
+    <div class="grp"><span class="lab">시작</span><select id="sel-from" aria-label="시작일"></select>
+      <span class="lab">종료</span><select id="sel-to" aria-label="종료일"></select></div>
+    <div class="grp"><span class="lab">시장</span><div class="seg" id="seg-market" role="group" aria-label="시장"></div></div>
+    <div class="grp"><span class="lab">주체</span><div class="seg" id="seg-actor" role="group" aria-label="투자주체"></div></div>
+    <div class="grp"><span class="lab">기준</span><div class="seg" id="seg-metric" role="group" aria-label="랭킹 기준"></div></div>
+    <span class="rangeinfo" id="rangeinfo"></span>
   </div>
 
+  <section class="tiles" id="tiles"></section>
+
   <section class="panel">
-    <h2 id="chart-title">섹터별 순매수<small>막대를 누르면 종목이 열립니다 · 단위 억원</small></h2>
+    <h2>언제 어디로 갔나<small>가로축은 시간, 세로축은 섹터 · 칸을 누르면 그 시점부터 다시 잡는다</small>
+      <span class="legend"><span><i style="background:var(--buy)"></i>순매수</span><span><i style="background:var(--sell)"></i>순매도</span></span>
+    </h2>
+    <div class="hm" id="hm"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="ln-title">누적 추이<small>구간 시작을 0 으로 놓고 다시 그린다</small>
+      <span class="legend" id="ln-legend"></span></h2>
+    <div class="chart" id="line"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다</small></h2>
     <div class="rows" id="rows"></div>
   </section>
 
   <div class="two">
-    <section class="panel">
-      <h2 id="d-buy">가장 많이 담은 종목</h2>
-      <div class="lst" id="lst-buy"></div>
-    </section>
-    <section class="panel">
-      <h2 id="d-sell">가장 많이 던진 종목</h2>
-      <div class="lst" id="lst-sell"></div>
-    </section>
+    <section class="panel"><h2 id="d-buy">담은 종목</h2><div class="lst" id="lst-buy"></div></section>
+    <section class="panel"><h2 id="d-sell">던진 종목</h2><div class="lst" id="lst-sell"></div></section>
   </div>
 
-  <section class="panel">
-    <h2 id="d-detail">기관 세부<small>어떤 기관이 샀나 · 단위 억원</small></h2>
-    <div class="det-bars" id="detbars"></div>
-  </section>
+  <section class="panel"><h2 id="d-detail">기관 세부<small>구간 누적 · 억원</small></h2><div class="det-bars" id="detbars"></div></section>
 
-  <section class="panel">
-    <h2>전체 표<small>모든 섹터 · 단위 억원</small></h2>
-    <div class="tblwrap"><table id="tbl"></table></div>
-  </section>
+  <section class="panel"><h2>전체 표<small>구간 누적</small></h2><div class="tblwrap"><table id="tbl"></table></div></section>
 
   <div class="notes">
-    <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 종가를 곱해 금액을 복원했다. 실제 체결은 하루 종일 여러 가격에 일어나므로 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
-    <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채우기 때문에 둘을 DB 만으로는 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
-    <p><b>빨강이 순매수, 파랑이 순매도다</b> — 국내 관행을 따랐다(서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 기관 합계는 세부 7종 합이 아니라 <span class="num">institution</span> 컬럼을 그대로 쓴다(93.6% 만 일치).</p>
-    <p><b>유니버스는 현재 상장 종목이다</b>(<span class="num">source='kiwoom'</span>). 개인·기관세부가 폐지 종목에는 없어서, 소스를 안 좁히면 지표마다 분모가 달라진다. 오늘 하루를 보는 화면이라 이 선택이 맞지만, 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
+    <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 그날 종가를 곱해 금액을 복원했다. 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
+    <p><b>비중 변화는 구간 누적 순매수 ÷ 구간말 시가총액이다.</b> 기관 지분율이 몇 %p 올랐나에 대한 근사이지 실제 보유잔고가 아니다. 시총이 작은 섹터는 분모가 작아 크게 튄다 — 종목 수와 거래대금을 같이 보라.</p>
+    <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채워 둘을 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
+    <p><b>빨강이 순매수, 파랑이 순매도다</b>(국내 관행 · 서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 유니버스는 현재 상장 종목이며(<span class="num">source='kiwoom'</span>), 개인·기관세부가 폐지 종목에 없어 소스를 좁혔다 — 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
   </div>
 </div>
 <div id="tip" role="status" aria-live="polite"></div>
 
 <script>
-const DATA = __DATA__;
-const ACTORS = [
-  {k:"inst_eok",    label:"기관",     tot:"total_inst_eok"},
-  {k:"foreign_eok", label:"외국인",   tot:"total_foreign_eok"},
-  {k:"indiv_eok",   label:"개인",     tot:"total_indiv_eok"},
-  {k:"etc_eok",     label:"기타법인", tot:"total_etc_eok"},
-];
-const SORTS = [{k:"flow",label:"순매수순"},{k:"turnover",label:"거래대금순"},{k:"ret",label:"등락순"}];
-const DETAIL = [["fnnc_invt_eok","금투"],["insrnc_eok","보험"],["invtrt_eok","투신"],
-                ["bank_eok","은행"],["penfnd_etc_eok","연기금"],["samo_fund_eok","사모"]];
+const D = __DATA__;
+const ACTORS=[["inst","기관"],["forgn","외국인"],["indiv","개인"],["etc","기타법인"]];
+const PRESETS=[[1,"1일"],[5,"5일"],[20,"20일"],[60,"60일"],[120,"120일"],[0,"전체"]];
+const METRICS=[["amt","금액"],["share","비중 %p"]];
+const NDATE=D.dates.length;
 
-let actor = "inst_eok", sortBy = "flow", picked = null;
+let market="전체", actor="inst", metric="share", picked=null;
+let i0=Math.max(0,NDATE-20), i1=NDATE-1;
 
-const eok = n => (n>=0?"+":"−") + Math.abs(n).toLocaleString("ko-KR",{maximumFractionDigits:0});
-const pct = n => (n>=0?"+":"−") + Math.abs(n).toFixed(2) + "%";
-const cls = n => n>=0 ? "pos" : "neg";
-const el  = (t,c,x) => { const e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; };
+const el=(t,c,x)=>{const e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;};
+const cls=n=>n>=0?"pos":"neg";
+const sgn=n=>(n>=0?"+":"−");
+const amt=n=>sgn(n)+Math.abs(n).toLocaleString("ko-KR",{maximumFractionDigits:0});
+const pp =n=>sgn(n)+Math.abs(n).toFixed(2);
+const mkts=()=>market==="전체"?D.markets:[market];
 
-/* header */
-document.getElementById("hdr-date").textContent = DATA.date;
-document.getElementById("hdr-names").textContent = DATA.n_names.toLocaleString("ko-KR") + "종목 · 거래대금 " + Math.round(DATA.total_turnover_eok).toLocaleString("ko-KR") + "억";
-const chip = el("span", DATA.finalized ? "chip" : "chip live");
-chip.append(el("span","dot"), document.createTextNode(DATA.finalized ? "확정" : "장중 · 미확정"));
-chip.title = DATA.finalized ? "16:50 KST 이후 전 종목 재수집이 끝난 확정 데이터" : "16:50 KST 이전이라 부분 데이터일 수 있다";
-document.getElementById("hdr-chip").append(chip);
-
-/* tiles */
-const tiles = document.getElementById("tiles");
-tiles.append(tile("거래대금", Math.round(DATA.total_turnover_eok).toLocaleString("ko-KR"), "억원", null));
-ACTORS.forEach(a => tiles.append(tile(a.label, eok(DATA[a.tot]), "억원 순매수", DATA[a.tot])));
-function tile(k, v, u, sign){
-  const d = el("div","tile" + (sign==null?"":(sign>=0?" pos":" neg")));
-  d.append(el("div","k",k));
-  const val = el("div","v figure",v); if(sign!=null) val.classList.add(cls(sign));
-  d.append(val, el("div","u",u));
-  return d;
+function flow(sec,act){ // 일별 배열 합(시장 합산)
+  const out=new Array(NDATE).fill(0);
+  mkts().forEach(m=>{const a=D.flows[m]?.[sec]?.[act]; if(a) for(let i=0;i<NDATE;i++) out[i]+=a[i];});
+  return out;
 }
+function capOf(sec){ let c=0; mkts().forEach(m=>c+=(D.cap[m]?.[sec]||0)); return c; }
+function sum(arr,a,b){ let s=0; for(let i=a;i<=b;i++) s+=arr[i]; return s; }
+function windowVal(sec,act){ const t=sum(flow(sec,act),i0,i1);
+  if(metric==="amt") return t; const c=capOf(sec); return c?t/c*100:0; }
+function unit(){ return metric==="amt"?"억":"%p"; }
+function fmt(v){ return metric==="amt"?amt(v):pp(v); }
 
-/* segmented controls */
-build("seg-actor", ACTORS.map(a=>[a.k,a.label]), () => actor, v => { actor=v; render(); });
-build("seg-sort",  SORTS.map(s=>[s.k,s.label]),  () => sortBy, v => { sortBy=v; render(); });
-function build(id, opts, get, set){
-  const box = document.getElementById(id);
-  opts.forEach(([k,label]) => {
-    const b = el("button",null,label);
-    b.dataset.k = k;
-    b.addEventListener("click", () => set(k));
-    box.append(b);
+/* ---------- controls ---------- */
+function seg(id,opts,get,set){
+  const box=document.getElementById(id);
+  opts.forEach(([k,label])=>{const b=el("button",null,label); b.type="button"; b.dataset.k=String(k);
+    b.addEventListener("click",()=>set(k)); box.append(b);});
+  box._sync=()=>[...box.children].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.k===String(get()))));
+}
+seg("seg-market",[["전체","전체"],...D.markets.map(m=>[m,m])],()=>market,v=>{market=v;render();});
+seg("seg-actor",ACTORS,()=>actor,v=>{actor=v;render();});
+seg("seg-metric",METRICS,()=>metric,v=>{metric=v;render();});
+seg("seg-preset",PRESETS,()=>curPreset(),v=>{
+  i1=NDATE-1; i0=v===0?0:Math.max(0,NDATE-v); render();});
+function curPreset(){ if(i1!==NDATE-1) return -1;
+  const n=i1-i0+1; if(i0===0) return 0;
+  return PRESETS.some(([v])=>v===n)?n:-1; }
+
+const selFrom=document.getElementById("sel-from"), selTo=document.getElementById("sel-to");
+D.dates.forEach((d,i)=>{selFrom.append(new Option(d,i)); selTo.append(new Option(d,i));});
+selFrom.addEventListener("change",()=>{i0=Math.min(+selFrom.value,i1); render();});
+selTo.addEventListener("change",()=>{i1=Math.max(+selTo.value,i0); render();});
+
+/* ---------- tooltip ---------- */
+const tip=document.getElementById("tip");
+function tipShow(e,title,rows){
+  tip.replaceChildren(el("div","tt",title));
+  rows.forEach(([k,v,c])=>{const r=el("div","tr"); r.append(el("span","tk2",k));
+    r.append(el("span","num "+(c||""),v)); tip.append(r);});
+  tip.style.opacity=1; tipMove(e);
+}
+function tipMove(e){const p=13,w=tip.offsetWidth,h=tip.offsetHeight;
+  let x=e.clientX+p,y=e.clientY+p;
+  if(x+w>innerWidth-8)x=e.clientX-w-p; if(y+h>innerHeight-8)y=e.clientY-h-p;
+  tip.style.left=x+"px"; tip.style.top=y+"px";}
+const tipHide=()=>tip.style.opacity=0;
+
+/* ---------- heatmap ---------- */
+const NB=26; // 시간 버킷 수
+function buckets(){
+  const n=i1-i0+1, k=Math.min(NB,n), size=n/k, out=[];
+  for(let b=0;b<k;b++){ const a=i0+Math.floor(b*size), z=i0+Math.ceil((b+1)*size)-1;
+    out.push([a,Math.min(z,i1)]); }
+  return out;
+}
+function renderHeat(order){
+  const box=document.getElementById("hm"); box.replaceChildren();
+  const bk=buckets();
+  const grid=el("div","hmgrid");
+  grid.style.gridTemplateColumns=`120px repeat(${bk.length},minmax(14px,1fr))`;
+  const vals=new Map(); let mx=0;
+  order.forEach(s=>{const f=flow(s,actor); const c=capOf(s);
+    const row=bk.map(([a,z])=>{const t=sum(f,a,z); return metric==="amt"?t:(c?t/c*100:0);});
+    vals.set(s,row); row.forEach(v=>mx=Math.max(mx,Math.abs(v)));});
+  mx=mx||1;
+  order.forEach(s=>{
+    const lab=el("div","hmlab",s); grid.append(lab);
+    vals.get(s).forEach((v,bi)=>{
+      const c=el("div","hmc"+(picked===s?" hmsel":""));
+      const a=Math.min(1,Math.sqrt(Math.abs(v)/mx))*0.92+0.04;
+      if(Math.abs(v)>1e-9) c.style.background=`color-mix(in srgb, var(${v>=0?"--buy":"--sell"}) ${a*100}%, transparent)`;
+      const [ba,bz]=bk[bi];
+      c.tabIndex=0;
+      c.addEventListener("mouseenter",e=>tipShow(e,s,[
+        ["구간",D.dates[ba]+" ~ "+D.dates[bz]],
+        [ACTORS.find(x=>x[0]===actor)[1],fmt(v)+unit(),cls(v)]]));
+      c.addEventListener("mousemove",tipMove);
+      c.addEventListener("mouseleave",tipHide);
+      c.addEventListener("click",()=>{picked=s; i0=ba; render();});
+      grid.append(c);
+    });
   });
-  box._sync = () => [...box.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.k===get())));
+  grid.append(el("div","hmax",""));
+  bk.forEach(([a],bi)=>{const t=el("div","hmax", bi%4===0?D.dates[a].slice(2,7):""); grid.append(t);});
+  box.append(grid);
 }
 
-/* tooltip */
-const tip = document.getElementById("tip");
-function showTip(e, s){
-  tip.replaceChildren();
-  tip.append(el("div","tt", s.sector || "(미분류)"));
-  ACTORS.forEach(a => {
-    const r = el("div","tr");
-    r.append(el("span","tk",a.label));
-    const v = el("span","num "+cls(s[a.k]), eok(s[a.k])+"억"); r.append(v); tip.append(r);
+/* ---------- cumulative line ---------- */
+function renderLine(order){
+  const box=document.getElementById("line"); box.replaceChildren();
+  const W=1000,H=290,L=54,R=118,T=12,B=26;
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("role","img");
+  const focus=picked||order[0];
+  const series=order.map(s=>{
+    const f=flow(s,actor), c=capOf(s); let acc=0; const pts=[];
+    for(let i=i0;i<=i1;i++){acc+=f[i]; pts.push(metric==="amt"?acc:(c?acc/c*100:0));}
+    return {s,pts};
   });
-  const r2 = el("div","tr");
-  r2.append(el("span","tk","등락(거래대금가중)"), el("span","num "+cls(s.ret_pct), pct(s.ret_pct)));
-  tip.append(r2);
-  const r3 = el("div","tr");
-  r3.append(el("span","tk","거래대금"), el("span","num", Math.round(s.turnover_eok).toLocaleString("ko-KR")+"억"));
-  tip.append(r3);
-  tip.style.opacity = 1;
-  moveTip(e);
+  let lo=0,hi=0; series.forEach(o=>o.pts.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));
+  if(hi===lo){hi=1;lo=-1;}
+  const pad=(hi-lo)*0.08; hi+=pad; lo-=pad;
+  const n=i1-i0+1;
+  const X=i=>L+(n<2?0:(i/(n-1))*(W-L-R));
+  const Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+  const mk=(t,at)=>{const e=document.createElementNS("http://www.w3.org/2000/svg",t);
+    for(const k in at)e.setAttribute(k,at[k]); return e;};
+  for(let g=0;g<=4;g++){const v=lo+(hi-lo)*g/4;
+    svg.append(mk("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),class:g===0?"gl":"gl"}));
+    const tx=mk("text",{x:L-8,y:Y(v)+3,class:"tk","text-anchor":"end"}); tx.textContent=fmt(v); svg.append(tx);}
+  svg.append(mk("line",{x1:L,x2:W-R,y1:Y(0),y2:Y(0),class:"zl"}));
+  const path=o=>o.pts.map((v,i)=>(i?"L":"M")+X(i).toFixed(1)+" "+Y(v).toFixed(1)).join(" ");
+  series.filter(o=>o.s!==focus).forEach(o=>svg.append(mk("path",{d:path(o),class:"ctxln"})));
+  const f=series.find(o=>o.s===focus);
+  if(f){
+    const last=f.pts[f.pts.length-1], col=last>=0?"var(--buy)":"var(--sell)";
+    svg.append(mk("path",{d:path(f),class:"mainln",stroke:col}));
+    svg.append(mk("circle",{cx:X(n-1),cy:Y(last),r:4,fill:col}));
+    const lb=mk("text",{x:X(n-1)+9,y:Y(last)+4,class:"endlab",fill:col}); lb.textContent=focus+" "+fmt(last)+unit();
+    svg.append(lb);
+  }
+  [0,Math.floor((n-1)/2),n-1].forEach(i=>{const t=mk("text",{x:X(i),y:H-6,class:"tk","text-anchor":"middle"});
+    t.textContent=D.dates[i0+i]; svg.append(t);});
+  box.append(svg);
+  document.getElementById("ln-legend").replaceChildren(
+    el("span",null,(focus||"")+" 강조 · 나머지 "+(order.length-1)+"개 섹터는 회색"));
 }
-function moveTip(e){
-  const pad=14, w=tip.offsetWidth, h=tip.offsetHeight;
-  let x=e.clientX+pad, y=e.clientY+pad;
-  if(x+w>innerWidth-8) x=e.clientX-w-pad;
-  if(y+h>innerHeight-8) y=e.clientY-h-pad;
-  tip.style.left=x+"px"; tip.style.top=y+"px";
-}
-const hideTip = () => tip.style.opacity = 0;
 
-/* main render */
-function sorted(){
-  const s = [...DATA.sectors];
-  if(sortBy==="flow")     s.sort((a,b)=>b[actor]-a[actor]);
-  if(sortBy==="turnover") s.sort((a,b)=>b.turnover_eok-a.turnover_eok);
-  if(sortBy==="ret")      s.sort((a,b)=>b.ret_pct-a.ret_pct);
-  return s;
-}
+/* ---------- ranking ---------- */
 function render(){
-  document.getElementById("seg-actor")._sync();
-  document.getElementById("seg-sort")._sync();
-  const label = ACTORS.find(a=>a.k===actor).label;
-  document.getElementById("chart-title").firstChild.textContent = "섹터별 " + label + " 순매수";
+  ["seg-market","seg-actor","seg-metric","seg-preset"].forEach(id=>document.getElementById(id)._sync());
+  selFrom.value=String(i0); selTo.value=String(i1);
+  const label=ACTORS.find(a=>a[0]===actor)[1];
+  document.getElementById("hdr-range").textContent=D.dates[i0]+" ~ "+D.dates[i1];
+  document.getElementById("hdr-meta").textContent=(i1-i0+1)+"거래일 · "+D.n_names.toLocaleString("ko-KR")+"종목";
+  document.getElementById("rk-title").firstChild.textContent=
+    "구간 누적 "+label+" 순매수 — "+(metric==="amt"?"금액순":"비중 상승순");
+  document.getElementById("ln-title").firstChild.textContent=label+" 누적 추이";
 
-  const list = sorted();
-  const max = Math.max(...DATA.sectors.map(s=>Math.abs(s[actor])), 1);
-  const rows = document.getElementById("rows");
-  rows.replaceChildren();
+  const order=[...D.sectors].sort((a,b)=>windowVal(b,actor)-windowVal(a,actor));
+  if(!picked||!D.sectors.includes(picked)) picked=order[0];
 
-  list.forEach(s => {
-    const b = el("button","row");
-    b.type="button";
-    b.setAttribute("aria-current", String(picked===s.sector));
-    b.append(el("div","name", s.sector || "(미분류)"));
+  renderTiles();
+  renderHeat(order);
+  renderLine(order);
 
-    const track = el("div","track");
-    track.append(el("div","axis"));
-    const v = s[actor], w = Math.abs(v)/max*50;
-    const bar = el("div","bar "+(v>=0?"p":"n"));
-    if(v>=0){ bar.style.left="50%"; } else { bar.style.right="50%"; }
-    bar.style.width = Math.max(w,0.35)+"%";
-    track.append(bar);
-    b.append(track);
-
-    const val = el("div","val");
-    val.append(el("span","num "+cls(v), eok(v)));
-    val.append(el("span","ret", pct(s.ret_pct)));
+  const mx=Math.max(...order.map(s=>Math.abs(windowVal(s,actor))),1e-9);
+  const rows=document.getElementById("rows"); rows.replaceChildren();
+  order.forEach(s=>{
+    const v=windowVal(s,actor), other=metric==="amt"?(capOf(s)?sum(flow(s,actor),i0,i1)/capOf(s)*100:0)
+                                                   :sum(flow(s,actor),i0,i1);
+    const b=el("button","row"); b.type="button"; b.setAttribute("aria-current",String(picked===s));
+    b.append(el("div","name",s));
+    const tr=el("div","track"); tr.append(el("div","axis"));
+    const bb=el("div","bb "+(v>=0?"p":"n"));
+    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
+    bb.style.width=Math.max(Math.abs(v)/mx*50,0.3)+"%"; tr.append(bb); b.append(tr);
+    const val=el("div","val");
+    val.append(el("span","num "+cls(v),fmt(v)));
+    val.append(el("span","sub num",metric==="amt"?pp(other)+"%p":amt(other)+"억"));
     b.append(val);
-
-    b.addEventListener("mouseenter", e=>showTip(e,s));
-    b.addEventListener("mousemove", moveTip);
-    b.addEventListener("mouseleave", hideTip);
-    b.addEventListener("focus", e=>showTip({clientX:innerWidth/2, clientY:120}, s));
-    b.addEventListener("blur", hideTip);
-    b.addEventListener("click", ()=>{ picked = picked===s.sector ? null : s.sector; render(); });
+    b.addEventListener("mouseenter",e=>tipShow(e,s,[
+      ["기간",D.dates[i0]+" ~ "+D.dates[i1]],
+      ...ACTORS.map(([k,ko])=>{const t=sum(flow(s,k),i0,i1); return [ko,amt(t)+"억",cls(t)];}),
+      ["거래대금",amt(sum(flow(s,"tv"),i0,i1)).replace("+","")+"억"],
+      ["시가총액",amt(capOf(s)).replace("+","")+"억"]]));
+    b.addEventListener("mousemove",tipMove); b.addEventListener("mouseleave",tipHide);
+    b.addEventListener("click",()=>{picked=s; render();});
     rows.append(b);
   });
-
-  renderDetail(list);
-  renderTable(list);
+  renderNames(); renderDetail(); renderTable(order);
 }
 
-function renderDetail(list){
-  const s = DATA.sectors.find(x=>x.sector===picked) || list[0];
-  const nm = s.sector || "(미분류)";
-  document.getElementById("d-buy").firstChild.textContent  = nm + " — 기관이 담은 종목";
-  document.getElementById("d-sell").firstChild.textContent = nm + " — 기관이 던진 종목";
-  document.getElementById("d-detail").firstChild.textContent = nm + " — 기관 세부 ";
-
-  fill("lst-buy",  s.top.buys);
-  fill("lst-sell", [...s.top.sells].reverse());
-  function fill(id, arr){
-    const box = document.getElementById(id); box.replaceChildren();
-    arr.forEach(t => {
-      const li = el("div","li");
-      const nmv = el("div","nm", t.name);
-      nmv.append(el("span",null,t.code));
-      li.append(nmv);
-      li.append(el("div","amt num "+cls(t.inst_eok), eok(t.inst_eok)));
-      li.append(el("div","rt num "+cls(t.ret_pct), pct(t.ret_pct)));
-      box.append(li);
-    });
+function renderTiles(){
+  const box=document.getElementById("tiles"); box.replaceChildren();
+  let tv=0; D.sectors.forEach(s=>tv+=sum(flow(s,"tv"),i0,i1));
+  box.append(tile("구간 거래대금",amt(tv).replace("+",""),"억원",null));
+  ACTORS.forEach(([k,ko])=>{let t=0; D.sectors.forEach(s=>t+=sum(flow(s,k),i0,i1));
+    box.append(tile(ko,amt(t),"억원 누적 순매수",t));});
+  function tile(k,v,u,sign){
+    const d=el("div","tile"+(sign==null?"":(sign>=0?" pos":" neg")));
+    d.append(el("div","k",k));
+    const val=el("div","v figure",v); if(sign!=null) val.classList.add(cls(sign));
+    d.append(val,el("div","u",u)); return d;
   }
-
-  const box = document.getElementById("detbars"); box.replaceChildren();
-  const dmax = Math.max(...DETAIL.map(([k])=>Math.abs(s[k]||0)), 1);
-  DETAIL.forEach(([k,label]) => {
-    const v = s[k]||0;
-    const d = el("div","db");
-    d.append(el("div","dbn",label));
-    const t = el("div","dbt");
-    const bb = el("div","dbb");
-    bb.style.background = v>=0 ? "var(--buy)" : "var(--sell)";
-    bb.style.width = Math.abs(v)/dmax*50+"%";
-    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
-    t.append(bb); d.append(t);
-    d.append(el("div","num "+cls(v), eok(v)));
-    box.append(d);
-  });
 }
 
-function renderTable(list){
-  const t = document.getElementById("tbl"); t.replaceChildren();
-  const head = ["섹터","종목","거래대금","기관","외국인","개인","기타법인","등락"];
-  const thead = el("thead"), tr = el("tr");
-  head.forEach(h=>tr.append(el("th",null,h)));
+function renderNames(){
+  const label=ACTORS.find(a=>a[0]===actor)[1];
+  document.getElementById("d-buy").firstChild.textContent=picked+" — "+label+"이 담은 종목";
+  document.getElementById("d-sell").firstChild.textContent=picked+" — "+label+"이 던진 종목";
+  const rows=[];
+  for(const code in D.names){const r=D.names[code];
+    if(r.sector!==picked) continue;
+    if(market!=="전체"&&r.market!==market) continue;
+    rows.push({code,name:r.name,v:sum(r[actor],i0,i1),tv:sum(r.tv,i0,i1)});}
+  rows.sort((a,b)=>b.v-a.v);
+  fill("lst-buy",rows.slice(0,6));
+  fill("lst-sell",rows.slice(-6).reverse());
+  function fill(id,arr){
+    const box=document.getElementById(id); box.replaceChildren();
+    if(!arr.length){const p=el("div","li"); p.append(el("div","nm","거래대금 상위 "+Object.keys(D.names).length+"종목 안에 이 섹터 종목이 없다"));
+      box.append(p); return;}
+    arr.forEach(t=>{const li=el("div","li");
+      const nm=el("div","nm",t.name); nm.append(el("span",null,t.code)); li.append(nm);
+      li.append(el("div","amt num "+cls(t.v),amt(t.v)));
+      li.append(el("div","rt num",amt(t.tv).replace("+","")));
+      box.append(li);});
+  }
+}
+
+function renderDetail(){
+  document.getElementById("d-detail").firstChild.textContent=picked+" — 기관 세부 ";
+  const box=document.getElementById("detbars"); box.replaceChildren();
+  const keys=Object.keys(D.detail_labels);
+  const vals=keys.map(k=>{let t=0; mkts().forEach(m=>{const a=D.detail[m]?.[picked]?.[k]; if(a) t+=sum(a,i0,i1);}); return t;});
+  const mx=Math.max(...vals.map(Math.abs),1e-9);
+  keys.forEach((k,idx)=>{const v=vals[idx]; const d=el("div","db");
+    d.append(el("div","dbn",D.detail_labels[k]));
+    const t=el("div","dbt"), bb=el("div","dbb");
+    bb.style.background=v>=0?"var(--buy)":"var(--sell)";
+    bb.style.width=Math.abs(v)/mx*50+"%";
+    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
+    t.append(bb); d.append(t); d.append(el("div","num "+cls(v),amt(v))); box.append(d);});
+}
+
+function renderTable(order){
+  const t=document.getElementById("tbl"); t.replaceChildren();
+  const thead=el("thead"),tr=el("tr");
+  ["섹터","기관","외국인","개인","기타법인","기관 비중%p","거래대금","시가총액"].forEach(h=>tr.append(el("th",null,h)));
   thead.append(tr); t.append(thead);
-  const tb = el("tbody");
-  list.forEach(s => {
-    const r = el("tr");
-    r.append(el("td",null,s.sector||"(미분류)"));
-    r.append(el("td","num",s.n));
-    r.append(el("td","num",Math.round(s.turnover_eok).toLocaleString("ko-KR")));
-    ["inst_eok","foreign_eok","indiv_eok","etc_eok"].forEach(k=>r.append(el("td","num "+cls(s[k]),eok(s[k]))));
-    r.append(el("td","num "+cls(s.ret_pct),pct(s.ret_pct)));
-    tb.append(r);
-  });
+  const tb=el("tbody");
+  order.forEach(s=>{const r=el("tr"); r.append(el("td",null,s));
+    ACTORS.forEach(([k])=>{const v=sum(flow(s,k),i0,i1); r.append(el("td","num "+cls(v),amt(v)));});
+    const c=capOf(s), iv=sum(flow(s,"inst"),i0,i1), sh=c?iv/c*100:0;
+    r.append(el("td","num "+cls(sh),pp(sh)));
+    r.append(el("td","num",amt(sum(flow(s,"tv"),i0,i1)).replace("+","")));
+    r.append(el("td","num",amt(c).replace("+","")));
+    tb.append(r);});
   t.append(tb);
 }
+
+const chip=el("span",D.finalized?"chip":"chip live");
+chip.append(el("span","dot"),document.createTextNode(D.finalized?"확정":"장중 · 미확정"));
+chip.title=D.finalized?"16:50 KST 이후 전 종목 재수집이 끝난 확정 데이터":"16:50 KST 이전이라 부분 데이터일 수 있다";
+document.getElementById("hdr-chip").append(chip);
 
 render();
 </script>
