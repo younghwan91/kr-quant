@@ -108,12 +108,21 @@ def trades(con, close, adv, flow):
     return np.array(ent_d), np.array(rets, float), np.array(sigs, float)
 
 
-def run():
+def run(date_from: str | None = None, out: str | None = None):
+    """``date_from`` 을 주면 그 이후 진입만 남긴다 — 시총이 실제로 계산되는 구간으로
+    좁혀 **기술 통계**를 보기 위한 것이다. 폴드·손안댄창이 무너지므로 **판정이 아니다.**
+    사전등록 신호는 한 글자도 바뀌지 않는다(분모를 갈아끼우면 사후 선택이 된다)."""
     db = os.environ.get("KR_QUANT_DB") or db_default()
     con, prices, sd = load(db)
     close, adv, flow = build(prices, sd)
     ent, ret, _sig = trades(con, close, adv, flow)
     con.close()
+    if date_from:
+        keep = ent >= date_from
+        ent, ret = ent[keep], ret[keep]
+        print(f"[구간 제한] 진입 >= {date_from}")
+    if len(ret) == 0:
+        print("트레이드 0건 — 보고할 것이 없다"); return None, None
     print(f"트레이드 {len(ret)}건 · {min(ent)} ~ {max(ent)}")
 
     # 민감도 격자를 **먼저** — 원장 N 이 사전등록 게이트보다 앞서 쌓여야 DSR 이 걸린다.
@@ -138,4 +147,9 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--from", dest="date_from",
+                    help="이 날짜 이후 진입만 (기술 통계용 — 판정 아님)")
+    a = ap.parse_args()
+    run(a.date_from)
