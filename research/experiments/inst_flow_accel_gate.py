@@ -47,6 +47,34 @@ START_I = 80          # 워밍업(질량창 20 + LAG 20 + WIN 20 + 여유)
 MASS_LAG = 40         # v2: 질량을 두 유량 창보다 앞선 [t−59..t−40] 에서 잰다
 
 
+#: 백필이 끝나도 남는 몫 — DART 에 해당 연도 보고서가 아예 없는 종목(실측 60).
+#: 이 수 근처면 정상 종료, 그보다 크게 많으면 백필이 아직 도는 중이다.
+SHARES_RESIDUAL_OK = 80
+
+
+def shares_backfill_pending(con) -> int:
+    """과거 상장주식수가 아직 없는 **상장** 종목 수. 완료되면 60 근처로 수렴한다.
+
+    이 검사가 있는 이유: v1 이 VOID 로 끝난 원인이 정확히 "분모 데이터가 시대별로
+    다르게 비어 있는데 러너가 그걸 모르고 돌린 것"이었다. 유니버스를 고른 건
+    신호가 아니라 데이터 존재 여부였고, 배터리는 좋아 보이는 숫자(+1.057R)를 냈다.
+    커버리지 숫자를 세는 게 아니라 **그 데이터로 값이 나오는 종목**을 센다
+    (GUARDRAILS §4-2 의 교훈 — 커버리지는 초록인데 한 행도 안 쓰였던 사고).
+    """
+    cur = con.cursor()
+    cur.execute("""
+        SELECT count(*) FROM (
+          SELECT b.code FROM daily_bars b
+          WHERE b.source <> 'naver'
+            AND b.date BETWEEN '2016-01-01' AND '2025-12-31'
+          GROUP BY b.code
+          HAVING NOT EXISTS (
+            SELECT 1 FROM shares_outstanding_history s
+            WHERE s.code = b.code AND s.date < '2026-01-01')
+        ) t""")
+    return int(cur.fetchone()[0])
+
+
 def load(db: str):
     con = connect(db)
     prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
@@ -124,12 +152,27 @@ def trades(con, close, adv, flow, mass: str = "cap", *,
     return np.array(ent_d), np.array(rets, float), np.array(sigs, float)
 
 
-def run(date_from: str | None = None, mass: str = "cap"):
+def run(date_from: str | None = None, mass: str = "cap",
+        allow_partial_shares: bool = False):
     """``date_from`` 을 주면 그 이후 진입만 남긴다 — 시총이 실제로 계산되는 구간으로
     좁혀 **기술 통계**를 보기 위한 것이다. 폴드·손안댄창이 무너지므로 **판정이 아니다.**
     사전등록 신호는 한 글자도 바뀌지 않는다(분모를 갈아끼우면 사후 선택이 된다)."""
     db = os.environ.get("KR_QUANT_DB") or db_default()
     con, prices, sd = load(db)
+
+    # mass="cap" 은 시가총액이 분모다 — 백필이 도는 중이면 유니버스가 시대별로
+    # 다르게 좁혀지고, 그 상태의 판정은 신호가 아니라 처리 진행률을 재게 된다.
+    if mass == "cap":
+        pending = shares_backfill_pending(con)
+        print(f"[사전검사] 과거 주식수 미처리 상장 종목: {pending}건 "
+              f"(정상 종료 기대치 ~60)")
+        if pending > SHARES_RESIDUAL_OK and not allow_partial_shares:
+            con.close()
+            print(f"  → 백필이 아직 도는 중이다. 지금 돌리면 유니버스를 신호가 아니라 "
+                  f"데이터 가용성이 고른다(v1 VOID 의 원인). 중단한다.\n"
+                  f"     완료 후 재실행하거나, 의도한 것이면 --allow-partial-shares 를 준다.")
+            return None, None
+
     close, adv, flow = build(prices, sd)
     ent, ret, _sig = trades(con, close, adv, flow, mass=mass)
     con.close()
@@ -199,5 +242,7 @@ if __name__ == "__main__":
                     help="이 날짜 이후 진입만 (기술 통계용 — 판정 아님)")
     ap.add_argument("--mass", default="cap", choices=("cap", "adv"),
                     help="질량: cap=시가총액(v1), adv=직전 평균 거래대금(v2)")
+    ap.add_argument("--allow-partial-shares", action="store_true",
+                    help="주식수 백필이 미완이어도 강행(판정용으로 쓰지 말 것)")
     a = ap.parse_args()
-    run(a.date_from, a.mass)
+    run(a.date_from, a.mass, a.allow_partial_shares)
