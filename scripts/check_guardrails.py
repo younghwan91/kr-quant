@@ -312,6 +312,7 @@ VERDICT_RUNNER = {
     # 아니라 "판정에 코드가 붙어 있는가"다.
     "contrarian_retail": "contrarian_validate.py",
     "regime_switch": "regime_switch.py",
+    "inst_flow_accel": "inst_flow_accel_gate.py",
 }
 # VERDICT 가 러너 없이 존재해도 되는 유일한 조건: 아래 문구로 재현 불가를 선언한다.
 _IRREPRODUCIBLE_MARKER = "재현 불가 고지"
