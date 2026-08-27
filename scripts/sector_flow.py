@@ -177,21 +177,33 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame) -> dic
     # 섹터가 명단을 독점하고 작은 섹터는 종목이 하나도 안 나온다. 그래서 섹터별로
     # (거래대금 상위) ∪ (기관 순매수 절대값 상위) 를 뽑는다 — 앞은 그 섹터를
     # 대표하는 유동주, 뒤는 실제로 자금을 끌어당긴 견인주다(둘은 자주 다르다).
-    per = df.groupby(["sector", "code"])[["tv", "inst"]].sum().reset_index()
+    # ⚠️ 2026-08-27 수정. 이전 판본은 ("sector", "code") 로만 묶어 **시장 축이
+    # 없었다.** 거래소가 명단을 독점해 코스닥·전기/전자(318종목)에 2개, 화학·금속·
+    # 금융에 각 1개, 건설·운송/창고에는 0개만 남았고, (시장,섹터) 44쌍 중 31쌍이
+    # 6종목 이하가 되어 **같은 종목이 "담은" 과 "던진" 양쪽에 동시에 표시**됐다.
+    # 바로 위 주석이 경고한 그 실패 모드가 market 축에서 재현된 것이다.
+    per = df.groupby(["market", "sector", "code"])[["tv", "inst"]].sum().reset_index()
     per["inst_abs"] = per["inst"].abs()
+    keys = ["market", "sector"]
     top = pd.Index(sorted(set(
-        per.groupby("sector", group_keys=False)
+        per.groupby(keys, group_keys=False)
            .apply(lambda g: g.nlargest(TOP_BY_TURNOVER, "tv"), include_groups=False)["code"]
     ) | set(
-        per.groupby("sector", group_keys=False)
+        per.groupby(keys, group_keys=False)
            .apply(lambda g: g.nlargest(TOP_BY_FLOW, "inst_abs"), include_groups=False)["code"]
     )))
     nd = df[df["code"].isin(top)]
     names: dict = {}
     meta = nd.drop_duplicates("code").set_index("code")[["name", "sector", "market"]]
+    # 종목 시총(구간말) — 섹터를 가속도로 보면서 종목만 금액 절대값으로 줄세우면
+    # 같은 불일치가 한 단계 아래에서 반복된다(대형주가 명단을 독점한다).
+    name_cap = (caps.set_index("code")["cap"].to_dict()
+                if "cap" in getattr(caps, "columns", []) else {})
     for code, grp in nd.groupby("code", sort=False):
         row = meta.loc[code]
-        rec = {"name": row["name"], "sector": row["sector"], "market": row["market"]}
+        rec = {"name": row["name"], "sector": row["sector"], "market": row["market"],
+               "cap": round(float(name_cap.get(code, float("nan"))), 1)
+                      if code in name_cap else None}
         for k in ("indiv", "forgn", "inst", "etc", "tv"):
             arr = zeros()
             for d, v in zip(grp["date"], grp[k]):

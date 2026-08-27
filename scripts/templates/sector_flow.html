@@ -198,7 +198,7 @@ tbody tr:hover{background:var(--sunk)}
   </section>
 
   <div class="two">
-    <section class="panel"><h2 id="d-buy">담은 종목<small>섹터 대표종목 = 거래대금 상위 ∪ 기관 순매수 상위</small></h2><div class="lst" id="lst-buy"></div></section>
+    <section class="panel"><h2 id="d-buy">담은 종목<small>시총 대비 순매수(%p) 순 · 오른쪽은 금액(억)</small></h2><div class="lst" id="lst-buy"></div></section>
     <section class="panel"><h2 id="d-sell">던진 종목</h2><div class="lst" id="lst-sell"></div></section>
   </div>
 
@@ -340,13 +340,19 @@ function tipMove(e){const p=13,w=tip.offsetWidth,h=tip.offsetHeight;
   tip.style.left=x+"px"; tip.style.top=y+"px";}
 const tipHide=()=>tip.style.opacity=0;
 
-function drivers(sec,k){ // 구간 내 그 섹터에서 해당 주체 순매수 상위/하위 종목
+/** 구간 내 그 섹터의 해당 주체 순매수 — **시총 대비**(종목 가속도)로 줄세운다.
+ *  섹터를 a=J/m 으로 보면서 종목만 금액 절대값으로 줄세우면 같은 불일치가 한
+ *  단계 아래에서 반복된다. 시총이 없는 종목은 금액 순위로 폴백한다. */
+function drivers(sec,k){
   const rows=[];
   for(const code in D.names){const r=D.names[code];
     if(r.sector!==sec) continue;
     if(market!=="전체"&&r.market!==market) continue;
-    rows.push({code,name:r.name,v:sum(r[k],i0,i1)});}
-  rows.sort((a,b)=>b.v-a.v);
+    const v=sum(r[k],i0,i1);
+    rows.push({code,name:r.name,v,cap:r.cap,
+               a:(r.cap&&r.cap>0)?v/r.cap*100:null});}
+  const anyCap=rows.some(r=>r.a!=null);
+  rows.sort((x,y)=> anyCap ? ((y.a??-1e9)-(x.a??-1e9)) : (y.v-x.v));
   return rows;
 }
 
@@ -464,7 +470,9 @@ function render(){
     const b=el("button","row"); b.type="button"; b.setAttribute("aria-current",String(picked===s));
     const nb=el("div","namebox"); nb.append(el("div","name",s));
     const dv=drivers(s,actor);
-    const lead=(v>=0?dv.slice(0,2):dv.slice(-2).reverse()).filter(x=>Math.abs(x.v)>0);
+    const h2=Math.min(2, Math.floor(dv.length/2)) || (dv.length?1:0);
+    const lead=(v>=0?dv.slice(0,h2):dv.slice(dv.length-h2).reverse())
+                 .filter(x=>Math.abs(x.v)>0);
     nb.append(el("div","drv", lead.length?lead.map(x=>x.name).join(" · "):"—"));
     b.append(nb);
     const tr=el("div","track"); tr.append(el("div","axis"));
@@ -509,17 +517,22 @@ function renderNames(){
   const label=ACTORS.find(a=>a[0]===actor)[1];
   document.getElementById("d-buy").firstChild.textContent=picked+" — "+label+"이 담은 종목";
   document.getElementById("d-sell").firstChild.textContent=picked+" — "+label+"이 던진 종목";
-  const rows=drivers(picked,actor).map(x=>({...x,tv:sum(D.names[x.code].tv,i0,i1)}));
-  fill("lst-buy",rows.slice(0,6));
-  fill("lst-sell",rows.slice(-6).reverse());
+  const all=drivers(picked,actor).map(x=>({...x,tv:sum(D.names[x.code].tv,i0,i1)}));
+  // 후보가 적으면 상위 6 과 하위 6 이 겹친다 — 같은 종목이 "담은"·"던진" 양쪽에
+  // 뜨는 것을 막기 위해 겹치지 않게 반씩 나눈다.
+  const half=Math.min(6, Math.floor(all.length/2)) || (all.length?1:0);
+  const rows=all;
+  fill("lst-buy", all.slice(0, half).filter(r=>r.v>0));
+  fill("lst-sell", all.slice(all.length-half).reverse().filter(r=>r.v<0));
   function fill(id,arr){
     const box=document.getElementById(id); box.replaceChildren();
     if(!arr.length){const p=el("div","li"); p.append(el("div","nm","이 시장에 해당 섹터 대표종목이 없다"));
       box.append(p); return;}
     arr.forEach(t=>{const li=el("div","li");
       const nm=el("div","nm",t.name); nm.append(el("span",null,t.code)); li.append(nm);
-      li.append(el("div","amt num "+cls(t.v),amt(t.v)));
-      li.append(el("div","rt num",amt(t.tv).replace("+","")));
+      li.append(el("div","amt num "+cls(t.a==null?t.v:t.a),
+                   t.a==null?amt(t.v):pp(t.a)+"%p"));
+      li.append(el("div","rt num "+cls(t.v),amt(t.v)));
       box.append(li);});
   }
 }

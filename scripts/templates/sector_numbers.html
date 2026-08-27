@@ -89,6 +89,11 @@ td.drv b{font-weight:500; color:var(--ink)}
   </div>
 
   <section class="panel">
+    <h2 id="cttl">종합 <small>창별 G 의 등가중 평균 · "통과 창" 은 힘·압축·풀림 세 조건을 다 만족한 창 수 — 어느 창을 볼지 정하는 근거가 데이터에 없어(k 가 창마다 요동) 가중치를 두지 않는다</small></h2>
+    <div class="tw"><table id="ctbl"></table></div>
+  </section>
+
+  <section class="panel">
     <h2 id="ttl">섹터별 <small>단위 억원 · 헤더를 누르면 정렬</small></h2>
     <div class="tw"><table id="tbl"></table></div>
   </section>
@@ -153,10 +158,34 @@ const COLS=[
   ["etc","기타법인","n"],
   ["tv","거래대금","n"],
   ["cap","시가총액","n"],
-  ["drv","기관 순매수 상위 3","l"],
+  ["drv","기관 순매수 상위 3 (시총대비)","l"],
 ];
 
+function renderCombined(){
+  const C=D.combined&&D.combined[mkt];
+  const t=document.getElementById("ctbl"); t.replaceChildren();
+  if(!C) return;
+  document.getElementById("cttl").firstChild.textContent="종합 — "+mkt+" ";
+  const thead=el("thead"),tr=el("tr");
+  ["섹터","종목","종합 G",...C.windows.map(w=>w+"일 G"),"통과 창"].forEach((h,i)=>
+    tr.append(el("th",i===0?"l":null,h)));
+  thead.append(tr); t.append(thead);
+  const tb=el("tbody");
+  C.rows.forEach(r=>{
+    const x=el("tr"); if(r.thin) x.className="thin";
+    x.append(el("td","l",r.sector));
+    x.append(el("td","num",r.n_all));
+    x.append(el("td","num"+(r.G_pass?" pos":""), r.G==null?"—":r.G.toFixed(2)));
+    C.windows.forEach(w=>x.append(el("td","num", r.per[w]==null?"—":r.per[w].toFixed(2))));
+    const pn=r.pass_n||0, sn=r.seen||0;
+    x.append(el("td","num"+(pn>0?" pos":""), sn?pn+"/"+sn:"—"));
+    tb.append(x);
+  });
+  t.append(tb);
+}
+
 function render(){
+  renderCombined();
   document.getElementById("seg-win")._sync();
   document.getElementById("seg-mkt")._sync();
   const B = D.blocks[win+"|"+mkt];
@@ -213,7 +242,8 @@ function render(){
     else parts.forEach((b,i)=>{
       if(i) d.append(document.createTextNode(" · "));
       d.append(el("b",null,b.name));
-      d.append(document.createTextNode(" "+A(b.inst)));
+      d.append(document.createTextNode(b.a==null?(" "+A(b.inst))
+                 : " "+(b.a>=0?"+":"−")+Math.abs(b.a).toFixed(2)+"%p"));
     });
     x.append(d);
     tb.append(x);

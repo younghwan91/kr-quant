@@ -76,11 +76,18 @@ def drivers(P: dict, markets: list[str], sec: str, i0: int, i1: int, k: int = 3)
     for code, r in P["names"].items():
         if r["sector"] != sec or r["market"] not in markets:
             continue
-        rows.append({"code": code, "name": r["name"],
-                     "inst": sum(r["inst"][i0:i1 + 1]),
+        v = sum(r["inst"][i0:i1 + 1])
+        cap = r.get("cap")
+        rows.append({"code": code, "name": r["name"], "inst": v, "cap": cap,
+                     "a": (v / cap * 100) if cap else None,
                      "tv": sum(r["tv"][i0:i1 + 1])})
-    rows.sort(key=lambda x: -x["inst"])
-    return {"buy": rows[:k], "sell": rows[-k:][::-1]}
+    # 시총 대비(종목 가속도) 순 — 없으면 금액 순으로 폴백
+    any_cap = any(x["a"] is not None for x in rows)
+    rows.sort(key=lambda x: -(x["a"] if any_cap and x["a"] is not None else x["inst"]))
+    # 후보가 적으면 상위 k 와 하위 k 가 겹친다 — 겹치지 않게 반씩 나눈다.
+    half = min(k, len(rows) // 2) or (1 if rows else 0)
+    return {"buy": [r for r in rows[:half] if r["inst"] > 0],
+            "sell": [r for r in rows[len(rows) - half:][::-1] if r["inst"] < 0]}
 
 
 def power(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> "float | None":
@@ -147,7 +154,7 @@ MIN_NAMES = 10
 def build(P: dict) -> dict:
     N = len(P["dates"])
     out = {"asof": P["dates"][-1], "finalized": P["finalized"],
-           "dates": [P["dates"][0], P["dates"][-1]], "blocks": {}}
+           "dates": [P["dates"][0], P["dates"][-1]], "blocks": {}, "combined": {}}
     for win, wl in WINDOWS:
         if win > N:
             continue
@@ -258,6 +265,44 @@ def build(P: dict) -> dict:
                 "k": round(slope, 3), "b": round(icpt, 3),
                 "t": round(tstat, 2), "rows": rows,
             }
+    # ── 종합 축 ────────────────────────────────────────────────────────
+    # 어느 창을 봐야 할지 정하는 근거가 데이터에 없다 — k 가 창마다 요동한다
+    # (5일 +11.13/t=5.47 · 20일 +1.63/t=0.63 · 60일 +5.46/t=3.24 · 120일 +4.82/t=1.42).
+    # 그래서 **등가중**으로 섞는다. 신뢰도나 길이로 가중하면 이 표본에 맞춘 것이 되고,
+    # 창들이 서로 겹쳐 있어(5⊂20⊂60⊂120) 최근 데이터가 이중계상되기도 한다.
+    # 섞는 대상은 값이 아니라 **G 순위**다 — 값은 창마다 스케일이 다르다.
+    for mkey in ["전체"] + list(P["markets"]):
+        blocks = [(w, out["blocks"].get(f"{w}|{mkey}")) for w, _ in WINDOWS]
+        # G 가 실제로 산출되는 창만 섞는다. 짧은 창(5일)은 ẍ 가 2차 차분이라
+        # 최소 9거래일을 요구해 G 가 아예 안 나오고, 그대로 두면 빈 열이 된다.
+        blocks = [(w, b) for w, b in blocks
+                  if b and any(r.get("G") is not None for r in b["rows"])]
+        if len(blocks) < 2:
+            continue
+        agg_rows: dict = {}
+        for w, B in blocks:
+            for r in B["rows"]:
+                a = agg_rows.setdefault(r["sector"], {
+                    "sector": r["sector"], "n_all": r["n_all"], "thin": r["thin"],
+                    "per": {}, "pass_n": 0, "seen": 0})
+                if r.get("G") is not None:
+                    a["per"][w] = round(r["G"], 3)
+                    a["seen"] += 1
+                    if r.get("G_pass"):
+                        a["pass_n"] += 1
+        rows = []
+        for sec, a in agg_rows.items():
+            if a["seen"] == 0:
+                a["G"] = None
+            else:
+                a["G"] = sum(a["per"].values()) / a["seen"]
+            # 전 창 통과는 실측상 아무도 못 해 정보가 없다 — 통과한 창 수를 낸다.
+            a["G_pass"] = a["seen"] > 0 and a["pass_n"] == a["seen"]
+            rows.append(a)
+        out["combined"][mkey] = {
+            "windows": [w for w, _ in blocks],
+            "rows": sorted(rows, key=lambda r: -(r["G"] if r["G"] is not None else -1)),
+        }
     return out
 
 

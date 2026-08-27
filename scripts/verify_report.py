@@ -182,11 +182,36 @@ def layer_b(payload: dict, db: str | None) -> None:
 
 def layer_c(D: dict, html: str) -> None:
     print("\nC. 계산 — 표의 구조와 값이 정합한가")
+    # ⚠️ 표가 둘 이상이므로 `rows.forEach` 로 찾으면 안 된다 — 종합 표(ctbl)가
+    # 먼저 잡혀 본표(tbl)의 열 수와 어긋난다(실제로 한 번 오탐이 났다).
+    # 각 표의 getElementById(...) 부터 t.append(tb) 까지를 구간으로 잡는다.
+    def _cells(table_id: str) -> int:
+        m = re.search(
+            r'getElementById\("' + table_id + r'"\)(.*?)\n\s*t\.append\(tb\)',
+            html, re.S)
+        return len(re.findall(r"x\.append\(", m.group(1))) if m else -1
+
     cols = re.search(r"const COLS=\[(.*?)\];", html, re.S)
-    body = re.search(r"rows\.forEach\(r=>\{(.*?)\n    tb\.append", html, re.S)
     n_cols = len(re.findall(r'^\s*\["', cols.group(1), re.M)) if cols else -1
-    n_cells = len(re.findall(r"x\.append\(", body.group(1))) if body else -2
-    chk("C", "열 정의 수 = 셀 append 수", n_cols == n_cells, f"{n_cols} vs {n_cells}")
+    chk("C", "본표: 열 정의 수 = 셀 append 수", n_cols == _cells("tbl"),
+        f"COLS {n_cols} vs 셀 {_cells('tbl')}")
+
+    # 종합 표는 열 수가 창 수만큼 가변이다. 고정 셀과 루프 셀을 나눠 센 뒤,
+    # 헤더 배열의 고정 항목 수(섹터·종목·종합G + 통과창)와 맞는지 본다.
+    m = re.search(r'getElementById\("ctbl"\)(.*?)\n\s*t\.append\(tb\)', html, re.S)
+    if m:
+        body_c = m.group(1)
+        loop = re.findall(r"windows\.forEach\([^)]*=>\s*x\.append\(", body_c)
+        fixed = len(re.findall(r"^\s*x\.append\(", body_c, re.M))
+        hdr = re.search(r'\[("섹터".*?)\]\.forEach', body_c, re.S)
+        # 헤더 배열 안의 `...C.windows.map(w=>w+"일 G")` 는 **루프 라벨**이므로
+        # 고정 항목에서 뺀다 — 안 빼면 그 안의 따옴표 문자열까지 세어 1 이 더 나온다.
+        hdr_txt = re.sub(r"\.\.\.[^,]*?\.map\([^)]*\)", "", hdr.group(1)) if hdr else ""
+        n_hdr_fixed = len(re.findall(r'"[^"]+"', hdr_txt)) if hdr else -1
+        wins = len(next(iter(D.get("combined", {}).values()), {}).get("windows", []))
+        chk("C", "종합표: 고정 헤더 = 고정 셀", n_hdr_fixed == fixed,
+            f"헤더 고정 {n_hdr_fixed} · 셀 고정 {fixed}")
+        chk("C", "종합표: 창 루프 정확히 1개", len(loop) == 1, f"창 {wins}개")
     chk("C", "템플릿 자리표시자 없음", "__DATA__" not in html)
 
     for key, B in D["blocks"].items():
