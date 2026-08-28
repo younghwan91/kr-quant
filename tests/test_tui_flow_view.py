@@ -229,7 +229,7 @@ def test_help_covers_every_rendered_column(data):
             for h in lines[0].split():
                 if not h or h in documented:
                     continue
-                if _re.fullmatch(r"\d+일G", h):     # 종합의 창별 G — "N일G" 로 설명
+                if _re.fullmatch(r"\d+일\[G\]", h):     # 종합의 창별 G — "N일G" 로 설명
                     continue
                 missing.add(h)
     assert not missing, f"도움말에 없는 열: {sorted(missing)}"
@@ -383,16 +383,23 @@ def test_lead_name_and_amount_align_in_fixed_cells(data):
 
     이름 길이가 제각각이라 '이름 + 금액' 을 그냥 이어붙이면 금액이 들쭉날쭉해진다.
     """
+    from kr_quant.tui.flow_view import col_span, color_spans, table_cols
+
     st = State(data)
-    lines, _thin, nhead = table_lines(st, 160, 20)
-    body = [x for x in lines[nhead:] if x.strip()]
+    width = 170
+    lines, _thin, nhead = table_lines(st, width, 20)
+    # 매직넘버 대신 **열 정의에서** 상위종목 열의 구간을 구한다 — 폭이 바뀌면
+    # 위치도 바뀌므로 하드코딩하면 무관한 이유로 깨진다(실제로 깨졌다).
+    cols = table_cols(st, width)
+    spans = [col_span(cols, n) for n, _w2, _r in cols if n.startswith("순매")]
+    assert spans and all(spans), "상위종목 열을 못 찾았다"
     ends = set()
-    for line in body:
-        # 마지막 두 열(순매수상위·순매도상위) 안의 부호 숫자 끝 칸
-        for start, width, role in __import__(
-                "kr_quant.tui.flow_view", fromlist=["x"]).color_spans(line):
-            if role in ("up", "down") and start > 100:
-                ends.add(start + width)
+    for line in lines[nhead:]:
+        if not line.strip():
+            continue
+        for start, w2, role in color_spans(line):
+            if role in ("up", "down") and any(
+                    s[0] <= start and start + w2 <= s[0] + s[1] for s in spans):
+                ends.add(start + w2)
     assert ends, "상위 종목 금액을 못 찾았다"
-    # 두 열이므로 끝나는 칸은 최대 2종류여야 한다
-    assert len(ends) <= 2, f"금액 끝 칸이 흩어졌다: {sorted(ends)}"
+    assert len(ends) <= len(spans), f"금액 끝 칸이 흩어졌다: {sorted(ends)}"
