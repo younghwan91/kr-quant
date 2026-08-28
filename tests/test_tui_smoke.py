@@ -60,10 +60,12 @@ def _drain(fd: list[str]):
     return run
 
 
-def _run_tui(d: str, keys: bytes, lines: str = "24", cols: str = "100"):
+def _run_tui(d: str, keys: bytes, lines: str = "24", cols: str = "100",
+             env: dict | None = None):
     """의사 터미널에서 앱을 띄우고 (종료코드, 화면, stderr) 를 돌려준다."""
     primary, replica = pty.openpty()
-    env = {**os.environ, "TERM": "xterm-256color", "LINES": lines, "COLUMNS": cols}
+    env = {**(env or os.environ), "TERM": "xterm-256color",
+           "LINES": lines, "COLUMNS": cols}
     proc = subprocess.Popen(
         [sys.executable, "-c",
          "from kr_quant.tui.flow_app import main; main()", "--dir", d],
@@ -254,3 +256,271 @@ def test_resize_does_not_silently_close_the_help_screen():
         assert proc.returncode == 0, err.decode("utf-8", "replace")[-1000:]
         assert "섹터 표" in screen[0], "도움말이 아예 안 떴다"
         assert "관망" in screen[0], "리사이즈에 도움말이 닫혀 끝까지 못 내려갔다"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_no_color_and_dumb_terminal():
+    """색: NO_COLOR(표준)를 보고, TERM=dumb 이면 **안내하고 나간다**.
+
+    dumb 에서는 예전엔 빈 화면으로 살아 있으면서 키만 먹었다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + json.dumps(MINIMAL, ensure_ascii=False)
+                    + ";\n</script>")
+        env = {**os.environ, "NO_COLOR": "1"}
+        rc, screen, err = _run_tui(d, b"wmas\n\x1bq", env=env)
+        assert rc == 0, err[-1500:]
+        assert "전기/전자" in screen, "NO_COLOR 에서 표가 안 그려졌다"
+        for seq in ("\x1b[31m", "\x1b[33m", "\x1b[36m", "38;5;"):
+            assert seq not in screen, f"NO_COLOR 인데 색 시퀀스 {seq!r} 가 나왔다"
+
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+            capture_output=True, text=True, env={**os.environ, "TERM": "dumb"})
+        msg = proc.stdout + proc.stderr
+        assert proc.returncode != 0, "TERM=dumb 인데 그냥 떴다"
+        assert "TERM" in msg and "Traceback" not in msg, msg[-800:]
+
+
+# --- 키·배치 — curses 없이 상태로 판정한다 ---------------------------------
+#
+# pty 검사는 "통과했는데 아무것도 확인 못 한" 경우가 이 저장소에서만 세 번
+# 나왔다(같은 fd 경합 · 잡을 케이스를 continue 로 건너뜀 · SIGWINCH 미전달).
+# 키가 무엇을 했는지는 **상태를 직접 보는 게** 정직하다. 아래 검사들은 전부
+# 막으려는 버그를 실제로 주입해 실패하는지 확인했다.
+
+import curses  # noqa: E402
+
+from kr_quant.tui.flow_app import handle_key, layout  # noqa: E402
+from kr_quant.tui.flow_view import State  # noqa: E402
+
+MANY = json.loads(json.dumps(MINIMAL))
+for _i, (_code, _sec) in enumerate([("000010", "전기/전자"), ("000020", "화학"),
+                                    ("000030", "은행"), ("000040", "건설")]):
+    MANY["names"][_code] = {
+        "name": f"종목{_i}", "sector": _sec, "market": "거래소",
+        "cap": 100.0 * (_i + 1),
+        "win": {w: {"inst": 10.0 * (_i - 1), "forgn": 1.0, "indiv": -5.0,
+                    "etc": -6.0, "tv": 100.0 * (_i + 1)}
+                for w in ("5", "20", "60", "120")}}
+for _key, _b in MANY["blocks"].items():
+    _b["rows"] = [dict(_b["rows"][0], sector=_s, inst=float(_v), accel=float(_v),
+                       G=_v / 100.0, cap=1000.0)
+                  for _s, _v in (("전기/전자", 30), ("화학", 10), ("은행", -20),
+                                 ("건설", -40))]
+# 종목이 여러 개인 섹터 — 드릴다운 커서 유지를 볼 수 있게. 값은 서로 **달라야**
+# 한다: 같으면 정렬이 안정적이라 역순 검사가 뒤집히지 않아도 통과한다.
+for _n, (_c, _v) in enumerate((("000021", 7.0), ("000022", -3.0),
+                               ("000023", 4.0))):
+    MANY["names"][_c] = dict(
+        MANY["names"]["000020"], name=f"화학{_n}",
+        win={w: dict(MANY["names"]["000020"]["win"][w], inst=_v, tv=_v * 10)
+             for w in ("5", "20", "60", "120")})
+
+
+def _st(data=None) -> State:
+    return State(json.loads(json.dumps(data or MANY)))
+
+
+def _sectors(st: State) -> list[str]:
+    return [r["sector"] for r in st.rows()]
+
+
+def test_h_leaves_the_drill_instead_of_opening_help():
+    """h 는 vim 의 '왼쪽' — l 이 들어가기면 h 는 나오기다.
+
+    예전엔 h 가 도움말이었고 드릴다운에서 h 는 **아무 일도 안 했다**.
+    반쪽만 맞는 관례는 안 맞느니만 못하다.
+    """
+    st = _st()
+    handle_key(st, ord("l"))
+    assert st.drill
+    handle_key(st, ord("h"))
+    assert not st.drill, "드릴다운에서 h 가 나가지 않았다"
+    assert not st.help, "h 가 아직 도움말을 연다"
+
+
+def test_help_opens_with_question_and_f1():
+    for key in (ord("?"), curses.KEY_F1):
+        st = _st()
+        assert handle_key(st, key)
+        assert st.help, f"{key} 로 도움말이 안 열렸다"
+
+
+def test_q_in_help_closes_and_only_the_next_q_quits():
+    """도움말의 q 는 닫기다 — 그리고 그 사실이 화면에 적혀 있어야 한다."""
+    from kr_quant.tui.flow_view import HELP, help_lines
+    st = _st()
+    handle_key(st, ord("?"))
+    assert handle_key(st, ord("q")) is True, "도움말의 q 가 앱을 끝냈다"
+    assert not st.help
+    assert handle_key(st, ord("q")) is False, "그 다음 q 가 종료하지 않았다"
+    # 관례(less: q=종료)를 어기는 쪽은 화면에 밝혀야 한다.
+    said = help_lines(120, 0, 10**6)[0][0] + " ".join(d for _n, d in HELP)
+    assert "한 번 더" in said, "q 가 닫기라는 사실이 어디에도 안 적혀 있다"
+
+
+def test_help_lists_every_key_the_app_handles():
+    """회귀 — 대문자 역방향·g/G·PgUp/PgDn·l/← 이 푸터에도 도움말에도 없었다."""
+    from kr_quant.tui.flow_view import HELP, footer_line
+    text = " ".join(n + " " + d for n, d in HELP) + footer_line(200)
+    for token in ("g", "G", "Home", "End", "PgUp", "PgDn", "W", "M", "A", "S",
+                  "r", "h", "l", "Enter", "Esc", "F1", "?", "q"):
+        assert token in text, f"도움말에 {token!r} 가 없다"
+
+
+def test_r_reverses_the_sector_sort():
+    """정렬 역순 — 이게 없어서 '누가 털렸나' 로 가는 길이 G 하나뿐이었다."""
+    st = _st()
+    down = _sectors(st)
+    handle_key(st, ord("r"))
+    assert st.rev
+    assert _sectors(st) == down[::-1], "r 이 순서를 뒤집지 않았다"
+    handle_key(st, ord("r"))
+    assert _sectors(st) == down, "r 이 토글이 아니다"
+
+
+def test_r_keeps_the_selected_sector():
+    st = _st()
+    handle_key(st, curses.KEY_DOWN)
+    sec = st.rows()[st.row]["sector"]
+    handle_key(st, ord("r"))
+    assert st.rows()[st.row]["sector"] == sec, "역순에 커서가 섹터를 놓쳤다"
+
+
+def test_r_reverses_the_name_list_and_keeps_the_cursor():
+    st = _st()
+    st.row = _sectors(st).index("화학")
+    handle_key(st, ord("l"))
+    handle_key(st, curses.KEY_DOWN)
+    code = st.names()[st.drow]["code"]
+    down = [t["code"] for t in st.names()]
+    handle_key(st, ord("r"))
+    assert st.nrev and [t["code"] for t in st.names()] != down
+    assert st.names()[st.drow]["code"] == code, "역순에 종목 커서를 놓쳤다"
+
+
+def test_missing_values_stay_last_in_both_directions():
+    """역순이라고 결측이 위로 오면 안 된다 — '값 없음'은 작은 값이 아니다."""
+    st = _st()
+    for _k, b in st.d["blocks"].items():
+        b["rows"][1]["G"] = None
+    st.si = 0                                   # 성장(G)
+    for rev in (False, True):
+        st.rev = rev
+        vals = [r.get("G") for r in st.rows()]
+        assert vals[-1] is None, f"rev={rev} 에서 결측이 맨 뒤가 아니다: {vals}"
+
+
+def test_window_market_actor_work_inside_the_drill():
+    """드릴다운에서 w·m·a 가 조용히 무시되던 회귀.
+
+    Esc → W → Enter 로 나갔다 들어오면 종목 커서를 잃었다.
+    """
+    st = _st()
+    st.row = _sectors(st).index("화학")
+    handle_key(st, ord("l"))
+    handle_key(st, curses.KEY_DOWN)
+    code = st.names()[st.drow]["code"]
+    for key in (ord("w"), ord("W"), ord("m"), ord("a")):
+        before = st.window, st.market, st.actor
+        handle_key(st, key)
+        assert st.drill, f"{chr(key)} 가 드릴다운을 닫았다"
+        assert (st.window, st.market, st.actor) != before, \
+            f"{chr(key)} 가 드릴다운에서 아무 일도 안 했다"
+        assert st.rows()[st.row]["sector"] == "화학", \
+            f"{chr(key)} 뒤에 섹터 선택을 잃었다"
+        if any(t["code"] == code for t in st.names()):
+            assert st.names()[st.drow]["code"] == code, \
+                f"{chr(key)} 뒤에 종목 커서를 잃었다"
+
+
+def test_hint_bar_explains_the_column_being_sorted():
+    """도움말이 전면 모달이라 '이 숫자가 뭐냐' 를 물은 사람이 그 숫자를 못 봤다.
+
+    푸터 위 한 줄은 늘 떠 있고, s 로 정렬을 바꾸면 같이 바뀐다.
+    """
+    from kr_quant.tui.flow_app import hint_text
+    from kr_quant.tui.flow_view import HELP, SORTS
+
+    st = _st()
+    seen = set()
+    for _ in range(len(SORTS)):
+        line = hint_text(st)
+        header = line.split("정렬 ", 1)[1].split("▼")[0].split("▲")[0]
+        desc = next((d for n, d in HELP if n == header), None)
+        assert desc, f"'{header}' 의 설명이 HELP 에 없다 — 힌트바가 빈다"
+        # 힌트바는 HELP 의 **강조** 별표를 뗀다(통과 마커 * 와 헷갈린다).
+        assert desc.strip().replace("**", "")[:12] in line, f"열 설명이 없다: {line}"
+        assert ("▼" in line) != ("▲" in line), f"정렬 방향 표시가 없다: {line}"
+        seen.add(line)
+        handle_key(st, ord("s"))
+    assert len(seen) > 1, "s 로 정렬을 바꿔도 힌트바가 그대로다"
+    handle_key(st, ord("r"))
+    assert "▲" in hint_text(st), "r 을 눌러도 힌트바의 방향이 안 바뀐다"
+    # 드릴다운에서는 종목 정렬을 설명한다.
+    st.rev = False
+    handle_key(st, ord("l"))
+    assert "순매수" in hint_text(st), hint_text(st)
+
+
+def test_footer_grows_and_shrinks_with_the_width():
+    """푸터가 한 줄 고정이라 넓은 화면에서 절반이 비고 좁은 화면에서 잘렸다."""
+    from kr_quant.tui.flow_view import _w, footer_line
+    for drill in (False, True):
+        wide, narrow = footer_line(200, drill), footer_line(40, drill)
+        assert _w(wide) > _w(narrow), "폭이 넓어도 푸터가 안 늘어난다"
+        for width in (20, 40, 60, 80, 120, 200):
+            line = footer_line(width, drill)
+            assert _w(line) <= width or width < _w(footer_line(0, drill)), \
+                f"폭 {width} 에서 푸터가 넘친다: {line}"
+            # 줄어든 푸터가 "여기가 전부" 로 읽히면 안 된다 — 나머지는 ? 에 있다.
+            assert "?" in line, f"폭 {width} 푸터에 ? 안내가 없다: {line}"
+
+
+def test_page_keys_follow_the_screen_height():
+    """PgDn 이 10줄 고정이던 회귀 — 200x50 에서 반 페이지도 안 갔다."""
+    assert layout(50)[1] > layout(24)[1] > 10
+    st = _st()
+    handle_key(st, curses.KEY_NPAGE, page=2)
+    assert st.row == 2
+    handle_key(st, curses.KEY_PPAGE, page=1)
+    assert st.row == 1
+
+
+def test_home_and_end_move_like_g_and_G():
+    st = _st()
+    n = len(st.rows())
+    handle_key(st, curses.KEY_END)
+    assert st.row == n - 1
+    handle_key(st, curses.KEY_HOME)
+    assert st.row == 0
+
+
+def test_help_scroll_stops_where_the_last_line_is_at_the_bottom():
+    """하한이 total-5 이던 시절엔 끝까지 내리면 화면 아래가 비었다."""
+    from kr_quant.tui.flow_view import help_lines
+    total = help_lines(80, 0, 10**6)[1]
+    st = _st()
+    handle_key(st, ord("?"))
+    for _ in range(500):
+        handle_key(st, curses.KEY_DOWN, help_page=20)
+    assert st.hrow == total - 20, f"스크롤 하한이 어긋난다: {st.hrow}"
+
+
+def test_detail_panel_folds_on_short_screens_so_the_table_survives():
+    """6줄 터미널에서 상세 패널이 헤더를 덮어써 표가 통째로 사라졌다."""
+    for h in (6, 8, 9):
+        _head, rows, detail, _hint, _foot = layout(h)
+        assert detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
+        assert rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
+    assert layout(24)[2] == 3, "정상 높이에서는 상세 패널이 있어야 한다"
+
+
+def test_tall_screens_give_the_extra_height_to_the_table():
+    """200x50 에서 표와 상세 패널 사이에 빈 줄이 14줄 남던 회귀."""
+    head, rows, detail, hint, foot = layout(50)
+    assert head + 1 + rows + detail == hint, "세로 배치에 빈 줄이 남는다"
+    assert foot == 49 and hint == 48

@@ -90,6 +90,10 @@ class State:
         self.nsi = 0            # 종목 정렬
         self.help = False       # 도움말 화면인가
         self.hrow = 0           # 도움말 스크롤
+        # 정렬 역순. 없을 때 "순매도 상위" 로 가는 유일한 길이 G(맨 끝으로) 였는데
+        # 그 키가 화면 어디에도 안 적혀 있었다 — 발견 불가능한 유일 경로.
+        self.rev = False        # 섹터 표 역순(오름차순)
+        self.nrev = False       # 종목 목록 역순
 
     # --- 현재 선택 ---
     @property
@@ -208,7 +212,8 @@ class State:
         key, _fell = self.effective_sort(rows)
         def val(r):
             v = r.get(key)
-            return (v is None, -(v if v is not None else 0))
+            # 결측은 역순에서도 **맨 뒤**다 — '값이 없는 것'은 작은 값이 아니다.
+            return (v is None, (v if self.rev else -v) if v is not None else 0)
         rows.sort(key=val)
         return rows
 
@@ -250,9 +255,12 @@ class State:
                         "a": ((w.get(self.actor) or 0) / cap * 100) if cap else None})
         key = self.name_sort
         if key == "name":
-            out.sort(key=lambda t: t["name"])
+            out.sort(key=lambda t: t["name"], reverse=self.nrev)
         else:
-            out.sort(key=lambda t: -(t.get(key) if t.get(key) is not None else -1e18))
+            # 결측은 어느 방향에서도 맨 뒤.
+            out.sort(key=lambda t: (t.get(key) is None,
+                                    (t.get(key) * (1 if self.nrev else -1))
+                                    if t.get(key) is not None else 0))
         return out
 
 
@@ -266,8 +274,10 @@ def header_lines(st: State, width: int) -> list[str]:
         if fell:
             note = f"  ※ {label} 은 이 창에 값이 없다"
             label = dict(SORTS).get(key, key)
+    # 종합 화면은 정렬 자체가 없다(페이로드 순서) — 없는 방향을 표시하면 또 거짓말이다.
+    arrow = "" if st.window == "종합" else ("▲" if st.rev else "▼")
     l2 = (f" 구간[{st.window}] 시장[{st.market}] 주체[{ACTORS[st.ai][1]}]"
-          f" 정렬[{label}]{note}")
+          f" 정렬[{label}{arrow}]{note}")
     if st.actor != "inst" and st.window != "종합":
         l2 += "  ※ 미실현·포텐셜·dW/dt·풀림·G 는 기관 기준"
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
@@ -496,6 +506,19 @@ def color_spans(line: str) -> list[tuple[int, int, str]]:
 #: 도움말 — 열의 뜻과 계산식. 화면에서 읽는 사람이 "이 숫자가 뭐냐" 를 물을 자리에
 #: 답을 둔다. 한계도 같이 적는다(추정치·상대지표·유동성 함정).
 HELP = [
+    ("", "── 키 ──"),
+    ("↑↓ j k", "한 줄 이동. g·Home 처음 · G·End 끝 · PgUp/PgDn 한 화면씩."),
+    ("Enter l →", "그 섹터의 전 종목 보기(드릴다운)."),
+    ("h ← Esc", "드릴다운에서 나가기. h 는 vim 의 '왼쪽' 이라 l 의 반대다."),
+    ("w W", "구간 5·20·60·120·종합. 대문자는 역방향. 드릴다운에서도 듣는다."),
+    ("m M", "시장 전체·거래소·코스닥. 대문자는 역방향."),
+    ("a A", "주체 기관·외국인·개인·기타법인. 대문자는 역방향."),
+    ("s S", "정렬 열 바꾸기. 대문자는 역방향. 드릴다운에서는 종목 정렬."),
+    ("r", "정렬 역순 토글. ▼ 내림차순(큰 것 먼저) · ▲ 오름차순 —"),
+    ("", "        **순매도 상위**(가장 많이 판 쪽)는 이걸 켜야 위로 온다."),
+    ("? F1", "이 도움말. q·Esc·?·Enter 로 닫는다."),
+    ("q", "종료. 단 도움말 안에서는 **닫기만** 한다(한 번 더 눌러야 종료)."),
+    ("", ""),
     ("", "── 섹터 표 ──"),
     ("섹터", "벤더 분류(stocks.sector) 27개. KRX 업종 분류와 다르다."),
     ("종목[수]", "그 (시장,섹터)의 상장 종목 수. 10개 미만은 회색 — 벤더 분류가 좁아"),
@@ -542,7 +565,8 @@ HELP = [
 
 def help_lines(width: int, offset: int, height: int) -> tuple[list[str], int]:
     """도움말 화면 — (행, 전체 줄 수). offset 부터 height 줄을 낸다."""
-    out = [pad(" 열의 뜻 — ↑↓ 스크롤 · q·Esc·?·Enter 로 닫기", width)]
+    out = [pad(" 키와 열의 뜻 — ↑↓/PgDn 스크롤 · q·Esc·?·Enter 로 닫기"
+               " (종료는 닫은 뒤 q 를 한 번 더)", width)]
     body = []
     for name, desc in HELP:
         # ⚠️ f"{name:>9}" 는 **문자 폭**이라 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)가
@@ -553,5 +577,38 @@ def help_lines(width: int, offset: int, height: int) -> tuple[list[str], int]:
     return out + view, len(body)
 
 
-FOOTER = " w:구간 m:시장 a:주체 s:정렬 ↑↓:섹터 Enter:종목 ?:도움말 q:종료"
-FOOTER_DRILL = " ↑↓:종목  s:정렬  ?:도움말  Esc/←:돌아가기  q:종료"
+#: 푸터는 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 좁은 터미널에서
+#: 잘렸고(무엇이 잘렸는지도 몰랐고), 넓은 터미널에서는 절반이 비어 있는데도
+#: 대문자 역방향·g/G·PgUp/PgDn·r 이 화면 어디에도 안 적혀 있었다.
+FOOTER_TIERS = (
+    " w/W:구간 m/M:시장 a/A:주체 s/S:정렬 r:역순 ↑↓:섹터 g/G:처음/끝"
+    " PgUp/PgDn:쪽 Enter/l:종목 ?:도움말 q:종료",
+    " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 Enter:종목 ?:도움말 q:종료",
+    " w m a s:바꾸기 r:역순 Enter:종목 ?:전체 키 q:종료",
+    " w m a s r:바꾸기 Enter:종목 ?:키 q:종료",
+    " ?:키 q:종료",
+)
+FOOTER_DRILL_TIERS = (
+    " ↑↓:종목 s/S:정렬 r:역순 g/G:처음/끝 PgUp/PgDn:쪽 w/W:구간 m:시장 a:주체"
+    " h/←/Esc:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h/←:돌아가기 ?:도움말 q:종료",
+    " s:정렬 r:역순 w m a:바꾸기 h:돌아가기 ?:전체 키 q:종료",
+    " s r w m a:바꾸기 h:뒤로 ?:키 q:종료",
+    " ?:키 h:뒤로 q:종료",
+)
+#: 예전 이름 — 중간 단계가 기본이다.
+FOOTER = FOOTER_TIERS[1]
+FOOTER_DRILL = FOOTER_DRILL_TIERS[1]
+
+
+def footer_line(width: int, drill: bool = False) -> str:
+    """폭에 **온전히** 들어가는 가장 자세한 푸터.
+
+    어느 단계에서도 ``?`` 는 남긴다 — 줄어든 푸터가 "여기가 전부" 로 읽히면
+    안 되기 때문이다. 나머지 키는 ``?`` 뒤에 전부 적혀 있다.
+    """
+    tiers = FOOTER_DRILL_TIERS if drill else FOOTER_TIERS
+    for t in tiers:
+        if _w(t) <= width:
+            return t
+    return tiers[-1]
