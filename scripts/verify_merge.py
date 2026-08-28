@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import re
 import shutil
@@ -217,16 +218,52 @@ def sec_identity(wt: Path, commits: list[str]) -> Section:
 
 # --------------------------------------------------------------------------- 3. 기본
 
-def sec_lint(wt: Path, py: str) -> Section:
-    s = Section("lint")
+#: CI 와 **같은 범위**를 본다. `src/ tests/` 만 보고 "통과" 라고 적었다가 CI 가
+#: 빨간 채로 남은 적이 있다 — 범위가 다르면 통과 보고가 거짓말이 된다.
+RUFF_PATHS = ("src/", "tests/", "research/", "scripts/", "examples/")
+
+
+def _ruff(py: str, cwd: Path, env: dict) -> set[str]:
     ruff = Path(py).parent / "ruff"
     cmd = ([str(ruff)] if ruff.exists() else [py, "-m", "ruff"]) + \
-        ["check", "src/", "tests/", "research/", "scripts/", "examples/"]
-    p = run(cmd, wt, py_env(wt), timeout=300)
-    if p.returncode != 0:
-        s.fail("ruff check 실패\n" + tail(p.stdout + p.stderr))
+        ["check", "--output-format", "concise", *RUFF_PATHS]
+    p = run(cmd, cwd, env, timeout=300)
+    out = set()
+    for ln in p.stdout.splitlines():
+        m = re.match(r"^(\S+?):\d+:\d+: (\S+) (.*)$", ln.strip())
+        if m:                      # 줄번호는 뺀다 — 무관한 편집으로도 밀린다
+            out.add(f"{m.group(1)}: {m.group(2)} {m.group(3)}")
+    return out
+
+
+def sec_lint(wt: Path, py: str, base_sha: str, scratch: Path) -> Section:
+    """ruff — **이 브랜치가 새로 넣은** 위반만 REJECT.
+
+    기준이 이미 빨간 상태일 수 있다(실제로 그랬다: 79e14df 에 8건이 남아 있었고
+    뒤늦게 별도 커밋으로 고쳤다). 그걸 워크트리에 물리면 남의 빚으로 남을
+    REJECT 하게 된다 — 판정이 틀리는 것보다 나쁜 건, 판정을 안 믿게 되는 것이다.
+    """
+    s = Section("lint")
+    env = py_env(wt)
+    now = _ruff(py, wt, env)
+    base_dir = scratch / "lint_base"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    tar = subprocess.run(["git", "archive", base_sha], cwd=str(wt),
+                         capture_output=True, timeout=120)
+    subprocess.run(["tar", "-x", "-C", str(base_dir)], input=tar.stdout, timeout=120)
+    was = _ruff(py, base_dir, py_env(base_dir))
+    new, gone, kept = now - was, was - now, now & was
+    if new:
+        s.fail(f"이 브랜치가 새로 넣은 ruff 위반 {len(new)}건\n"
+               + "\n".join("      " + v for v in sorted(new)))
     else:
-        s.say(p.stdout.strip().splitlines()[-1] if p.stdout.strip() else "clean")
+        s.say(f"새 위반 없음 (검사 경로: {' '.join(RUFF_PATHS)})")
+    if kept:
+        s.warn(f"기준에서 물려받은 위반 {len(kept)}건 — 이 워크트리의 책임이 "
+               f"아니지만 머지 후에도 남는다:\n"
+               + "\n".join("      " + v for v in sorted(kept)))
+    if gone:
+        s.say(f"고쳐진 위반 {len(gone)}건")
     return s
 
 
@@ -361,8 +398,16 @@ def sec_mutations(wt: Path, py: str, base_sha: str, spec_path: Path | None) -> S
         # ① 깨끗한 상태에서 가드가 초록인가 — 늘 빨간 검사는 아무것도 증명하지 않는다.
         clean = run([py, "-m", "pytest", "-q", *guards], wt, env, timeout=900)
         if clean.returncode != 0:
-            s.fail(f"[{mid}] 가드가 **주입 전에도** 실패한다 (nodeid 오타이거나 "
-                   f"이미 깨진 검사다)\n" + tail(clean.stdout, 1200))
+            if "no tests ran" in clean.stdout or "ERROR" in clean.stdout:
+                # 기준에서 물려받은 변이인데 워크트리가 그보다 먼저 갈라져 나가
+                # 그 검사가 아직 없는 것일 수 있다. 오타와 구분이 안 되므로 경고다.
+                s.warn(f"[{mid}] 가드를 이 워크트리에서 **찾지 못했다** — nodeid "
+                       f"오타이거나, 기준이 그 검사를 워크트리 분기 뒤에 추가한 "
+                       f"것이다. 머지하면 붙으므로 머지 후 다시 돌려라: "
+                       f"{', '.join(guards)}")
+            else:
+                s.fail(f"[{mid}] 가드가 **주입 전에도** 실패한다 (이미 깨진 "
+                       f"검사다)\n" + tail(clean.stdout, 1200))
             continue
 
         # ② 주입 → 빨개져야 한다.
@@ -410,13 +455,58 @@ def sec_mutations(wt: Path, py: str, base_sha: str, spec_path: Path | None) -> S
 
 RENDER_SMOKE = r'''
 """실데이터 렌더 스모크 — 예외·행폭·헤더정렬·숫자잘림."""
-import bisect, sys
+import bisect, pathlib, sys
 from kr_quant.tui.flow_app import load
 from kr_quant.tui import flow_view as V
 
 report = sys.argv[1]
 d = load(report)
 bad = []
+
+# 값 기대표 — 헤더 이름 → (원본 키, 서식). **선언이지 구현이 아니다.**
+# 열의 뜻이 바뀌면(예: 미실현이 숫자에서 발산 막대로) 이 표가 낡는 것이지
+# 화면이 틀린 게 아니다. 그래서 표에 없는 헤더는 **구조 검사만** 받는다
+# (폭·구분칸·자릿수 중간 잘림). 워크트리별 갱신은 --mutations 파일의
+# [render.expect] 로 넣는다.
+EXPECT = {
+    "섹터": ("sector", "str"), "종목[수]": ("n_all", "int"),
+    "임펄스[억]": ("flow", "amt"), "가속[%p]": ("accel", "pct2"),
+    "수익률[%]": ("ret", "pct2"), "미실현[%p]": ("x", "pct1"),
+    "G[0~1]": ("G", "f2"),
+    "종목": ("name", "str"), "코드": ("code", "raw"),
+    "순매수[억]": ("flow", "amt"), "시총대비[%p]": ("a", "pct2"),
+}
+if len(sys.argv) > 2 and sys.argv[2]:
+    import json
+    over = json.loads(pathlib.Path(sys.argv[2]).read_text("utf-8"))
+    for k, v in over.items():
+        if v is None:
+            EXPECT.pop(k, None)          # 이 워크트리에서 뜻이 바뀐 열
+        else:
+            EXPECT[k] = (v[0], v[1])
+
+
+def want(r, name):
+    spec = EXPECT.get(name)
+    if spec is None:
+        return None                      # 선언이 없으면 구조 검사만
+    key, how = spec
+    v = r.get(key)
+    if how == "str":
+        return v if v is not None else "—"
+    if how == "raw":
+        return v if v is not None else ""
+    if how == "int":
+        return str(v if v is not None else "—")
+    if how == "amt":
+        return V.fmt_amt(v)
+    if how == "pct1":
+        return V.fmt_pct(v, 1) if v is not None else "—"
+    if how == "pct2":
+        return V.fmt_pct(v) if v is not None else "—"
+    if how == "f2":
+        return f"{v:.2f}" if v is not None else "—"
+    return None
 
 def W(s):
     return sum(V.cell_width(c) for c in s)
@@ -445,6 +535,15 @@ def slice_cells(line, start, width, starts=None):
     hi = bisect.bisect_left(st, start + width, 0, len(line))
     return line[lo:hi]
 
+def col3(c):
+    """열 정의에서 (헤더, 폭, 우측정렬) 만 꺼낸다.
+
+    워크트리마다 열 표현이 다르다 — 튜플 3칸일 수도, `Col(header,width,right,fn)`
+    처럼 필드가 더 붙은 namedtuple 일 수도 있다. 3칸으로 언패킹하면 하네스가
+    **워크트리의 리팩터 때문에** 터진다(실제로 터졌다). 앞 세 칸만 본다.
+    """
+    return c[0], c[1], c[2]
+
 def check_block(tag, lines, width, cols, nhead, rows, want_of):
     for i, ln in enumerate(lines):
         if cell_starts(ln)[-1] != width:
@@ -452,16 +551,18 @@ def check_block(tag, lines, width, cols, nhead, rows, want_of):
                        f"{ln[:60]!r}")
             return
     head = lines[nhead - 1]
-    for name, w, right in cols:
+    for c in cols:
+        name, w, right = col3(c)
         span = V.col_span(cols, name)
         if span is None or span[0] + w > width:
             continue
         if slice_cells(head, *span) != V.pad(name, w, right):
             bad.append(f"{tag} 헤더 '{name}' 이 자기 칸에 없다")
-    spans = {name: V.col_span(cols, name) for name, _w, _r in cols}
+    spans = {c[0]: V.col_span(cols, c[0]) for c in cols}
     for r, ln in zip(rows, lines[nhead:]):
         st = cell_starts(ln)
-        for name, w, right in cols:
+        for c in cols:
+            name, w, right = col3(c)
             span = spans[name]
             if span is None:
                 continue
@@ -527,22 +628,6 @@ for width in widths:
                     cols = V._fit(V.table_cols(st, width), width)
                     tag = (f"w{width} {V.WINDOWS[wi]}/{st.market}/"
                            f"{V.ACTORS[ai][1]}/{V.SORTS[si][1]}")
-                    def want(r, name, _st=st):
-                        if name == "섹터":
-                            return r.get("sector", "—")
-                        if name == "종목[수]":
-                            return str(r.get("n_all", "—"))
-                        if name == "임펄스[억]":
-                            return V.fmt_amt(r.get("flow"))
-                        if name == "가속[%p]":
-                            return V.fmt_pct(r.get("accel"))
-                        if name == "수익률[%]":
-                            return V.fmt_pct(r.get("ret"))
-                        if name == "미실현[%p]":
-                            return V.fmt_pct(r.get("x"), 1)
-                        if name == "G[0~1]":
-                            return (f"{r['G']:.2f}" if r.get("G") is not None else "—")
-                        return None
                     check_block(tag, lines, width, cols, nhead, rows, want)
                     # 주체 일관성 — 화면의 임펄스·가속이 **선택된 주체**의 숫자인가.
                     # 위 want() 는 렌더가 쓴 것과 같은 투영 행에서 값을 다시 만드므로
@@ -595,14 +680,8 @@ for width in widths:
                                 continue
                             ncols = V._fit(V.names_cols(), width)
                             names = st.names()
-                            def nwant(t, name):
-                                a = t.get("a")
-                                return {"종목": t.get("name", "—"),
-                                        "코드": t.get("code", ""),
-                                        "순매수[억]": V.fmt_amt(t.get("flow")),
-                                        "시총대비[%p]": (V.fmt_pct(a) if a is not None
-                                                         else "—")}.get(name)
-                            check_block(tag + " 종목", nl, width, ncols, nh, names, nwant)
+                            check_block(tag + " 종목", nl, width, ncols, nh,
+                                        names, want)
 
 for line in bad[:40]:
     print("  " + line)
@@ -611,15 +690,36 @@ sys.exit(1 if bad else 0)
 '''
 
 
-def sec_render(wt: Path, py: str, report: str, scratch: Path) -> Section:
+def sec_render(wt: Path, py: str, report: str, scratch: Path,
+               spec: Path | None) -> Section:
+    """실데이터 렌더 스모크.
+
+    값 기대표는 선언이라 낡는다 — 열의 뜻이 바뀌면(미실현이 숫자에서 발산 막대로
+    바뀐 것처럼) 화면이 아니라 표가 틀린 것이다. 워크트리는 변이 선언 파일의
+    ``[render.expect]`` 로 갱신한다: ``"미실현[%p]" = []`` 는 "이 열은 이제
+    뜻이 달라 값 검사에서 빼라"(구조 검사는 그대로 받는다)는 뜻이다.
+    """
     s = Section("render")
     rpt = Path(os.path.expanduser(report))
     if not (rpt / "numbers.html").exists():
         s.skip(f"실데이터가 없다: {rpt}/numbers.html — 렌더 스모크를 못 돌린다")
         return s
+    over: dict = {}
+    if spec and spec.exists():
+        try:
+            raw = tomllib.loads(spec.read_text("utf-8")).get("render", {})
+            for k, v in (raw.get("expect") or {}).items():
+                over[k] = None if not v else list(v)
+        except tomllib.TOMLDecodeError:
+            pass                       # §mutations 가 같은 파일을 파싱하며 보고한다
+    over_path = ""
+    if over:
+        over_path = str(scratch / "expect.json")
+        Path(over_path).write_text(json.dumps(over, ensure_ascii=False), "utf-8")
+        s.say(f"값 기대표 갱신 {len(over)}건: " + ", ".join(sorted(over)))
     script = scratch / "render_smoke.py"
     script.write_text(RENDER_SMOKE, encoding="utf-8")
-    p = run([py, str(script), str(rpt)], wt, py_env(wt), timeout=1200)
+    p = run([py, str(script), str(rpt), over_path], wt, py_env(wt), timeout=1200)
     if p.returncode != 0:
         s.fail("실데이터 렌더 위반\n" + tail(p.stdout + p.stderr, 3000))
     else:
@@ -755,11 +855,11 @@ def verify(wt: Path, base: str, report: str, only: set[str], py: str,
         base_sha = git(wt, "merge-base", base, "HEAD")
         table = {
             "identity": lambda: sec_identity(wt, commits),
-            "lint": lambda: sec_lint(wt, py),
+            "lint": lambda: sec_lint(wt, py, base_sha, scratch),
             "guardrails": lambda: sec_guardrails(wt, py),
             "tests": lambda: sec_tests(wt, py),
             "mutations": lambda: sec_mutations(wt, py, base_sha, spec),
-            "render": lambda: sec_render(wt, py, report, scratch),
+            "render": lambda: sec_render(wt, py, report, scratch, spec),
             "pty": lambda: sec_pty(wt, py, report, scratch),
         }
         for name in ALL[1:]:

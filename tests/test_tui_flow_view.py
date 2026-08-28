@@ -16,7 +16,9 @@ from kr_quant.tui.flow_view import (
 )
 
 
-from kr_quant.tui.flow_view import cell_width
+from kr_quant.tui.flow_view import (  # noqa: E402  대체안이 쓰는 이름
+    SORT_COL, _fit, cell_width, sort_span, table_cols,
+)
 
 
 def _w(text: str) -> int:
@@ -382,32 +384,72 @@ def test_detail_panel_shows_the_value_it_sorts_by(data):
         f"화면 순서와 금액 순서가 다르다: {amounts}")
 
 
-def test_sort_highlight_points_at_the_right_header(data):
-    """회귀 — 정렬 하이라이트가 실제 그 열의 헤더 칸을 가리켜야 한다.
+#: 표에 열이 없는 정렬키 — 하이라이트가 없는 게 정상이다.
+#: 새 열을 붙이면서 SORT_COL 배선을 잊으면 이 목록이 막는다.
+#: 표에 열이 없는 정렬키 — 하이라이트가 없는 게 정상이다. **이 목록이 곧 명세다.**
+#: 새 정렬키를 넣고 열을 안 만들면 여기 적어야 하고, 적지 않으면 검사가 잡는다.
+NO_COLUMN_SORTS = {"tv", "cap_idx"}
 
-    렌더와 하이라이트가 열 정의를 따로 갖고 있으면 조용히 어긋난다.
-    두 경로가 같은 table_cols() 를 쓰는지 결과로 검사한다.
+
+def test_every_sort_key_names_a_column_that_exists(data):
+    """회귀 — `SORT_COL` 의 값이 **실재하는 열 이름**인가.
+
+    헤더 이름을 한 글자만 바꿔도 조회가 끊긴다. 그러면 하이라이트가 사라질 뿐
+    열은 제자리라 폭 검사도, 헤더-셀 검사도 전부 초록이다. 아래 폭별 검사만으로는
+    "그 폭에 열이 없다" 와 구분이 안 되므로, **배선 자체**를 따로 못 박는다.
     """
-    from kr_quant.tui.flow_view import SORTS, SORT_COL, sort_span
-
     st = State(data)
-    for width in (80, 120, 140):
-        for si, (key, _label) in enumerate(SORTS):
-            st.si = si
-            st.wi = 1                       # 종합이 아닌 창
-            span = sort_span(st, width)
-            header_line = table_lines(st, width, 10)[0][0]
-            want = SORT_COL.get(key)
-            if span is None or want is None or want not in header_line:
-                continue                    # 그 폭에 열이 없으면 하이라이트도 없다
-            start, w = span
-            got, cell = "", 0
-            for ch in header_line:
-                if start <= cell < start + w:
-                    got += ch
-                cell += cell_width(ch)
-            assert want in got, f"정렬[{key}] 하이라이트가 '{got.strip()}' 를 가리킨다"
+    seen = set()
+    for width in (80, 100, 132, 150, 170, 200):
+        for wi in range(len(WINDOWS)):
+            st.wi = wi
+            seen |= {c.header for c in table_cols(st, width)}
+    for key, header in SORT_COL.items():
+        assert header in seen, (
+            f"SORT_COL[{key!r}]={header!r} 라는 열이 어느 폭에도 없다 — "
+            f"열 이름을 바꾸면서 배선을 안 고쳤나")
+    for key, _label in SORTS:
+        assert key in SORT_COL or key in NO_COLUMN_SORTS, (
+            f"정렬키 {key!r} 이 SORT_COL 에도 NO_COLUMN_SORTS 에도 없다")
 
+
+def test_sort_highlight_points_at_the_right_header(data):
+    st = State(data)
+    checked = 0
+    for width in (80, 100, 132, 150, 170):
+        for wi, w in enumerate(WINDOWS):
+            if w == "종합":
+                continue                      # 종합은 정렬 자체가 없다
+            st.wi = wi
+            for si, (key, label) in enumerate(SORTS):
+                st.si = si
+                # 폴백을 반영한 **실제** 정렬키를 본다 — 요청한 키가 아니다.
+                eff, _fell = st.effective_sort(st.rows())
+                cols = _fit(table_cols(st, width), width)
+                header = SORT_COL.get(eff)
+                span = sort_span(st, width)
+                head_line = table_lines(st, width, 10)[0][0]
+
+                if header is None:
+                    assert eff in NO_COLUMN_SORTS, (
+                        f"정렬키 {eff!r}({label}) 가 SORT_COL 에 없다 — "
+                        f"열을 붙이면서 배선을 잊었나")
+                    assert span is None, f"열이 없는 {eff!r} 를 하이라이트한다"
+                    continue
+                on_screen = any(c.header == header for c in cols)
+                if not on_screen:
+                    assert span is None, (
+                        f"폭{width}: 화면에 없는 열 {header!r} 를 하이라이트한다")
+                    continue
+                # 여기부터는 **반드시** 하이라이트가 있어야 한다.
+                assert span is not None, (
+                    f"폭{width}·창{w}: {header!r} 이 화면에 있는데 하이라이트가 "
+                    f"없다 — SORT_COL 배선이 끊겼나")
+                right = next(c.right for c in cols if c.header == header)
+                assert _slice(head_line, *span) == pad(header, span[1], right), (
+                    f"폭{width}·창{w}: 하이라이트가 {header!r} 칸을 안 가리킨다")
+                checked += 1
+    assert checked > 50, f"실제로 확인한 조합이 {checked}개뿐 — 검사가 헛돈다"
 
 def test_name_sort_highlight_matches_columns():
     from kr_quant.tui.flow_view import NAME_SORTS, NAME_SORT_COL, name_sort_span, names_cols
