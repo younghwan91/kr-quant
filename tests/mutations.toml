@@ -24,12 +24,15 @@
 # 사람이 코드를 봐야 갈린다.
 
 [[mutation]]
-id = "drop-accel-cell"
-why = "가속 셀을 통째로 빼면 그 뒤 열이 한 칸씩 밀린다 (행 폭은 그대로라 폭 검사는 초록)"
+id = "accel-cell-shows-wrong-field"
+why = """가속 열이 다른 값을 그린다. 예전 변이는 "가속 셀을 통째로 뺀다" 였는데,
+Col(header,width,right,fn) 로 헤더와 셀이 한 정의에서 나온 뒤로는 열을 빼도
+어긋나지 않고 그냥 사라진다 — **버그가 아니게 됐다.** 남은 위험은 어긋남이
+아니라 헤더가 말하는 것과 다른 값을 그리는 것이다."""
 guards = ["tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers"]
 file = "src/kr_quant/tui/flow_view.py"
-find = "pad(fmt_pct(r.get(\"accel\")), 9, True),"
-replace = ""
+find = "    Col(\"가속[%p]\", 9, True, _num(\"accel\")),"
+replace = "    Col(\"가속[%p]\", 9, True, _num(\"ret\")),"
 
 [[mutation]]
 id = "truncate-line-instead-of-dropping-column"
@@ -38,7 +41,7 @@ guards = ["tests/test_tui_flow_view.py::test_numbers_are_never_cut_mid_value_in_
 file = "src/kr_quant/tui/flow_view.py"
 find = """    out, used = [], 0
     for c in cols:
-        need = c[1] + (1 if out else 0)
+        need = c.width + (1 if out else 0)
         if out and used + need > width:
             break
         out.append(c)
@@ -51,16 +54,16 @@ id = "thin-marker-color-only"
 why = "얇은 섹터 경고를 글자에서 빼면 무색 터미널·색맹에서 통째로 사라진다"
 guards = ["tests/test_tui_flow_view.py::test_thin_sector_warning_survives_without_color"]
 file = "src/kr_quant/tui/flow_view.py"
-find = "pad(\"~\" if r.get(\"thin\") else (\"*\" if r.get(\"G_pass\") else \"\"), 1)]"
-replace = "pad(\"*\" if r.get(\"G_pass\") else \"\", 1)]"
+find = "\"~\" if r.get(\"thin\") else (\"*\" if r.get(\"G_pass\") else \"\")"
+replace = "(\"*\" if r.get(\"G_pass\") else \"\")"
 
 [[mutation]]
 id = "name-sort-reversed"
 why = "종목 정렬 방향을 뒤집는다 — 예전엔 뒤집어도 어떤 검사도 실패하지 않았다"
 guards = ["tests/test_tui_flow_view.py::test_stock_list_is_actually_sorted_by_the_chosen_key"]
 file = "src/kr_quant/tui/flow_view.py"
-find = "out.sort(key=lambda t: -(t.get(key) if t.get(key) is not None else -1e18))"
-replace = "out.sort(key=lambda t: (t.get(key) if t.get(key) is not None else -1e18))"
+find = """                                    abs(t["flow"]) * (1 if self.nrev else -1)"""
+replace = """                                    abs(t["flow"]) * (-1 if self.nrev else 1)"""
 
 [[mutation]]
 id = "sort-fallback-lies"
@@ -77,22 +80,20 @@ id = "ssh-zombie"
 why = "getch 가 준 ERR(-1) 을 아무 분기에도 안 태우면 끊긴 세션마다 100% CPU 좀비가 쌓인다"
 guards = ["tests/test_tui_smoke.py::test_app_exits_when_the_terminal_disappears"]
 file = "src/kr_quant/tui/flow_app.py"
-find = """        if k == -1:
-            return"""
-replace = """        if k == -1:
-            continue"""
+find = """    if k == -1:
+        return False"""
+replace = """    if k == -1:
+        return True"""
 
 [[mutation]]
 id = "esc-quits"
 why = "ESC 가 종료면 느린 SSH 에서 ↓ 를 눌렀을 뿐인데 앱이 끝난다(방향키가 쪼개져 온다)"
 guards = ["tests/test_tui_smoke.py::test_lone_escape_does_not_quit_the_main_screen"]
 file = "src/kr_quant/tui/flow_app.py"
-find = """        if k == ord("q"):
-            return
-        elif k in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord("l")):"""
-replace = """        if k in (ord("q"), 27):
-            return
-        elif k in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord("l")):"""
+find = """    if k == ord("q"):
+        return False"""
+replace = """    if k in (ord("q"), 27):
+        return False"""
 
 [[mutation]]
 id = "resize-closes-help"
@@ -103,15 +104,13 @@ guards = ["tests/test_tui_smoke.py::test_resize_does_not_silently_close_the_help
 # 한 곳만 바꾸면 "검사가 못 잡는다" 는 거짓 판정이 난다.
 [[mutation.edits]]
 file = "src/kr_quant/tui/flow_app.py"
-find = """        if k == curses.KEY_RESIZE:
-            continue"""
+find = """    if k == curses.KEY_RESIZE:
+        return True"""
 replace = ""
 [[mutation.edits]]
 file = "src/kr_quant/tui/flow_app.py"
-find = """            elif k in (ord("q"), 27, ord("?"), curses.KEY_ENTER, 10, 13):
-                st.help = False"""
-replace = """            else:
-                st.help = False"""
+find = """        elif k in (ord("q"), 27, ord("?"), curses.KEY_ENTER, 10, 13):"""
+replace = """        else:"""
 
 [[mutation]]
 id = "actor-mixing"
