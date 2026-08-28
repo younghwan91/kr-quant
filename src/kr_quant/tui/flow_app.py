@@ -40,8 +40,14 @@ def load(report_dir: str) -> dict:
 # 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
 C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK = range(1, 8)
 
+#: 색을 쓸 수 있는 터미널인가. curses.window 에는 속성을 붙일 수 없어서
+#: (`scr._colored = ...` 는 AttributeError) 모듈 수준으로 둔다.
+_COLORED = False
+
 
 def _init_colors() -> bool:
+    global _COLORED
+    _COLORED = False
     if not curses.has_colors():
         return False
     curses.start_color()
@@ -57,6 +63,7 @@ def _init_colors() -> bool:
     curses.init_pair(C_DIM, curses.COLOR_BLUE, bg)
     curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
     curses.init_pair(C_MARK, curses.COLOR_GREEN, bg)
+    _COLORED = True
     return True
 
 
@@ -86,7 +93,7 @@ def _draw(scr, st: State) -> None:
     h, w = scr.getmaxyx()
     w = max(w - 1, 20)
 
-    col = getattr(scr, "_colored", False)
+    col = _COLORED
     hdr = header_lines(st, w)
     for i, line in enumerate(hdr):
         base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
@@ -154,8 +161,11 @@ def pad_footer(text: str, width: int) -> str:
 
 
 def _loop(scr, data: dict) -> None:
-    curses.curs_set(0)
-    scr._colored = _init_colors()
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    _init_colors()
     st = State(data)
     while True:
         _draw(scr, st)
