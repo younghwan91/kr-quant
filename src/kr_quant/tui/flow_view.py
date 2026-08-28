@@ -214,7 +214,9 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
     # 상태를 없앤다(dW/dt·풀림으로 줄세워놓고 그 숫자가 화면에 없으면 읽을 수 없다).
     if width >= 132:
         cols += [("dW/dt", 8, True), ("풀림", 8, True)]
-    if wide:
+    if width >= 150:
+        cols += [("순매수상위", 17, False), ("순매도상위", 17, False)]
+    elif wide:
         cols += [("순매수상위", 22, False)]
     return cols
 
@@ -261,9 +263,15 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
             if width >= 132:
                 cells += [pad(fmt_pct(r.get("P"), 3), 8, True),
                           pad(fmt_pct(r.get("xddot"), 3), 8, True)]
-            if wide:
-                top = (r.get("top") or {}).get("buy") or []
-                cells.append(pad(", ".join(t["name"] for t in top[:2]), 22))
+            top = r.get("top") or {}
+            if width >= 150:
+                cells.append(pad(", ".join(t["name"] for t in (top.get("buy") or [])[:2]),
+                                 17))
+                cells.append(pad(", ".join(t["name"] for t in (top.get("sell") or [])[:2]),
+                                 17))
+            elif wide:
+                cells.append(pad(", ".join(t["name"] for t in (top.get("buy") or [])[:2]),
+                                 22))
         out.append(pad(" ".join(cells), width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
@@ -388,8 +396,10 @@ HELP = [
     ("", "        폭 132칸 이상에서 보인다. 좁으면 정렬만 되고 값은 안 보인다."),
     ("풀림", "미실현 x 가 해소되는 **가속**(ẍ). 구간을 셋으로 갈라 중앙차분한다."),
     ("", "        2차 차분이라 짧은 창(조각 6~7일)에서는 값이 흔들린다."),
-    ("순매수상위", "그 구간 기관 순매수가 가장 큰 종목. 표는 2개, 하단 패널은 3개 —"),
-    ("", "        **같은 목록을 자른 것**이다. 시총과 무관하다. Enter 로 전 종목."),
+    ("순매수상위", "그 섹터에서 기관이 **가장 많이 산** 종목(금액 기준)."),
+    ("순매도상위", "**가장 많이 판** 종목. 둘은 같은 목록의 위/아래 끝이다."),
+    ("", "        표는 2개, 하단 패널은 3개 — 같은 목록을 자른 것이고 시총과 무관하다."),
+    ("", "        순매도상위는 폭 150칸 이상에서 보인다. Enter 로 전 종목."),
     ("", ""),
     ("", "── 종목 목록 (Enter) ──"),
     ("순매수", "그 구간 기관 순매수 [억원]. **기본 정렬** — 섹터 합계가 금액의"),

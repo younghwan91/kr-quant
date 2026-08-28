@@ -39,6 +39,10 @@ def load(report_dir: str) -> dict:
 
 # 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
 C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK, C_SORT = range(1, 9)
+#: 정렬 열은 **열 전체**에 배경을 깔되 숫자 부호색은 유지한다. 배경 위에 부호색을
+#: 다시 칠하려면 (전경, 배경) 조합이 각각 별도 색쌍이어야 한다 — curses 는 색쌍
+#: 단위로만 칠해지므로 배경만 바꾸는 방법이 없다.
+C_SORT_BG, C_SORT_UP, C_SORT_DOWN = range(9, 12)
 
 #: 색을 쓸 수 있는 터미널인가. curses.window 에는 속성을 붙일 수 없어서
 #: (`scr._colored = ...` 는 AttributeError) 모듈 수준으로 둔다.
@@ -64,12 +68,16 @@ def _init_colors() -> bool:
     curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
     curses.init_pair(C_MARK, curses.COLOR_GREEN, bg)
     curses.init_pair(C_SORT, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(C_SORT_BG, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(C_SORT_UP, curses.COLOR_RED, curses.COLOR_BLUE)
+    curses.init_pair(C_SORT_DOWN, curses.COLOR_CYAN, curses.COLOR_BLUE)
     _COLORED = True
     return True
 
 
-def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) -> None:
-    """한 줄 그리기 — 숫자 구간만 부호색으로 덧칠한다.
+def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False,
+         sort_span_: "tuple[int, int] | None" = None) -> None:
+    """한 줄 그리기 — 정렬 열에 배경을 깔고, 숫자 구간은 부호색을 유지한다.
 
     선택행은 반전이라 덧칠하지 않는다(반전 위에 색을 얹으면 읽기 어렵다).
     """
@@ -79,10 +87,27 @@ def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) ->
         return
     if not colored or selected:
         return
+
+    def _in_sort(a: int, w: int) -> bool:
+        if not sort_span_:
+            return False
+        s0, s1 = sort_span_[0], sort_span_[0] + sort_span_[1]
+        return a >= s0 and a + w <= s1
+
+    # ① 정렬 열 전체에 배경
+    if sort_span_:
+        try:
+            scr.chgat(y, sort_span_[0], sort_span_[1], curses.color_pair(C_SORT_BG))
+        except curses.error:
+            pass
+    # ② 숫자·표시에 부호색 — 정렬 열 안이면 배경을 유지하는 색쌍을 쓴다
+    on_bg = {"up": C_SORT_UP, "down": C_SORT_DOWN, "mark": C_SORT_UP}
+    off_bg = {"up": C_UP, "down": C_DOWN, "mark": C_MARK}
     for start, width, role in color_spans(line):
-        attr = {"up": curses.color_pair(C_UP),
-                "down": curses.color_pair(C_DOWN),
-                "mark": curses.color_pair(C_MARK) | curses.A_BOLD}[role]
+        table = on_bg if _in_sort(start, width) else off_bg
+        attr = curses.color_pair(table[role])
+        if role == "mark":
+            attr |= curses.A_BOLD
         try:
             scr.chgat(y, start, width, attr | (base & curses.A_BOLD))
         except curses.error:
@@ -130,6 +155,7 @@ def _draw(scr, st: State) -> None:
     if st.drill:
         lines, nhead = names_lines(st, w)
         avail = h - top - 1
+        nspan = name_sort_span(st) if col else None
         body = lines[nhead:]
         rows_avail = max(avail - nhead, 1)
         first = max(0, min(st.drow - rows_avail // 2, len(body) - rows_avail))
@@ -145,9 +171,10 @@ def _draw(scr, st: State) -> None:
                 base = curses.color_pair(C_SEL) | curses.A_BOLD if col else curses.A_REVERSE
             else:
                 base = curses.A_NORMAL
-            _put(scr, top + i, line, base, col and i > 1, sel)
+            _put(scr, top + i, line, base, col and i > 1, sel,
+                 nspan if i > 1 else None)
             if i == 1:
-                _hl_sort(scr, top + i, name_sort_span(st), col)
+                _hl_sort(scr, top + i, nspan, col)
         _put(scr, h - 1, pad_footer(FOOTER_DRILL, w),
              curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
         scr.refresh()
@@ -160,6 +187,7 @@ def _draw(scr, st: State) -> None:
     first = max(0, min(st.row - rows_avail // 2, total - rows_avail))
     first = max(first, 0)
 
+    sspan = sort_span(st, w) if col else None
     _put(scr, top, lines[0],
          curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
     _hl_sort(scr, top, sort_span(st, w), col)
@@ -175,7 +203,7 @@ def _draw(scr, st: State) -> None:
         else:
             base = curses.A_NORMAL
         _put(scr, top + 1 + j, lines[idx + nhead], base,
-             col and not thin[idx + nhead], sel)
+             col and not thin[idx + nhead], sel, sspan)
 
     dtop = h - 4
     for i, line in enumerate(detail_lines(st, w)):
