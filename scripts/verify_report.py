@@ -204,6 +204,27 @@ def layer_d(D: dict, P: dict, html: str) -> None:
     """
     print("\nD. 부류 — 두 값이 같은 집합·시점에서 나오는가")
 
+    # ⓪ 화면이 그리는 키를 producer 가 실제로 싣는가.
+    #
+    # 이 저장소의 서명 같은 실패 모드다: producer 가 새 키를 조용히 빠뜨려도
+    # 화면은 `—` 로 예쁘게 뜨고 아무도 모른다. 열이 있는데 전부 결측인 것과
+    # 열이 아예 없는 것은 화면에서 구분되지 않는다.
+    #
+    # 새 열을 추가하면 **여기에 키를 등록하라.** 등록을 잊으면 그 열은
+    # 조용히 빈 채로 매일 나온다.
+    RENDERED_KEYS = ("inst", "forgn", "indiv", "etc",     # 주체 토글이 쓰는 넷
+                     "accel", "pct1y", "spark", "x", "U", "P", "xddot",
+                     "G", "ret", "cap", "n_all", "top")
+    for bk, b in (D.get("blocks") or {}).items():
+        rows = b.get("rows") or []
+        if not rows:
+            continue
+        missing = [k for k in RENDERED_KEYS
+                   if not any(k in r for r in rows)]
+        chk("D", f"{bk} 화면이 그리는 키가 페이로드에 있는가",
+            not missing, f"없는 키 {missing}" if missing else "")
+        break        # 블록 구조는 동일하다 — 하나만 봐도 producer 누락은 잡힌다
+
     # ① 분모의 **시점**: 월별 시총이 구간말 월을 덮는가
     cbm = P.get("cap_by_month", {})
     if cbm:

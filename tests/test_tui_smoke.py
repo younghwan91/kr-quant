@@ -238,7 +238,9 @@ def test_resize_does_not_silently_close_the_help_screen():
             time.sleep(0.6)
             # 도움말이 살아 있어야만 닿는 지점으로 판별한다 — 끝까지 스크롤하면
             # 마지막 줄이 나온다. 닫혔다면 j 는 섹터 행을 움직일 뿐이다.
-            os.write(primary, b"j" * 40)
+            # 스크롤 횟수를 상수로 박으면 HELP 가 길어질 때 무관한 이유로 깨진다.
+            from kr_quant.tui.flow_view import help_lines
+            os.write(primary, b"j" * (help_lines(80, 0, 10**6)[1] + 5))
             time.sleep(0.6)
             os.write(primary, b"q")                      # 도움말 닫기
             time.sleep(0.3)
