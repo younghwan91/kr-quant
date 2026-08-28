@@ -217,17 +217,44 @@ def test_help_covers_every_rendered_column(data):
     """
     from kr_quant.tui.flow_view import HELP, table_lines
 
+    import re as _re
+
     documented = {name for name, _ in HELP if name}
     st = State(data)
     missing = set()
     for wi in range(len(WINDOWS)):
         st.wi = wi
-        lines, _thin, _nh = table_lines(st, 132, 20)
-        for h in lines[0].split():
-            if h and h not in documented and h not in {"섹터", "통과", "일"} \
-               and not h.endswith("일"):
+        for width in (80, 120, 160):
+            lines, _thin, _nh = table_lines(st, width, 20)
+            for h in lines[0].split():
+                if not h or h in documented:
+                    continue
+                if _re.fullmatch(r"\d+일G", h):     # 종합의 창별 G — "N일G" 로 설명
+                    continue
                 missing.add(h)
     assert not missing, f"도움말에 없는 열: {sorted(missing)}"
+
+
+def test_headers_are_not_truncated_by_their_column_width(data):
+    """회귀 — 헤더가 열 폭에 안 들어가면 조용히 잘린다.
+
+    실제로 "종목수" 가 폭 5칸에서 "종목" 으로 잘렸고, 도움말 대조 테스트가
+    엉뚱하게 실패해서야 드러났다. 잘린 헤더는 뜻이 바뀐다.
+    """
+    from kr_quant.tui.flow_view import names_cols, table_cols
+
+    st = State(data)
+    bad = []
+    for wi in range(len(WINDOWS)):
+        st.wi = wi
+        for width in (80, 120, 160):
+            for name, w, _r in table_cols(st, width):
+                if name and _w(name) > w:
+                    bad.append(f"{name}({_w(name)}칸) > 열폭 {w}")
+    for name, w, _r in names_cols():
+        if name and _w(name) > w:
+            bad.append(f"[종목목록] {name}({_w(name)}칸) > 열폭 {w}")
+    assert not bad, "헤더가 잘린다: " + "; ".join(sorted(set(bad)))
 
 
 def test_help_labels_align_in_display_cells():
