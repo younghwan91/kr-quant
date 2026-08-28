@@ -318,7 +318,8 @@ def test_help_labels_align_in_display_cells():
     for (name, desc), line in zip(HELP, lines[1:]):
         if not name or not desc:
             continue
-        idx = line.find(desc[:6])
+        # 렌더는 소스의 **강조** 표기를 뗀다(화면에 나갈 글자가 아니다).
+        idx = line.find(desc.replace("**", "")[:6])
         assert idx > 0, f"설명문을 못 찾았다: {name}"
         starts.add(sum(cell_width(c) for c in line[:idx]))
     assert len(starts) == 1, f"설명문 시작 칸이 섞였다: {sorted(starts)}"
@@ -961,3 +962,47 @@ def test_spark_segments_sum_back_to_the_impulse():
     # 마지막 조각은 **가장 최근** 날들이다
     segs = m.spark_segs(ser, 80, 99)
     assert abs(segs[-1] - sum(ser[97:100])) < 1e-9 or segs[-1] > segs[0]
+
+
+def test_help_screen_shows_no_markdown_asterisks():
+    """회귀 — 소스의 **강조** 는 읽는 사람 눈에 띄라고 쓴 표기지 화면에
+    나갈 글자가 아니다. 힌트바는 떼는데 모달은 안 떼서 `**닫기만**` 이
+    그대로 보였다 — 같은 일을 하는 두 경로 중 하나에만 처리가 있었다."""
+    from kr_quant.tui.flow_view import HELP, help_lines
+
+    assert any("**" in d for _n, d in HELP), "소스에 강조가 없다 — 검사가 헛돈다"
+    lines, _ = help_lines(120, 0, 10**6)
+    # 홑별표는 진짜다 — 표의 통과 마커(*)를 설명하는 글자다. 겹별표만 본다.
+    bad = [ln.strip() for ln in lines if "**" in ln]
+    assert not bad, f"도움말에 마크다운 강조가 그대로 나온다: {bad[:3]}"
+
+
+def test_help_title_fits_every_width():
+    """회귀 — 제목이 85칸이라 80칸(SSH 기본)에서 단어 중간에 잘렸다.
+    푸터에 만든 단계 기법을 이 줄에도 쓴다."""
+    from kr_quant.tui.flow_view import help_lines
+
+    for width in range(20, 130, 2):
+        title = help_lines(width, 0, 5)[0][0].rstrip()
+        assert sum(cell_width(c) for c in title) <= width
+        assert "q" in title, f"폭{width} 에서 닫는 키가 사라졌다: {title!r}"
+
+
+def test_hint_bar_fits_the_width_it_is_given(data):
+    """회귀 — 힌트바가 head 만 폭을 보고 설명 문장은 안 봐서, 폭 40 에서
+    78칸짜리 문장이 나와 `pad` 가 단어 중간에서 잘랐다. 푸터에는 단계를
+    만들어 놓고 정작 새로 만든 힌트바에는 안 쓴 셈이었다.
+
+    그 검사는 늘 기본값 width=200 으로만 불러서 좁은 폭을 한 번도 안 봤다.
+    """
+    from kr_quant.tui.flow_app import hint_text
+
+    st = State(data)
+    for width in range(30, 160, 5):
+        for si in range(len(SORTS)):
+            st.si = si
+            for drill in (False, True):
+                st.drill = drill
+                got = hint_text(st, width)
+                assert sum(cell_width(c) for c in got) <= width, (
+                    f"폭{width}·정렬{si}·드릴{drill} 에서 힌트바가 넘친다: {got!r}")
