@@ -311,6 +311,19 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
     return cols
 
 
+def _fit(cols: list[tuple[str, int, bool]], width: int) -> list[tuple[str, int, bool]]:
+    """폭에 **온전히** 들어가는 열까지만 남긴다. 첫 열은 잘려도 남긴다
+    (섹터 이름은 잘려도 뜻이 남지만, 숫자는 잘리면 다른 값이 된다)."""
+    out, used = [], 0
+    for c in cols:
+        need = c[1] + (1 if out else 0)
+        if out and used + need > width:
+            break
+        out.append(c)
+        used += need
+    return out
+
+
 def col_span(cols: list[tuple[str, int, bool]], header: str) -> tuple[int, int] | None:
     """열 헤더의 (시작 표시칸, 폭). 열 사이 공백 1칸을 더해가며 센다."""
     cell = 0
@@ -327,6 +340,10 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
     wide = width >= 100
     wins = (st.d.get("combined", {}).get(st.market) or {}).get("windows", [])
 
+    # 폭이 모자라면 **열 경계에서** 떨어뜨린다. 줄을 통째로 잘라내면 숫자가
+    # 자릿수 중간에서 끊겨 -1,360 이 -1 로 보인다 — 안 보이는 것보다 나쁘다.
+    cols = _fit(cols, width)
+    ncol = len(cols)
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(head, width)]
     thin = [False]
@@ -336,7 +353,10 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                  pad(str(r.get("n_all", "—")), 8, True),
                  pad(f"{r['G']:.2f}" if r.get("G") is not None else "—", 7, True),
                  # 마커는 **별도 1칸 열**이다. 값에 붙이면 ● 가 2칸이라 열이 밀린다.
-                 pad("*" if r.get("G_pass") else "", 1)]
+                 # 얇은 섹터(~)는 글자로도 표시한다 — 색에만 실으면 무색
+                 # 터미널·색맹에서 경고가 통째로 사라진다(파랑은 검은 바탕에서
+                 # 8색 중 대비가 가장 나쁘고, A_DIM 을 무시하는 터미널도 많다).
+                 pad("~" if r.get("thin") else ("*" if r.get("G_pass") else ""), 1)]
         if st.window == "종합":
             per = r.get("per", {})
             for w in wins:
@@ -370,7 +390,7 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                 cells.append(pad(_lead("buy"), 23))
             if width >= 150:
                 cells.append(pad(_lead("sell"), 23))
-        out.append(pad(" ".join(cells), width))
+        out.append(pad(" ".join(cells[:ncol]), width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
 
@@ -381,7 +401,7 @@ def sort_span(st: State, width: int) -> tuple[int, int] | None:
         return None
     key, _fell = st.effective_sort(st.rows())
     header = SORT_COL.get(key)
-    return col_span(table_cols(st, width), header) if header else None
+    return col_span(_fit(table_cols(st, width), width), header) if header else None
 
 
 def names_cols() -> list[tuple[str, int, bool]]:
@@ -424,7 +444,8 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     names = st.names()
     title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
              f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
-    cols = names_cols()
+    cols = _fit(names_cols(), width)
+    ncol = len(cols)
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(title, width), pad(head, width)]
     for t in names:
@@ -437,7 +458,7 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
             pad(fmt_amt(t.get("cap")).replace("+", "") if t.get("cap") else "—",
                 13, True),
             pad(fmt_amt(t.get("tv")).replace("+", ""), 13, True),
-        ]), width))
+        ][:ncol]), width))
     if not names:
         out.append(pad("  (이 시장·섹터에 대표종목이 없다)", width))
     return out, 2
@@ -521,7 +542,7 @@ HELP = [
 
 def help_lines(width: int, offset: int, height: int) -> tuple[list[str], int]:
     """도움말 화면 — (행, 전체 줄 수). offset 부터 height 줄을 낸다."""
-    out = [pad(" 열의 뜻 — ↑↓ 스크롤 · 아무 키나 누르면 닫힘", width)]
+    out = [pad(" 열의 뜻 — ↑↓ 스크롤 · q·Esc·?·Enter 로 닫기", width)]
     body = []
     for name, desc in HELP:
         # ⚠️ f"{name:>9}" 는 **문자 폭**이라 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)가

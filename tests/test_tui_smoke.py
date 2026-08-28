@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 import pytest
 
@@ -124,3 +125,132 @@ def test_app_survives_small_and_large_terminals(lines, cols):
                     + ";\n</script>")
         rc, _screen, err = _run_tui(d, b"wmas?\x1b\n\x1bq", lines=lines, cols=cols)
         assert rc == 0, err[-1500:]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_app_exits_when_the_terminal_disappears():
+    """회귀 — SSH 가 끊기면(=pty 가 사라지면) 앱이 나가야 한다.
+
+    getch() 가 ERR(-1) 을 즉시 돌려주는데 이걸 아무 분기에도 안 태우면
+    draw→getch→-1 로 **100% CPU 를 태우며 영원히 돈다**. 실측 3초에 CPU
+    299틱(99.7%), SIGKILL 로만 죽었다. 끊긴 세션마다 서버에 좀비가 쌓인다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + json.dumps(MINIMAL, ensure_ascii=False)
+                    + ";\n</script>")
+        primary, replica = pty.openpty()
+        env = {**os.environ, "TERM": "xterm-256color", "LINES": "24", "COLUMNS": "100"}
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+            stdin=replica, stdout=replica, stderr=subprocess.DEVNULL, env=env)
+        os.close(replica)
+        # 배수 스레드를 쓰지 않는다 — 읽는 중에 같은 fd 를 닫으면 경합이라
+        # 앱이 아니라 테스트 쪽 사정으로 프로세스가 끝날 수 있다.
+        time.sleep(0.5)                        # 한 번은 그리게 둔다
+        os.close(primary)                      # 터미널이 사라진다
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            ticks = "?"
+            try:
+                st = open(f"/proc/{proc.pid}/stat").read().split()
+                ticks = int(st[13]) + int(st[14])
+            except OSError:
+                pass
+            proc.kill()
+            proc.communicate()
+            pytest.fail(f"터미널이 사라졌는데 앱이 계속 돈다 — CPU 좀비 ({ticks} 틱)")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_lone_escape_does_not_quit_the_main_screen():
+    """회귀 — 느린 SSH 에서 방향키는 ESC 와 나머지로 쪼개져 도착한다
+    (ESCDELAY 기본 1초). ESC 가 종료면 ↓ 를 눌렀을 뿐인데 앱이 끝난다."""
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + json.dumps(MINIMAL, ensure_ascii=False)
+                    + ";\n</script>")
+        # ESC 로 끝나버리면 그 뒤의 `?` 가 앱에 닿지 않아 도움말이 안 그려진다.
+        # 첫 그림에도 있는 문자열로는 구분이 안 되므로 도움말 전용 문구를 본다.
+        rc, screen, err = _run_tui(d, b"\x1b\x1b\x1b" b"?" b"q" b"q")
+        assert rc == 0, err[-1500:]
+        assert "섹터 표" in screen, (
+            "ESC 뒤에 앱이 이미 죽어서 도움말이 안 떴다")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+@pytest.mark.parametrize("payload,expect", [
+    ('{"asof": "2026-08-28"}', "blocks"),          # blocks 없음
+    ('{"asof": "x", "blocks": nope}', "JSON"),     # 정규식은 맞고 JSON 이 깨짐
+])
+def test_broken_report_says_what_is_wrong(payload, expect):
+    """회귀 — 예전엔 curses 안에서 생 트레이스백으로 터졌다."""
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + payload + ";\n</script>")
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+            capture_output=True, text=True)
+        assert proc.returncode != 0
+        msg = proc.stdout + proc.stderr
+        assert expect in msg, msg[-800:]
+        assert "Traceback" not in msg, f"생 트레이스백이 나왔다:\n{msg[-800:]}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_resize_does_not_silently_close_the_help_screen():
+    """회귀 — 도움말을 연 채 창 크기를 바꾸면 도움말이 소리 없이 닫혔다.
+
+    ncurses 가 KEY_RESIZE 를 키처럼 주는데, 도움말 분기의 `else: help=False`
+    가 그걸 "아무 키" 로 먹었다. 리사이즈는 키가 아니다.
+    """
+    import fcntl
+    import signal
+    import struct
+    import termios
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + json.dumps(MINIMAL, ensure_ascii=False)
+                    + ";\n</script>")
+        primary, replica = pty.openpty()
+        fcntl.ioctl(replica, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        env = {**os.environ, "TERM": "xterm-256color"}
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+            stdin=replica, stdout=replica, stderr=subprocess.PIPE, env=env)
+        os.close(replica)
+        screen: list[str] = []
+        t = threading.Thread(target=_drain(screen), args=(primary,), daemon=True)
+        t.start()
+        try:
+            os.write(primary, b"?")                      # 도움말 열기
+            time.sleep(0.4)
+            fcntl.ioctl(primary, termios.TIOCSWINSZ,     # 창 크기 변경
+                        struct.pack("HHHH", 20, 70, 0, 0))
+            # ioctl 만으로는 자식에게 SIGWINCH 가 안 간다(실측: KEY_RESIZE 미도달).
+            # 신호를 직접 보내야 ncurses 가 410 을 준다.
+            proc.send_signal(signal.SIGWINCH)
+            time.sleep(0.6)
+            # 도움말이 살아 있어야만 닿는 지점으로 판별한다 — 끝까지 스크롤하면
+            # 마지막 줄이 나온다. 닫혔다면 j 는 섹터 행을 움직일 뿐이다.
+            os.write(primary, b"j" * 40)
+            time.sleep(0.6)
+            os.write(primary, b"q")                      # 도움말 닫기
+            time.sleep(0.3)
+            os.write(primary, b"q")                      # 앱 종료
+            _out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            os.close(primary)
+            pytest.fail("종료하지 않았다")
+        os.close(primary)
+        t.join(timeout=2)
+        assert proc.returncode == 0, err.decode("utf-8", "replace")[-1000:]
+        assert "섹터 표" in screen[0], "도움말이 아예 안 떴다"
+        assert "관망" in screen[0], "리사이즈에 도움말이 닫혀 끝까지 못 내려갔다"

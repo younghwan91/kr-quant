@@ -313,9 +313,11 @@ def test_table_and_detail_show_the_same_top_names(data):
     """
     st = State(data)
     st.row = 0
-    lines, _thin, nhead = table_lines(st, 132, 20)
+    # 폭이 모자라면 상위종목 열은 (잘리지 않고) 통째로 빠지므로 넉넉한 폭에서 본다.
+    width = 170
+    lines, _thin, nhead = table_lines(st, width, 20)
     row_line = lines[nhead + st.row]
-    detail = detail_lines(st, 132)[1]          # '순매수 상위' 줄
+    detail = detail_lines(st, width)[1]        # '순매수 상위' 줄
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
     # 표는 1위만, 하단 패널은 상위 3을 보여준다 — 1위는 반드시 일치해야 한다.
     assert top, "상위 종목이 비었다"
@@ -515,3 +517,45 @@ def test_stock_list_is_actually_sorted_by_the_chosen_key(data):
         got = [v for v in vals if v is not None]
         want = sorted(got) if key == "name" else sorted(got, reverse=True)
         assert got == want, f"정렬[{label}] 이 {key} 순이 아니다: {got}"
+
+
+def test_numbers_are_never_cut_mid_value_in_narrow_terminals(data):
+    """회귀 — 좁은 폭에서 숫자가 자릿수 중간에서 잘리면 **틀린 값**이 된다.
+
+    실측된 증상: 40칸에서 `-1,360` 이 `-1` 로 보였다. 줄을 통째로 자르는 대신
+    열 경계에서 떨어뜨려야 한다. 안 보이는 것보다 틀리게 보이는 게 나쁘다.
+    """
+    from kr_quant.tui.flow_view import col_span, table_cols
+
+    st = State(data)
+    for width in range(20, 90, 3):
+        cols = table_cols(st, width)
+        lines, _thin, nhead = table_lines(st, width, 20)
+        for r, line in zip(st.rows(), lines[nhead:]):
+            for hdr, val in (("임펄스[억]", fmt_amt(r.get("flow"))),
+                             ("가속[%p]", fmt_pct(r.get("accel")))):
+                span = col_span(cols, hdr)
+                if span is None:
+                    continue                      # 이 폭에선 정의되지 않은 열
+                # 열이 폭 안에 온전히 들어가면 값이 정확해야 하고, 안 들어가면
+                # **아무것도 안 보여야** 한다. 반쪽 숫자는 다른 값이 된다.
+                # (여기서 `continue` 로 넘기면 검사가 바로 그 경우를 놓친다.)
+                got = _slice(line, span[0], min(span[1], max(width - span[0], 0)))
+                if span[0] + span[1] <= width:
+                    assert got.strip() == val.strip(), (
+                        f"폭{width} 의 '{hdr}' 이 {val!r} 대신 {got!r}")
+                else:
+                    assert not got.strip(), (
+                        f"폭{width} 에서 '{hdr}' 이 {got!r} 로 잘려 보인다 "
+                        f"(참값 {val!r}) — 열째로 떨어뜨려야 한다")
+
+
+def test_thin_sector_warning_survives_without_color(data):
+    """회귀 — 얇은 섹터(종목 10개 미만) 경고가 색에만 실려 있으면
+    무색 터미널·색맹에서 통째로 사라진다. 글자로도 남아야 한다."""
+    st = State(data)
+    lines, thin, nhead = table_lines(st, 170, 20)
+    marked = [ln for ln, t in zip(lines[nhead:], thin[1:]) if t]
+    assert marked, "픽스처에 얇은 섹터가 없다 — 이 검사가 헛돈다"
+    for ln in marked:
+        assert "~" in ln, f"얇은 섹터인데 글자 표시가 없다: {ln.strip()!r}"

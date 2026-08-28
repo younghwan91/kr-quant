@@ -34,7 +34,18 @@ def load(report_dir: str) -> dict:
     m = re.search(r"const D = (\{.*?\});\n", html, re.S)
     if not m:
         raise SystemExit(f"{path} 에서 데이터를 못 읽었다 — 리포트 형식이 바뀌었나?")
-    return json.loads(m.group(1))
+    # 아래 두 갈래는 예전엔 curses 안에서 생 트레이스백으로 터졌다. 방어가 행
+    # 수준(.get)에만 있고 문서 수준에는 없었다.
+    try:
+        d = json.loads(m.group(1))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{path} 의 JSON 이 깨졌다 ({e.lineno}행 {e.colno}칸): {e.msg}\n"
+                         f"  리포트를 다시 생성하라 — scripts/daily_report.sh") from None
+    missing = [k for k in ("asof", "blocks") if not d.get(k)]
+    if missing:
+        raise SystemExit(f"{path} 의 데이터에 {', '.join(missing)} 가 없다 — "
+                         f"리포트 형식이 바뀌었나?\n  있는 키: {sorted(d)}")
+    return d
 
 
 # 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
@@ -108,7 +119,7 @@ def _hl_sort(scr, y: int, span, col: bool) -> None:
 def _draw(scr, st: State) -> None:
     scr.erase()
     h, w = scr.getmaxyx()
-    w = max(w - 1, 20)
+    w = max(w - 1, 1)
 
     col = _COLORED
 
@@ -213,6 +224,14 @@ def _loop(scr, data: dict) -> None:
             k = scr.getch()
         except KeyboardInterrupt:
             return
+        # 터미널이 사라지면(SSH 끊김·창 닫힘) getch 가 ERR 을 **즉시** 돌려준다.
+        # 이걸 아무 분기에도 안 태우면 draw→getch→-1 로 100% CPU 를 태우며
+        # 영원히 돈다 — 끊긴 세션마다 서버에 좀비가 쌓인다. less·htop 처럼 나간다.
+        if k == -1:
+            return
+        # 리사이즈는 "아무 키" 가 아니다. 그냥 통과시키면 도움말이 소리 없이 닫힌다.
+        if k == curses.KEY_RESIZE:
+            continue
         n = max(len(st.rows()), 1)
         if st.help:
             total = len(help_lines(80, 0, 10**6)[0]) - 1
@@ -224,7 +243,7 @@ def _loop(scr, data: dict) -> None:
                 st.hrow = min(st.hrow + 10, max(total - 5, 0))
             elif k == curses.KEY_PPAGE:
                 st.hrow = max(st.hrow - 10, 0)
-            else:
+            elif k in (ord("q"), 27, ord("?"), curses.KEY_ENTER, 10, 13):
                 st.help = False
             continue
         if k in (ord("?"), ord("h")) and not st.drill:
@@ -251,7 +270,9 @@ def _loop(scr, data: dict) -> None:
             elif k == curses.KEY_PPAGE:
                 st.drow = max(st.drow - 10, 0)
             continue
-        if k in (ord("q"), 27):
+        # ESC 는 종료가 아니다. 느린 SSH 에서 방향키가 ESC 와 나머지로 쪼개져
+        # 도착하면(ESCDELAY 기본 1초) ↓ 를 눌렀을 뿐인데 앱이 끝난다. 종료는 q.
+        if k == ord("q"):
             return
         elif k in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord("l")):
             st.drill = True
