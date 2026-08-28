@@ -27,3 +27,6 @@ dist/
 # BO 생성 산물(과최적 파라미터 — 커밋 안 함). 중첩 경로 포함.
 research/**/bo_best_params.json
 research/bo_best_params.json
+
+# 에이전트용 레포 복사본 — 커밋 대상이 아니다
+.claude/worktrees/

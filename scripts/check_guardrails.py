@@ -61,9 +61,16 @@ _IMPORT_RESEARCH = re.compile(r"^\s*(?:import\s+research\b|from\s+research\b)")
 _LITERAL_VERDICT = re.compile(r"""(?<![#])["'](PASS|FAIL|PASSED|FAILED)["']""")
 
 
+#: 스캔에서 뺄 디렉터리. `.claude/worktrees` 는 에이전트용 **레포 복사본**이라
+#: 그냥 두면 같은 위반이 두 번 세어지고, 남의 작업 중인 코드로 CI 가 깨진다.
+_SKIP_DIRS = {"__pycache__", ".venv", "node_modules", ".claude", ".git"}
+
+
 def _iter_py(root: Path):
     for p in sorted(root.rglob("*.py")):
-        if "__pycache__" in p.parts:
+        # **루트 기준** 상대경로로 판단한다. 절대경로를 보면 레포가
+        # `.claude/...` 아래 놓였을 때 스캔이 통째로 조용히 비어버린다.
+        if _SKIP_DIRS & set(p.relative_to(root).parts):
             continue
         yield p
 

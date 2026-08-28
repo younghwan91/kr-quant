@@ -14,13 +14,18 @@ WINDOWS = ("5", "20", "60", "120", "종합")
 # 종목 목록은 **절대 순매수 금액** 순이다 — 섹터 합계가 금액의 합이므로 기여도는
 # 금액으로만 정의된다. 시총 대비는 참고 열. (시총 대비로 줄세웠더니 스팩이 1위가
 # 됐고, 그걸 막으려 유동성 하한을 넣었더니 작은 섹터가 통째로 비었다.)
+MARKET_ORDER = ("거래소", "코스닥")
+
+#: k·b 가 기관 유입에 회귀해 나온 값들. 다른 주체로는 재계산할 수 없다.
+INST_ONLY = ("exp", "x", "U", "P", "xdot", "xddot", "G", "G_pass")
+
 ACTORS = (("inst", "기관"), ("forgn", "외국인"), ("indiv", "개인"), ("etc", "기타법인"))
-SORTS = (("G", "성장"), ("inst", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
+SORTS = (("G", "성장"), ("flow", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
          ("x", "미실현"), ("U", "포텐셜"), ("P", "dW/dt"), ("xddot", "풀림"),
          ("tv", "거래대금"), ("cap_idx", "시총"), ("n_all", "종목수"))
 #: 종목 목록의 정렬. 기본은 **절대 순매수** — 섹터 합계가 금액의 합이므로
 #: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
-NAME_SORTS = (("inst", "순매수"), ("a", "시총대비"), ("cap", "시총"),
+NAME_SORTS = (("flow", "순매수"), ("a", "시총대비"), ("cap", "시총"),
               ("tv", "거래대금"), ("name", "종목명"))
 
 
@@ -70,8 +75,11 @@ class State:
 
     def __init__(self, data: dict):
         self.d = data
-        self.markets = ["전체"] + list(
-            {k.split("|")[1] for k in data["blocks"]} - {"전체"})
+        seen = {k.split("|")[1] for k in data["blocks"]} - {"전체"}
+        # set 순서는 PYTHONHASHSEED 마다 다르다. "m 두 번 = 코스닥" 손버릇이
+        # 어느 날 조용히 깨지므로 고정 순서로 둔다.
+        self.markets = ["전체"] + [m for m in MARKET_ORDER if m in seen] + \
+            sorted(seen - set(MARKET_ORDER))
         self.wi = WINDOWS.index("20") if "20" in WINDOWS else 0
         self.mi = 0
         self.ai = 0
@@ -120,14 +128,65 @@ class State:
         self.row = 0
 
     # --- 데이터 ---
+    def _project(self, r: dict) -> dict:
+        """행을 **선택된 주체 기준으로** 다시 쓴다.
+
+        예전엔 임펄스 열만 주체를 따르고 가속·견인주·종목목록은 기관 값이
+        그대로 남아, 한 행 안에 두 주체의 숫자가 섞였다. 정렬키도 문자열
+        "inst" 라 외국인 화면에서 임펄스 열이 단조가 아니었다.
+
+        k·b 는 기관 유입에 회귀한 것이라 x·U·P·ẍ·G 는 주체를 바꿔도
+        재계산할 수 없다. 지우지 않고 남기되 헤더에 (기관) 을 붙여
+        출처를 분리한다 — 값이 틀린 게 아니라 다른 주체의 값이다.
+        """
+        a = self.actor
+        flow = r.get(a)
+        cap = r.get("cap")
+        out = dict(r)
+        out["flow"] = flow
+        out["accel"] = (flow / cap * 100) if (cap and flow is not None) else None
+        out["top"] = self._leads().get(r.get("sector"))
+        return out
+
+    def _leads(self) -> dict:
+        """섹터 → 그 주체의 순매수/순매도 1위. 표의 견인주가 종목 목록과
+        같은 집합에서 나오도록 `names` 에서 직접 뽑는다(페이로드의 top 은
+        기관 전용이고 집계 대상도 미묘하게 달랐다)."""
+        win = self.window if self.window != "종합" else "20"
+        ck = (win, self.market, self.actor)
+        if getattr(self, "_lead_ck", None) == ck:
+            return self._lead_v
+        mkts = [self.market] if self.market != "전체" else self.markets[1:]
+        best: dict = {}
+        for code, nm in (self.d.get("names") or {}).items():
+            if nm.get("market") not in mkts:
+                continue
+            w = (nm.get("win") or {}).get(win)
+            if not w:
+                continue
+            v = w.get(self.actor)
+            if v is None:
+                continue
+            best.setdefault(nm.get("sector"), []).append(
+                {"code": code, "name": nm.get("name", "—"), "flow": v})
+        out = {}
+        for sec, arr in best.items():
+            arr.sort(key=lambda t: -t["flow"])
+            out[sec] = {"buy": arr[:3], "sell": arr[::-1][:3], "n": len(arr)}
+        self._lead_ck, self._lead_v = ck, out
+        return out
+
     def rows(self) -> list[dict]:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
-            return list(c["rows"]) if c else []
+            if not c:
+                return []
+            leads = self._leads()
+            return [dict(r, top=leads.get(r.get("sector"))) for r in c["rows"]]
         b = self.d["blocks"].get(f"{self.window}|{self.market}")
         if not b:
             return []
-        rows = list(b["rows"])
+        rows = [self._project(r) for r in b["rows"]]
         key = self.sort_key
         def val(r):
             v = r.get(key)
@@ -169,8 +228,8 @@ class State:
                 continue
             cap = nm.get("cap")
             out.append({"code": code, "name": nm.get("name", "—"),
-                        "inst": w.get("inst"), "tv": w.get("tv"), "cap": cap,
-                        "a": (w["inst"] / cap * 100) if cap else None})
+                        "flow": w.get(self.actor), "tv": w.get("tv"), "cap": cap,
+                        "a": ((w.get(self.actor) or 0) / cap * 100) if cap else None})
         key = self.name_sort
         if key == "name":
             out.sort(key=lambda t: t["name"])
@@ -185,15 +244,17 @@ def header_lines(st: State, width: int) -> list[str]:
     l1 = f" 섹터 자금 흐름 · {d['asof']} {chip}"
     l2 = (f" 구간[{st.window}] 시장[{st.market}] 주체[{ACTORS[st.ai][1]}]"
           f" 정렬[{SORTS[st.si][1]}]")
+    if st.actor != "inst" and st.window != "종합":
+        l2 += "  ※ 미실현·포텐셜·dW/dt·풀림·G 는 기관 기준"
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
 
 
 #: 정렬 키 → 그 열의 헤더 이름. 하이라이트할 열을 찾는 데 쓴다.
-SORT_COL = {"G": "G[0~1]", "inst": "임펄스[억]", "accel": "가속[%p]",
+SORT_COL = {"G": "G[0~1]", "flow": "임펄스[억]", "accel": "가속[%p]",
             "ret": "수익률[%]",
             "x": "미실현[%p]", "U": "포텐셜[½kx²]", "P": "dW/dt[%p/일]",
             "xddot": "풀림[%p/일²]", "n_all": "종목[수]"}   # 거래대금·시총은 표에 열이 없어 하이라이트 대상이 아니다
-NAME_SORT_COL = {"inst": "순매수[억]", "a": "시총대비[%p]", "cap": "시총[억]",
+NAME_SORT_COL = {"flow": "순매수[억]", "a": "시총대비[%p]", "cap": "시총[억]",
                  "tv": "거래대금[억]", "name": "종목"}
 
 
@@ -259,7 +320,7 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                 cells.append(pad(f"{v:.2f}" if v is not None else "—", 8, True))
             cells.append(pad(f"{r.get('pass_n',0)}/{r.get('seen',0)}", 8, True))
         else:
-            cells += [pad(fmt_amt(r.get(st.actor if st.actor != 'inst' else 'inst')), 12, True),
+            cells += [pad(fmt_amt(r.get("flow")), 12, True),
                       pad(fmt_pct(r.get("accel")), 9, True),
                       pad(fmt_pct(r.get("ret")), 10, True)]
             if wide:
@@ -274,12 +335,12 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
             def _lead(side: str) -> str:
                 """이름 13칸 + 금액 7칸(우측정렬). 이름 길이가 제각각이라
                 그냥 이어붙이면 금액이 줄마다 다른 칸에 떨어진다."""
-                arr = top.get(side) or []
-                if not arr:
+                arr = (top or {}).get(side) or []
+                t = arr[0] if arr else None
+                if not t:
                     return pad("—", 13) + " " + pad("", 9, right=True)
-                t = arr[0]
                 return (pad(t["name"], 13) + " "
-                        + pad(fmt_amt(t.get("inst")) + "억", 9, right=True))
+                        + pad(fmt_amt(t["flow"]) + "억", 9, right=True))
 
             if wide:
                 cells.append(pad(_lead("buy"), 23))
@@ -322,7 +383,7 @@ def detail_lines(st: State, width: int) -> list[str]:
             return f" {label}: —"
         # 정렬이 **금액** 순이므로 금액을 보여준다. 시총대비(%p)를 보이면
         # 표시값과 순서가 어긋나 보인다(현대 +1.34%p 가 대우 +1.40%p 위에 오는 식).
-        parts = [f"{t['name']} {fmt_amt(t['inst'])}억" for t in arr[:3]]
+        parts = [f"{t['name']} {fmt_amt(t['flow'])}억" for t in arr[:3]]
         return f" {label}: " + " · ".join(parts)
     n = (r.get("top") or {}).get("n", 0)
     return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
@@ -346,7 +407,7 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
         out.append(pad(" ".join([
             pad(t.get("name", "—"), 14),
             pad(t.get("code", ""), 7),
-            pad(fmt_amt(t.get("inst")), 13, True),
+            pad(fmt_amt(t.get("flow")), 13, True),
             pad(fmt_pct(a) if a is not None else "—", 12, True),
             pad(fmt_amt(t.get("cap")).replace("+", "") if t.get("cap") else "—",
                 13, True),

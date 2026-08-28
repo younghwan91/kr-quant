@@ -27,6 +27,7 @@ def data():
     def row(sec, n, g, thin=False, pass_=False):
         return {"sector": sec, "n_all": n, "thin": thin, "G": g, "G_pass": pass_,
                 "inst": 1234.5, "forgn": -20.0, "indiv": -1000.0, "etc": -200.0,
+                "cap": 100000.0,
                 "accel": 1.23, "ret": -4.56, "x": 7.8, "U": 90.1, "P": 0.12,
                 "xdot": 0.3, "xddot": 0.04, "a_idx": 1.23, "cap_idx": 100000.0,
                 "top": {"buy": [{"code": "005930", "name": "삼성전자",
@@ -43,7 +44,22 @@ def data():
     comb = {"windows": [20, 60, 120],
             "rows": [{**r, "per": {"20": 0.5, "60": 0.6, "120": 0.7},
                       "pass_n": 2, "seen": 3} for r in rows]}
+    # 견인주·종목 목록은 `names` 에서 나온다 — 주체를 바꾸면 같이 바뀌어야 하므로
+    # 픽스처도 실제 페이로드처럼 4주체를 모두 싣는다.
+    def nm(code, name, sec, inst, forgn):
+        return {"name": name, "sector": sec, "market": "거래소", "cap": 50000.0,
+                "win": {w: {"inst": inst, "forgn": forgn, "indiv": -inst,
+                            "etc": 0.0, "tv": 900.0}
+                        for w in ("5", "20", "60", "120")}}
+    names = {"005930": nm("005930", "삼성전자", "전기/전자", 100.0, -30.0),
+             "000660": nm("000660", "SK하이닉스", "전기/전자", -50.0, 80.0),
+             "000720": nm("000720", "현대건설", "건설", 40.0, -70.0),
+             "006360": nm("006360", "GS건설", "건설", -20.0, 60.0),
+             "035420": nm("035420", "NAVER", "IT 서비스", 70.0, -10.0),
+             "035720": nm("035720", "카카오", "IT 서비스", -60.0, 20.0),
+             "034020": nm("034020", "두산에너빌리티", "부동산", 10.0, -5.0)}
     return {"asof": "2026-08-28", "finalized": True, "dates": ["2026-01-01", "2026-08-28"],
+            "names": names,
             "blocks": blocks, "combined": {m: comb for m in ("전체", "거래소", "코스닥")}}
 
 
@@ -300,8 +316,10 @@ def test_table_and_detail_show_the_same_top_names(data):
     row_line = lines[nhead + st.row]
     detail = detail_lines(st, 132)[1]          # '순매수 상위' 줄
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
-    for t in top[:2]:
-        assert t["name"] in row_line, f"표에 {t['name']} 가 없다"
+    # 표는 1위만, 하단 패널은 상위 3을 보여준다 — 1위는 반드시 일치해야 한다.
+    assert top, "상위 종목이 비었다"
+    assert top[0]["name"] in row_line, f"표에 {top[0]['name']} 가 없다"
+    for t in top[:3]:
         assert t["name"] in detail, f"하단에 {t['name']} 가 없다"
 
 
@@ -322,7 +340,7 @@ def test_detail_panel_shows_the_value_it_sorts_by(data):
     for t in shown:
         idx = line.find(t["name"])
         assert idx >= 0
-        vals.append((idx, t["inst"]))
+        vals.append((idx, t["flow"]))
     vals.sort()                       # 화면에 나온 순서
     amounts = [v for _, v in vals]
     assert amounts == sorted(amounts, reverse=True), (
