@@ -323,6 +323,43 @@ VERDICT_RUNNER = {
 _IRREPRODUCIBLE_MARKER = "재현 불가 고지"
 
 
+# (i) 커밋 신원이 레포 설정과 다르면 실패. 2026-08-29 에 회사 이메일로 찍힌 커밋
+# 52건이 **공개** 레포에 올라가 있었다. 원인은 세션들이 커밋할 때
+# `git -c user.email="..."` 로 신원을 덮어쓴 것이고, 그 값은 사용자 식별용으로
+# 주어진 회사 주소였다. 레포 설정에 개인 메일이 이미 들어가 있어 그 플래그는
+# 애초에 불필요했다.
+#
+# "푸시 전에 확인하는 습관" 은 부탁이지 규칙이 아니다(§0). 여기서 막는다.
+def check_commit_identity() -> list[str]:
+    """(i) 최근 커밋의 author/committer 이메일이 레포 설정과 같은가."""
+    import subprocess  # noqa: PLC0415 — 이 규칙에서만 쓴다
+
+    def _git(*args: str) -> str:
+        try:
+            return subprocess.run(("git", *args), cwd=REPO, capture_output=True,
+                                  text=True, timeout=10).stdout.strip()
+        except Exception:  # noqa: BLE001 — git 이 없거나 저장소가 아니면 검사 생략
+            return ""
+
+    want = _git("config", "--get", "user.email")
+    if not want:
+        return []                     # 설정이 없으면 비교할 기준이 없다
+    out = _git("log", "-30", "--format=%h %ae %ce")
+    bad = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        sha, ae, ce = parts
+        if ae != want or ce != want:
+            bad.append(
+                f"[identity] {sha} — 커밋 신원이 레포 설정과 다르다 "
+                f"(author={ae} committer={ce}, 설정={want}). "
+                f"`git -c user.email=...` 로 덮어쓰지 말 것 — 레포 설정을 그대로 쓴다."
+            )
+    return bad
+
+
 def check_verdicts_have_runner() -> list[str]:
     """(h) 각 research/logs/<alpha>/VERDICT.md 에 러너가 등록·실재하거나 재현불가 선언이 있어야 한다."""
     out = []
@@ -359,6 +396,7 @@ def main() -> int:
     violations += check_no_raw_price_select()
     violations += check_no_survivor_only_join()
     violations += check_verdicts_have_runner()
+    violations += check_commit_identity()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

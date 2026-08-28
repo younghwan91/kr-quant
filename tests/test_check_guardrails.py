@@ -192,3 +192,37 @@ def test_rule_g2_allows_supply_demand_without_the_join(lint, tmp_path, monkeypat
     )
     monkeypatch.setattr(lint, "REPO", tmp_path)
     assert lint.check_no_survivor_only_join() == []
+
+
+def test_rule_i_flags_a_foreign_commit_identity(tmp_path, monkeypatch):
+    """(i) 커밋 신원이 레포 설정과 다르면 잡는가 — 위반을 실제로 주입해서 본다.
+
+    통과만 보는 테스트는 규칙이 죽어도 초록이다(GUARDRAILS §5 의 교훈).
+    """
+    import subprocess
+
+    import scripts.check_guardrails as lint
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def git(*a, **kw):
+        return subprocess.run(("git", *a), cwd=repo, capture_output=True,
+                              text=True, check=False, **kw)
+
+    git("init", "-q")
+    git("config", "user.name", "T")
+    git("config", "user.email", "me@example.com")
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "ok")
+    monkeypatch.setattr(lint, "REPO", repo)
+    assert lint.check_commit_identity() == [], "정상 커밋인데 잡혔다"
+
+    # 위반 주입 — 다른 이메일로 커밋
+    (repo / "f.txt").write_text("y", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.email=work@corp.com", "commit", "-q", "-m", "bad")
+    out = lint.check_commit_identity()
+    assert out and "identity" in out[0], f"위반을 못 잡았다: {out}"
+    assert "work@corp.com" in out[0]
