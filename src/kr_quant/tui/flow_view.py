@@ -189,11 +189,11 @@ def header_lines(st: State, width: int) -> list[str]:
 
 
 #: 정렬 키 → 그 열의 헤더 이름. 하이라이트할 열을 찾는 데 쓴다.
-SORT_COL = {"G": "G", "inst": "임펄스", "accel": "가속", "ret": "수익률",
-            "x": "미실현", "U": "포텐셜", "P": "dW/dt", "xddot": "풀림",
+SORT_COL = {"G": "G", "inst": "임펄스억", "accel": "가속%p", "ret": "수익률%",
+            "x": "미실현%p", "U": "포텐셜", "P": "dW/dt", "xddot": "풀림",
             "n_all": "종목"}   # 거래대금·시총은 표에 열이 없어 하이라이트 대상이 아니다
-NAME_SORT_COL = {"inst": "순매수", "a": "시총대비", "cap": "시총",
-                 "tv": "거래대금", "name": "종목"}
+NAME_SORT_COL = {"inst": "순매수억", "a": "시총대비%p", "cap": "시총억",
+                 "tv": "거래대금억", "name": "종목"}
 
 
 def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
@@ -207,9 +207,9 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
         cols.append(("통과", 6, True))
         return cols
     cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False),
-            ("임펄스", 10, True), ("가속", 7, True), ("수익률", 8, True)]
+            ("임펄스억", 10, True), ("가속%p", 7, True), ("수익률%", 8, True)]
     if wide:
-        cols += [("미실현", 8, True), ("포텐셜", 8, True)]
+        cols += [("미실현%p", 8, True), ("포텐셜", 8, True)]
     # 아주 넓은 터미널에서는 동역학 열까지 보여준다 — 정렬은 되는데 값을 못 보는
     # 상태를 없앤다(dW/dt·풀림으로 줄세워놓고 그 숫자가 화면에 없으면 읽을 수 없다).
     if width >= 132:
@@ -217,9 +217,9 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
     # 이름만 잘라 넣으면 한글 길이가 제각각이라 줄마다 다르게 잘려 보인다.
     # **이름 + 금액**을 한 덩어리로 넣고 칸을 고정하면 모양이 일정하다.
     if width >= 150:
-        cols += [("순매수상위", 21, False), ("순매도상위", 21, False)]
+        cols += [("순매수상위억", 23, False), ("순매도상위억", 23, False)]
     elif wide:
-        cols += [("순매수상위", 21, False)]
+        cols += [("순매수상위억", 23, False)]
     return cols
 
 
@@ -272,14 +272,15 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                 그냥 이어붙이면 금액이 줄마다 다른 칸에 떨어진다."""
                 arr = top.get(side) or []
                 if not arr:
-                    return pad("—", 13) + " " + pad("", 7, right=True)
+                    return pad("—", 13) + " " + pad("", 9, right=True)
                 t = arr[0]
-                return pad(t["name"], 13) + " " + pad(fmt_amt(t.get("inst")), 7, right=True)
+                return (pad(t["name"], 13) + " "
+                        + pad(fmt_amt(t.get("inst")) + "억", 9, right=True))
 
             if wide:
-                cells.append(pad(_lead("buy"), 21))
+                cells.append(pad(_lead("buy"), 23))
             if width >= 150:
-                cells.append(pad(_lead("sell"), 21))
+                cells.append(pad(_lead("sell"), 23))
         out.append(pad(" ".join(cells), width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
@@ -295,8 +296,8 @@ def sort_span(st: State, width: int) -> tuple[int, int] | None:
 
 def names_cols() -> list[tuple[str, int, bool]]:
     return [("종목", 14, False), ("코드", 7, False),
-            ("순매수", 11, True), ("시총대비", 9, True),
-            ("시총", 11, True), ("거래대금", 11, True)]
+            ("순매수억", 11, True), ("시총대비%p", 10, True),
+            ("시총억", 11, True), ("거래대금억", 11, True)]
 
 
 def name_sort_span(st: State) -> tuple[int, int] | None:
@@ -342,7 +343,7 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
             pad(t.get("name", "—"), 14),
             pad(t.get("code", ""), 7),
             pad(fmt_amt(t.get("inst")), 11, True),
-            pad((fmt_pct(a) + "%p") if a is not None else "—", 9, True),
+            pad(fmt_pct(a) if a is not None else "—", 10, True),
             pad(fmt_amt(t.get("cap")).replace("+", "") if t.get("cap") else "—",
                 11, True),
             pad(fmt_amt(t.get("tv")).replace("+", ""), 11, True),
@@ -389,14 +390,14 @@ HELP = [
     ("", "        사실상 단일종목인 라벨이 있다(부동산 3, 출판/매체복제 2)."),
     ("G", "성장 점수 0~1. 세 순위의 평균 — 힘(가속도)·압축(미실현)·풀림(ẍ)."),
     ("", "        * 는 세 조건을 다 만족(a>0 · x>0 · ẍ>0). 검증된 적 없는 탐색 지표다."),
-    ("임펄스", "구간 누적 순매수 [억원] = Σ(순매매 수량 × 그날 종가)."),
+    ("임펄스억", "구간 누적 순매수 [억원] = Σ(순매매 수량 × 그날 종가)."),
     ("", "        DB 는 수량만 주므로 금액은 종가 환산 근사다(참값은 VWAP 가중)."),
-    ("가속", "임펄스 ÷ 구간말 섹터 시총 × 100 [%p]. 물리로 a = F/m."),
+    ("가속%p", "임펄스 ÷ 구간말 섹터 시총 × 100 [%p]. 물리로 a = F/m."),
     ("", "        금액만 보면 대형 섹터가 늘 이기므로 쏠림은 이쪽이 정직하다."),
-    ("수익률", "그 섹터 **자체 바구니**의 구간 수익률 [%], 전일 시총 가중."),
+    ("수익률%", "그 섹터 **자체 바구니**의 구간 수익률 [%], 전일 시총 가중."),
     ("", "        KRX 업종지수가 아니다 — 구성종목이 달라 분자·분모가 어긋난다."),
     ("예상Δv", "k × 가속 + b. k·b 는 그 창 27개 섹터의 횡단면 회귀(절편 포함 OLS)."),
-    ("미실현", "예상Δv − 실제 수익률 [%p]. + 면 덜 갔고(눌림), − 면 이미 더 갔다."),
+    ("미실현%p", "예상Δv − 실제 수익률 [%p]. + 면 덜 갔고(눌림), − 면 이미 더 갔다."),
     ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
     ("포텐셜", "½·k·x². **x 의 제곱이라 부호가 없다** — 이걸로 정렬하면 '많이 눌린 것'과"),
     ("", "        '이미 많이 간 것'이 같이 위로 온다. 미실현을 같이 봐야 방향이 갈린다."),
@@ -404,17 +405,17 @@ HELP = [
     ("", "        폭 132칸 이상에서 보인다. 좁으면 정렬만 되고 값은 안 보인다."),
     ("풀림", "미실현 x 가 해소되는 **가속**(ẍ). 구간을 셋으로 갈라 중앙차분한다."),
     ("", "        2차 차분이라 짧은 창(조각 6~7일)에서는 값이 흔들린다."),
-    ("순매수상위", "그 섹터에서 기관이 **가장 많이 산** 종목과 그 금액[억원]."),
-    ("순매도상위", "**가장 많이 판** 종목. 둘은 같은 목록(금액순)의 위/아래 끝이다."),
+    ("순매수상위억", "그 섹터에서 기관이 **가장 많이 산** 종목과 그 금액[억원]."),
+    ("순매도상위억", "**가장 많이 판** 종목. 둘은 같은 목록(금액순)의 위/아래 끝이다."),
     ("", "        표는 1개씩, 하단 패널은 3개씩 — 같은 목록이고 시총과 무관하다."),
     ("", "        순매도상위는 폭 150칸 이상에서 보인다. Enter 로 전 종목."),
     ("", ""),
     ("", "── 종목 목록 (Enter) ──"),
-    ("순매수", "그 구간 기관 순매수 [억원]. **기본 정렬** — 섹터 합계가 금액의"),
+    ("순매수억", "그 구간 기관 순매수 [억원]. **기본 정렬** — 섹터 합계가 금액의"),
     ("", "        합이므로 '누가 이 섹터를 움직였나' 는 금액으로만 정의된다."),
-    ("시총대비", "순매수 ÷ 그 종목 시총 × 100 [%p]. 시총 작은 스팩이 위로 올라온다."),
-    ("시총", "그 종목의 구간말 시가총액 [억원]. 시총대비의 분모다."),
-    ("거래대금", "그 구간 거래대금 [억원]."),
+    ("시총대비%p", "순매수 ÷ 그 종목 시총 × 100 [%p]. 시총 작은 스팩이 위로 올라온다."),
+    ("시총억", "그 종목의 구간말 시가총액 [억원]. 시총대비의 분모다."),
+    ("거래대금억", "그 구간 거래대금 [억원]."),
     ("", ""),
     ("", "── 알아둘 것 ──"),
     ("", "· k 는 추정치다. 창마다 다르다(5일 15.9 · 20일 14.7 · 60일 9.2 · 120일 9.0)."),
