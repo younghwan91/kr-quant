@@ -320,20 +320,40 @@ def sec_mutations(wt: Path, py: str, base_sha: str, spec_path: Path | None) -> S
 
     for m in muts:
         mid = m.get("id", "?")
-        need = [k for k in ("file", "find", "guards") if k not in m]
-        if need:
-            s.fail(f"[{mid}] 필드 누락: {', '.join(need)}")
+        # 한 버그가 두 군데를 동시에 바꿔야 재현되는 경우가 있다(예: 리사이즈가
+        # 도움말을 닫던 버그는 `else: help=False` 와 KEY_RESIZE 가드가 한 쌍이다).
+        # 한 곳만 바꾸면 다른 곳이 막아서 "검사가 못 잡는다" 는 **거짓 판정**이 난다.
+        edits = m.get("edits") or [{"file": m.get("file"), "find": m.get("find"),
+                                    "replace": m.get("replace", "")}]
+        if "guards" not in m or any(not e.get("file") or e.get("find") is None
+                                    for e in edits):
+            s.fail(f"[{mid}] 필드 누락 — guards 와 (file, find) 가 필요하다")
             continue
-        target = wt / m["file"]
-        if not target.exists():
-            s.fail(f"[{mid}] 대상 파일이 없다: {m['file']}")
-            continue
-        original = target.read_bytes()
-        text = original.decode("utf-8")
-        n = text.count(m["find"])
-        if n != 1:
-            s.fail(f"[{mid}] find 가 {m['file']} 에서 {n}번 나온다 — "
-                   f"정확히 1번이어야 무엇을 바꿨는지가 확정된다")
+        saved: dict[Path, bytes] = {}
+        skip = False
+        for e in edits:
+            target = wt / e["file"]
+            if not target.exists():
+                s.fail(f"[{mid}] 대상 파일이 없다: {e['file']}")
+                skip = True
+                break
+            n = target.read_text("utf-8").count(e["find"])
+            if n == 0:
+                # 애매한 경우다 — 사람이 봐야 한다(리포터 원칙). 자기가 선언한
+                # 변이라면 오타이고, 기준 브랜치에서 물려받은 변이라면 리팩터로
+                # 앵커가 사라진 것이다. 둘은 코드를 봐야 갈린다.
+                s.warn(f"[{mid}] 앵커가 {e['file']} 에 없어 이 변이는 "
+                       f"**돌지 않았다**. 자기 선언이면 오타이고, 기준에서 "
+                       f"물려받은 것이면 리팩터로 앵커가 사라진 것이다 — 그 회귀 "
+                       f"검사가 아직 무는지 사람이 확인하라 ({m.get('why', '')})")
+                skip = True
+                break
+            if n != 1:
+                s.fail(f"[{mid}] find 가 {e['file']} 에서 {n}번 나온다 — "
+                       f"정확히 1번이어야 무엇을 바꿨는지가 확정된다")
+                skip = True
+                break
+        if skip:
             continue
         guards = list(m["guards"])
         guarded.update(guards)
@@ -347,11 +367,19 @@ def sec_mutations(wt: Path, py: str, base_sha: str, spec_path: Path | None) -> S
 
         # ② 주입 → 빨개져야 한다.
         try:
-            target.write_text(text.replace(m["find"], m.get("replace", ""), 1),
-                              encoding="utf-8")
+            for e in edits:
+                target = wt / e["file"]
+                # 한 파일을 두 번 고칠 수 있다 — **첫 스냅샷만** 원본이다.
+                # 편집마다 새로 읽어 쌓으면 두 번째 스냅샷이 이미 변이본이라
+                # 복구가 변이를 되살린다(원상복구 검사가 실제로 이걸 잡았다).
+                saved.setdefault(target, target.read_bytes())
+                target.write_text(
+                    target.read_text("utf-8").replace(e["find"], e["replace"], 1),
+                    encoding="utf-8")
             hit = run([py, "-m", "pytest", "-q", *guards], wt, env, timeout=900)
         finally:
-            target.write_bytes(original)     # 무슨 일이 있어도 원상복구
+            for target, original in saved.items():   # 무슨 일이 있어도 원상복구
+                target.write_bytes(original)
         if hit.returncode == 0:
             s.fail(f"[{mid}] 변이를 넣었는데 가드가 **초록이다** — 이 검사는 "
                    f"{m.get('why', '이 버그')} 를 못 잡는다\n"
