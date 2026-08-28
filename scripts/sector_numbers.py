@@ -51,23 +51,25 @@ def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
                 t += sum(a[i0:i1 + 1])
         return t
     cap = sum(P["cap"].get(m, {}).get(sec, 0.0) for m in markets)
-    # 지수 수익률과 같은 시장 집합의 시총 — 지수가 한쪽 시장에만 있는 섹터에서
-    # 분자와 분모의 시장 집합이 어긋나는 것을 막는다(참고 컬럼).
-    cap_idx = sum(P["cap"].get(m, {}).get(sec, 0.0) for m in markets
-                  if P["iret"].get(m, {}).get(sec))
+    # 분자(자금흐름)와 분모(시총)와 수익률이 **모두 같은 종목집합**이다.
+    # 이전 판본은 수익률만 KRX 업종지수(다른 바구니)에서 가져왔고, 그 불일치가
+    # 20일 R² 를 0.731 → 0.119 로 떨어뜨리고 있었다(실측).
+    cap_idx = cap
     inst = s("inst")
-    # 지수 수익률 — 구간말 시총 가중(일별 시총은 2026년 이전에 없다)
-    w = {m: P["cap"].get(m, {}).get(sec, 0.0) for m in markets
-         if P["iret"].get(m, {}).get(sec)}
+    # 수익률 — **자체 바구니**(자금흐름과 같은 종목집합), 전일 시총 가중.
+    # KRX 업종지수는 구성종목이 달라(부동산 20일 +6.0% vs 자체 +74.9%) 쓰지 않는다.
     acc, any_ = 1.0, False
-    if sum(w.values()):
-        for i in range(i0, i1 + 1):
-            num = den = 0.0
-            for m, wt in w.items():
-                r = P["iret"][m][sec][i]
-                if r is not None:
-                    num += r * wt; den += wt; any_ = True
-            acc *= 1 + (num / den if den else 0.0) / 100.0
+    for i in range(i0, i1 + 1):
+        num = den = 0.0
+        for m in markets:
+            ser = P["ret"].get(m, {}).get(sec)
+            wser = P["retw"].get(m, {}).get(sec)
+            if not ser or not wser:
+                continue
+            r, wt = ser[i], wser[i]
+            if r is not None and wt:
+                num += r * wt; den += wt; any_ = True
+        acc *= 1 + (num / den if den else 0.0) / 100.0
     n_all = sum(P.get("n_by_sector", {}).get(m, {}).get(sec, 0) for m in markets)
     return {
         "sector": sec, "n_all": n_all, "thin": n_all < MIN_NAMES,

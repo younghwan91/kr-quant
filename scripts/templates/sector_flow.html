@@ -256,16 +256,9 @@ function capOf(sec){
  *  가중하는데 `capOf` 는 모든 시장을 더해서, 지수가 한쪽 시장에만 있는 섹터에서는
  *  분자(자금흐름)와 분모(수익률)의 시장 집합이 어긋났다. 기타제조·출판/매체복제는
  *  겹침이 0 이라 코스닥 자금흐름을 거래소 지수에 맞대고 있었다. */
-function capOfIdx(sec){ let c=0;
-  const ym=D.dates[i1].slice(0,7);
-  mkts().forEach(m=>{ if(D.iret[m]?.[sec]){
-    const byM=D.cap_by_month?.[m]?.[sec];
-    c += (byM && byM[ym] != null) ? byM[ym] : (D.cap[m]?.[sec]||0); } });
-  return c; }
-function accelIdxOf(sec){ const c=capOfIdx(sec); if(!c) return null;
-  let t=0; mkts().forEach(m=>{ if(D.iret[m]?.[sec]){ const a=D.flows[m]?.[sec]?.[actor];
-    if(a) for(let i=i0;i<=i1;i++) t+=a[i]; } });
-  return t/c*100; }
+// 수익률이 자체 바구니가 되면서 시장 집합이 자금흐름과 같아졌다 — 별도 보정 불필요.
+function capOfIdx(sec){ return capOf(sec); }
+function accelIdxOf(sec){ return accelOf(sec); }
 function sum(arr,a,b){ let s=0; for(let i=a;i<=b;i++) s+=arr[i]; return s; }
 function windowVal(sec,act){
   if(metric==="resid"){ const r=RES&&RES.out[sec];
@@ -273,25 +266,21 @@ function windowVal(sec,act){
 
   const t=sum(flow(sec,act),i0,i1);
   if(metric==="amt") return t; const c=capOf(sec); return c?t/c*100:0; }
-/** 구간 누적 수익률(%) — **KRX 업종지수** 기준. 지수가 없는 섹터는 null 이며
- *  잔차 랭킹에서 제외한다(자체 집계와 섞으면 정의가 달라진다). */
+/** 구간 누적 수익률(%) — **자체 바구니**(자금흐름과 같은 종목집합), 전일 시총 가중.
+ *  이전 판본은 KRX 업종지수를 썼는데 구성종목이 달랐다(부동산 20일 지수 +6.0% vs
+ *  자체 바구니 +74.9%). 분자는 A 바구니, 분모는 B 바구니를 보던 셈이고, 맞추니
+ *  20일 R² 가 0.119 → 0.731 로 올랐다(실측). */
 function retOf(sec){
-  // 거래소·코스닥 지수를 합치는 가중치는 **구간말 섹터 시총(상수)** 을 쓴다.
-  // 일별 시총을 쓰면 안 된다 — shares_outstanding_history 가 2026년 이전에 연 200종목
-  // 남짓이라 가중치가 0 이 되고, 그 날들이 누적에서 조용히 빠진다(실측: 260일 중 149일).
   let acc=1, any=false;
-  const w={}; let tot=0;
-  mkts().forEach(m=>{const c=D.cap[m]?.[sec]||0; if(c&&D.iret[m]?.[sec]){w[m]=c; tot+=c;}});
-  if(!tot) return null;
   for(let i=i0;i<=i1;i++){
     let num=0,den=0;
-    for(const m in w){const r=D.iret[m][sec][i]; if(r!=null){num+=r*w[m]; den+=w[m]; any=true;}}
+    mkts().forEach(m=>{
+      const r=D.ret[m]?.[sec]?.[i], w=D.retw[m]?.[sec]?.[i];
+      if(r!=null&&w){num+=r*w; den+=w; any=true;}});
     acc*=1+(den?num/den:0)/100;
   }
   return any?(acc-1)*100:null;
 }
-/** 지수 수익률이 실제로 산출되는 섹터인가 — 배열 존재만 보면 그 시장에 종목이
- *  없어 가중치가 0 인 경우를 놓친다. 값이 나오는지로 판정한다. */
 const hasIdx=sec=>retOf(sec)!=null;
 function accelOf(sec){ const c=capOf(sec); return c?sum(flow(sec,actor),i0,i1)/c*100:0; }
 /** 힘 대비 얼마나 움직였나의 잔차. 원점을 지나는 최소제곱 기울기 k 를 구해
