@@ -52,6 +52,71 @@ def load_payload(db: str, days: int, cached: str | None = None) -> dict:
     return payload
 
 
+#: 스파크라인 조각 수 — 구간을 이만큼의 **비겹침** 조각으로 나눈다.
+SPARK_SEGS = 8
+
+#: 백분위를 재는 되돌아보기 길이(거래일). 페이로드가 싣는 만큼(260일 ≈ 1년).
+PCT_LOOKBACK = 260
+
+
+def _daily(P: dict, markets: list[str], sec: str, key: str) -> list[float]:
+    """시장을 합친 일별 순매매 시계열."""
+    n = len(P["dates"])
+    out = [0.0] * n
+    for m in markets:
+        a = P["flows"].get(m, {}).get(sec, {}).get(key)
+        if not a:
+            continue
+        for i, v in enumerate(a[:n]):
+            out[i] += v or 0.0
+    return out
+
+
+def rolling_pct(ser: list[float], win: int) -> "float | None":
+    """롤링 ``win`` 일 합의 1년 분포에서 **현재값의 백분위**(0~100).
+
+    z-점수를 쓰지 않는 이유: 창이 겹쳐 자기상관이 크고, 260일에 비겹침 20일 창은
+    13개뿐이라 z 는 정밀도를 과장한다("2.7σ" 는 표본 13개에서 아무 말도 아니다).
+    백분위는 "1년 안에서 몇 등" 이라는, 표본 수만큼만 말하는 정직한 진술이다.
+
+    동률은 중간순위(midrank)로 매긴다 — 0 이 잔뜩인 시계열에서 ``<=`` 로 세면
+    조용한 섹터가 전부 100 백분위가 된다.
+    """
+    n = min(len(ser), PCT_LOOKBACK)
+    if win > n:
+        return None
+    ser = ser[-n:]
+    pre = [0.0]
+    for v in ser:
+        pre.append(pre[-1] + v)
+    sums = [pre[i + win] - pre[i] for i in range(n - win + 1)]
+    if len(sums) < 2:
+        return None
+    cur = sums[-1]
+    below = sum(1 for s in sums if s < cur)
+    ties = sum(1 for s in sums if s == cur)          # 자기 자신 포함
+    rank = below + (ties - 1) / 2.0
+    return 100.0 * rank / (len(sums) - 1)
+
+
+def spark_segs(ser: list[float], i0: int, i1: int, k: int = SPARK_SEGS) -> list[float]:
+    """구간 [i0,i1] 을 최대 ``k`` 개의 **비겹침** 조각으로 나눈 합.
+
+    조각 합의 총합은 구간 합과 정확히 같다 — 스파크라인의 맨 오른쪽 칸이
+    임펄스 열의 그 숫자로 이어진다는 약속이 여기서 나온다.
+    """
+    n = i1 - i0 + 1
+    if n <= 0:
+        return []
+    k = min(k, n)
+    out = []
+    for j in range(k):
+        a = i0 + (j * n) // k
+        b = i0 + ((j + 1) * n) // k
+        out.append(sum(ser[a:b]))
+    return out
+
+
 def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
     def s(key):
         t = 0.0
@@ -192,6 +257,18 @@ def build(P: dict) -> dict:
         for mkey, markets in (("전체", P["markets"]),
                               *[(m, [m]) for m in P["markets"]]):
             rows = [agg(P, markets, s, i0, i1) for s in P["sectors"]]
+            # 1년 백분위와 구간 모양 — **주체별로** 따로 싣는다. 화면이 주체를
+            # 바꾸면 이 두 열도 같이 바뀌어야 한다(한 행에 두 주체의 숫자가
+            # 섞이는 사고를 이미 한 번 냈다).
+            for r in rows:
+                pct, sp = {}, {}
+                for key in ("inst", "forgn", "indiv", "etc"):
+                    ser = _daily(P, markets, r["sector"], key)
+                    v = rolling_pct(ser, win)
+                    if v is not None:
+                        pct[key] = round(v, 1)
+                    sp[key] = [round(x, 1) for x in spark_segs(ser, i0, i1)]
+                r["pct1y"], r["spark"] = pct, sp
             # 포텐셜 에너지 U = ½·k·x²,  x = 미실현 변위 = 예상Δv − 실제Δv.
             # k 는 그 블록 횡단면에서 추정한 강성(가속도 1%p 당 %), 절편 포함 OLS.
             # 예상Δv = k·a + b 이므로 x 는 "그 유입이면 갔어야 할 만큼에서 덜 간 폭"이고,

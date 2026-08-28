@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import unicodedata
+from collections import namedtuple
 
 WINDOWS = ("5", "20", "60", "120", "종합")
 # 종목 목록은 **절대 순매수 금액** 순이다 — 섹터 합계가 금액의 합이므로 기여도는
@@ -20,13 +21,25 @@ MARKET_ORDER = ("거래소", "코스닥")
 INST_ONLY = ("exp", "x", "U", "P", "xdot", "xddot", "G", "G_pass")
 
 ACTORS = (("inst", "기관"), ("forgn", "외국인"), ("indiv", "개인"), ("etc", "기타법인"))
-SORTS = (("G", "성장"), ("flow", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
-         ("x", "미실현"), ("U", "포텐셜"), ("P", "dW/dt"), ("xddot", "풀림"),
-         ("tv", "거래대금"), ("cap_idx", "시총"), ("n_all", "종목수"))
+#: 화면 정렬. **기본은 가속** — 규모로 정규화된 유입이라 대형 섹터가 늘 이기지
+#: 않는다. 예전 기본은 G 였는데, G 는 세 순위의 평균인 **검증 안 된 탐색 점수**라
+#: 화면 순서를 지배할 근거가 없다(20일 기본 화면 1위가 임펄스 +14억짜리 섹터였고,
+#: 기관이 2.4조 판 전기/전자는 24위라 스크롤해야 보였다). G 는 보조로 남는다.
+#: 순서는 **열 순서와 같다** — 정렬을 돌릴 때 눈이 왼쪽에서 오른쪽으로 따라간다.
+SORTS = (("accel", "가속"), ("flow", "임펄스"), ("pct", "1년%"), ("ret", "수익률"),
+         ("x", "미실현"), ("xddot", "풀림"), ("G", "성장"), ("U", "포텐셜"),
+         ("P", "dW/dt"), ("tv", "거래대금"), ("cap_idx", "시총"), ("n_all", "종목수"))
 #: 종목 목록의 정렬. 기본은 **절대 순매수** — 섹터 합계가 금액의 합이므로
 #: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
-NAME_SORTS = (("flow", "순매수"), ("a", "시총대비"), ("cap", "시총"),
-              ("tv", "거래대금"), ("name", "종목명"))
+#: (`flow` 는 **절댓값** 순이다. 부호순으로 두면 판 종목이 목록 맨 끝으로 밀려
+#: 누적 기여율이 뜻을 잃는다 — 섹터를 움직인 건 산 쪽과 판 쪽 둘 다다.)
+NAME_SORTS = (("flow", "순매수"), ("part", "참여율"), ("a", "시총대비"),
+              ("cap", "시총"), ("tv", "거래대금"), ("name", "종목명"))
+
+#: 누적 기여율의 가로줄을 그을 지점. 실측상 섹터 흐름의 80% 를 설명하는 종목이
+#: 평균 6.2개인데 종목행의 51% 가 +0(|순매수|<0.5억) 이다 — 어디까지가 "그 섹터를
+#: 움직인 종목" 인지 눈으로 끊어준다.
+CUM_CUT = 80.0
 
 
 def fmt_amt(v) -> str:
@@ -145,6 +158,10 @@ class State:
         out = dict(r)
         out["flow"] = flow
         out["accel"] = (flow / cap * 100) if (cap and flow is not None) else None
+        # 1년 백분위·구간 모양도 **같은 주체**에서 꺼낸다. 오늘 고친 버그가 정확히
+        # "한 행 안에 두 주체의 숫자가 섞이는" 것이었다 — 새 열에서 반복하지 않는다.
+        out["pct"] = (r.get("pct1y") or {}).get(a)
+        out["spark"] = (r.get("spark") or {}).get(a)
         out["top"] = self._leads().get(r.get("sector"))
         return out
 
@@ -195,6 +212,19 @@ class State:
         return key, False
 
     def rows(self) -> list[dict]:
+        """화면에 나갈 행 — 선택 상태별로 캐시한다.
+
+        렌더가 열 정의를 순회하면서 셀마다 횡단면 스케일(미실현 막대의 최댓값)을
+        묻기 때문에, 캐시가 없으면 한 프레임에 rows() 가 수백 번 돈다.
+        """
+        ck = (self.wi, self.mi, self.ai, self.si)
+        if getattr(self, "_rows_ck", None) == ck:
+            return self._rows_v
+        out = self._rows_uncached()
+        self._rows_ck, self._rows_v = ck, out
+        return out
+
+    def _rows_uncached(self) -> list[dict]:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
             if not c:
@@ -211,6 +241,16 @@ class State:
             return (v is None, -(v if v is not None else 0))
         rows.sort(key=val)
         return rows
+
+    def xmax(self) -> float:
+        """이 화면에서 |미실현| 의 최댓값 — 발산 막대의 눈금.
+
+        x 는 OLS 잔차의 부호 반전이라 27개 합이 0 인 **상대** 지표다. 절대 눈금이
+        없으므로 막대도 화면 안 최댓값에 맞춘다. 창·시장을 바꾸면 눈금이 바뀐다 —
+        막대끼리는 비교되지만 화면끼리는 비교되지 않는다.
+        """
+        vals = [abs(r["x"]) for r in self.rows() if r.get("x") is not None]
+        return max(vals) if vals else 0.0
 
     def block_meta(self) -> str:
         if self.window == "종합":
@@ -245,15 +285,45 @@ class State:
             if not w:
                 continue
             cap = nm.get("cap")
+            v, tv = w.get(self.actor), w.get("tv")
             out.append({"code": code, "name": nm.get("name", "—"),
-                        "flow": w.get(self.actor), "tv": w.get("tv"), "cap": cap,
-                        "a": ((w.get(self.actor) or 0) / cap * 100) if cap else None})
+                        "flow": v, "tv": tv, "cap": cap,
+                        # 참여율 — 그 종목 거래대금 중 이 주체의 순매수가 차지한 몫.
+                        # 거래대금 자체는 "얼마나 붐볐나" 일 뿐이고, 판단에 직결되는
+                        # 것은 "그 거래의 몇 %가 한 방향이었나" 다.
+                        "part": (v / tv * 100) if (tv and v is not None) else None,
+                        "a": ((v or 0) / cap * 100) if cap else None})
         key = self.name_sort
         if key == "name":
             out.sort(key=lambda t: t["name"])
+        elif key == "flow":
+            # **절댓값** 순. 부호순이면 판 종목이 목록 끝으로 밀려, 화면 앞쪽은
+            # 산 종목 몇 개 + 0 의 벌판이 된다(종목행의 51%가 +0 이다).
+            out.sort(key=lambda t: -abs(t["flow"]) if t["flow"] is not None else 1e18)
         else:
             out.sort(key=lambda t: -(t.get(key) if t.get(key) is not None else -1e18))
+        self._attach_cum(out)
         return out
+
+    def _attach_cum(self, rows: list[dict]) -> None:
+        """누적 기여율 — |순매수| 의 화면 순서 누적 몫(%).
+
+        **순매수 정렬에서만** 채운다. 기여도는 |금액| 으로만 정의되는데, 시총·종목명
+        순서로 누적하면 아무 뜻 없는 톱니가 되고, 그런데도 숫자가 단조증가라서
+        읽는 사람은 뜻이 있다고 믿는다. 뜻이 없는 칸은 비워 두는 편이 정직하다.
+        """
+        tot = sum(abs(t["flow"]) for t in rows if t.get("flow") is not None)
+        run, cut_done = 0.0, False
+        for t in rows:
+            if self.name_sort != "flow" or not tot:
+                t["cum"] = None
+                t["cut"] = False
+                continue
+            run += abs(t.get("flow") or 0.0)
+            t["cum"] = run / tot * 100
+            # 가로줄은 80% 를 **처음 넘긴 행** 하나에만 긋는다.
+            t["cut"] = not cut_done and t["cum"] >= CUM_CUT
+            cut_done = cut_done or t["cut"]
 
 
 def header_lines(st: State, width: int) -> list[str]:
@@ -273,50 +343,169 @@ def header_lines(st: State, width: int) -> list[str]:
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
 
 
+#: 표의 한 열. **헤더·폭·정렬·값 추출을 한 자리에** 둔다.
+#:
+#: 예전엔 `table_cols()`(헤더) 와 `table_lines()`(셀) 가 같은 사실을 두 번 적었다 —
+#: 폭 상수(11·8·7·1·12·9·10…)가 양쪽에 각각 있었고, 폭 임계값(>=100·>=132·>=150)도
+#: 양쪽에 있었고, 심지어 분기 모양이 서로 달랐다(한쪽은 if/elif, 다른 쪽은 if 두 개).
+#: 결과가 같았던 것은 우연이고, 어긋나기 직전이었다. 이제 렌더는 이 정의를
+#: **순회만** 하므로 "헤더와 셀이 어긋나는" 버그가 표현 불가능하다 —
+#: docs/GUARDRAILS.md §0 의 "위험한 기능을 코드에서 제거" 와 같은 처방이다.
+Col = namedtuple("Col", "header width right fn")      # fn(r, st) -> str
+
+
+#: 스파크라인·발산 막대에 쓰는 글자는 **브라유**(U+28xx) 다.
+#:
+#: East Asian Width 가 'N'(Narrow) 이라 어떤 로케일에서도 1칸이다. 블록 문자
+#: ``▁▂▃▄▅▆▇█`` 는 'A'(Ambiguous) 라 한글 로케일 터미널이 2칸으로 그릴 수 있고,
+#: 그러면 그 행만 통째로 밀린다. tmux 실측(en_US.UTF-8·ko_KR.utf8, cursor_x)
+#: 으로는 둘 다 1칸이었지만, **표준이 '애매' 라고 말하는 글자에 표 정렬을 걸
+#: 이유가 없다.** 이 저장소는 폭 계산 함정을 이미 세 번 밟았다.
+#: 값: +2 강한 유입 · +1 유입 · 0 · -1 유출 · -2 강한 유출.
+SPARK = {2: "⠛", 1: "⠒", 0: "⠀", -1: "⠤", -2: "⣤"}
+BAR_FILL = "⣿"       # 꽉 찬 브라유 — 막대 몸통
+BAR_AXIS = "|"            # 0 기준선. ASCII 라 폭이 애매할 여지가 없다
+
+
+def spark(vals, cells: int = 8) -> str:
+    """구간을 비겹침 조각으로 나눈 합의 모양. 오른쪽 끝이 **가장 최근**이다.
+
+    조각 합을 다 더하면 임펄스 열의 그 숫자가 된다 — 같은 사실의 시간축 전개다.
+    눈금은 **그 행 안에서** 최댓값에 맞춘다(행끼리 높이는 비교되지 않는다).
+    "지금 들어오는 중인가, 이미 끝났나" 만 답하는 열이기 때문이다.
+    """
+    vals = [v for v in (vals or [])]
+    if not vals:
+        return "—"
+    got = [abs(v) for v in vals if v is not None]
+    mx = max(got) if got else 0.0
+    out = ""
+    for v in vals:
+        if v is None or not mx or v == 0:
+            lv = 0
+        else:
+            lv = 2 if abs(v) > mx / 2 else 1
+            lv = lv if v > 0 else -lv
+        out += SPARK[lv]
+    # 조각이 cells 보다 적으면(5일 창) **왼쪽**을 비운다 — 오른쪽 끝이 최근이라는
+    # 약속을 깨지 않기 위해서다.
+    return pad(out, cells, right=True)
+
+
+def xbar(x, mx: float, half: int = 4) -> str:
+    """미실현 x 의 0 기준 발산 막대 — 부호와 크기를 한 도형에서 읽는다.
+
+    포텐셜 U = ½kx² 는 k 가 블록당 상수라 |x| 의 순증가 변환이다(4개 창 전부
+    Spearman 1.0000, 실측). 즉 U 열은 x 열의 **크기만** 다시 적은 것이고, 잃는
+    것은 부호다. 막대는 그 크기를 부호와 함께 보여주므로 겹침이 정보 손실로
+    바뀌지 않는다. U 는 지우지 않고 넓은 폭 전용 열 + 정렬 옵션으로 남긴다.
+    """
+    if x is None:
+        return "—"
+    if not mx or x == 0:
+        lv = 0
+    else:
+        q = abs(x) / mx * half
+        lv = min(half, int(q) + (1 if q > int(q) else 0))
+    left = (" " * (half - lv) + BAR_FILL * lv) if x < 0 else " " * half
+    right = (BAR_FILL * lv + " " * (half - lv)) if x > 0 else " " * half
+    return left + BAR_AXIS + right
+
+
+def _num(key, nd=2):
+    return lambda r, st: fmt_pct(r.get(key), nd)
+
+
 #: 정렬 키 → 그 열의 헤더 이름. 하이라이트할 열을 찾는 데 쓴다.
 SORT_COL = {"G": "G[0~1]", "flow": "임펄스[억]", "accel": "가속[%p]",
-            "ret": "수익률[%]",
+            "ret": "수익률[%]", "pct": "1년[%ile]",
             "x": "미실현[%p]", "U": "포텐셜[½kx²]", "P": "dW/dt[%p/일]",
             "xddot": "풀림[%p/일²]", "n_all": "종목[수]"}   # 거래대금·시총은 표에 열이 없어 하이라이트 대상이 아니다
-NAME_SORT_COL = {"flow": "순매수[억]", "a": "시총대비[%p]", "cap": "시총[억]",
-                 "tv": "거래대금[억]", "name": "종목"}
+NAME_SORT_COL = {"flow": "순매수[억]", "part": "참여율[%]", "a": "시총대비[%p]",
+                 "cap": "시총[억]", "tv": "거래대금[억]", "name": "종목"}
 
 
-def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
-    """섹터 표의 열 정의 — 렌더와 하이라이트가 **같은 정의**를 봐야 어긋나지 않는다."""
-    wide = width >= 100
-    if st.window == "종합":
-        cols = [("섹터", 11, False), ("종목[수]", 8, True), ("G[0~1]", 7, True),
-                ("", 1, False)]
-        wins = (st.d.get("combined", {}).get(st.market) or {}).get("windows", [])
-        for w in wins:
-            cols.append((f"{w}일[G]", 8, True))
-        cols.append(("통과[창]", 8, True))
-        return cols
-    cols = [("섹터", 11, False), ("종목[수]", 8, True), ("G[0~1]", 7, True),
-            ("", 1, False),
-            ("임펄스[억]", 12, True), ("가속[%p]", 9, True), ("수익률[%]", 10, True)]
-    if wide:
-        cols += [("미실현[%p]", 10, True), ("포텐셜[½kx²]", 12, True)]
-    # 아주 넓은 터미널에서는 동역학 열까지 보여준다 — 정렬은 되는데 값을 못 보는
-    # 상태를 없앤다(dW/dt·풀림으로 줄세워놓고 그 숫자가 화면에 없으면 읽을 수 없다).
-    if width >= 132:
-        cols += [("dW/dt[%p/일]", 12, True), ("풀림[%p/일²]", 12, True)]
+def _lead(side: str):
+    """이름 13칸 + 금액 9칸(우측정렬). 이름 길이가 제각각이라 그냥 이어붙이면
+    금액이 줄마다 다른 칸에 떨어진다."""
+    def fn(r, st):
+        arr = (r.get("top") or {}).get(side) or []
+        t = arr[0] if arr else None
+        if not t:
+            return pad("—", 13) + " " + pad("", 9, right=True)
+        return pad(t["name"], 13) + " " + pad(fmt_amt(t["flow"]) + "억", 9, right=True)
+    return fn
+
+
+#: 섹터 표의 열 — **왼쪽부터 중요한 순서**이고, 폭이 되는 데까지 `_fit` 이 자른다.
+#:
+#: 순서는 물리 서사를 따른다: 힘(가속·임펄스) → 그 힘이 1년 안에서 어느 정도인가
+#: (1년%·추이) → 운동(수익률) → 차이(미실현) → 해소(풀림) → 요약(G) → 누가(주도주).
+#: 예전엔 결론인 G 가 자기 입력(가속·미실현·풀림)보다 **왼쪽**에 있었고, 판단
+#: 변수가 아니라 데이터 품질 주석인 종목수가 2번 자리를 차지했다.
+#: 종목수는 오른쪽 끝으로 보냈다 — 얇은 섹터 경고는 이미 `~` 마커가 한다.
+_TABLE_COLS = (
+    Col("섹터", 13, False, lambda r, st: r.get("sector", "—")),
+    # 마커는 **별도 1칸 열**이다. 값에 붙이면 ● 가 2칸이라 열이 밀린다.
+    # 얇은 섹터(~)는 글자로도 표시한다 — 색에만 실으면 무색 터미널·색맹에서
+    # 경고가 통째로 사라진다.
+    Col("", 1, False,
+        lambda r, st: "~" if r.get("thin") else ("*" if r.get("G_pass") else "")),
+    Col("가속[%p]", 9, True, _num("accel")),
+    Col("임펄스[억]", 12, True, lambda r, st: fmt_amt(r.get("flow"))),
+    Col("1년[%ile]", 9, True,
+        lambda r, st: "—" if r.get("pct") is None else f"{r['pct']:.0f}"),
+    Col("추이[8]", 8, False, lambda r, st: spark(r.get("spark"))),
+    Col("수익률[%]", 10, True, _num("ret")),
+    Col("미실현[%p]", 10, False, lambda r, st: xbar(r.get("x"), st.xmax())),
+    Col("풀림[%p/일²]", 12, True, _num("xddot", 3)),
+    Col("G[0~1]", 7, True,
+        lambda r, st: f"{r['G']:.2f}" if r.get("G") is not None else "—"),
     # 이름만 잘라 넣으면 한글 길이가 제각각이라 줄마다 다르게 잘려 보인다.
     # **이름 + 금액**을 한 덩어리로 넣고 칸을 고정하면 모양이 일정하다.
-    if width >= 150:
-        cols += [("순매수상위[억]", 23, False), ("순매도상위[억]", 23, False)]
-    elif wide:
-        cols += [("순매수상위[억]", 23, False)]
+    Col("순매수상위[억]", 23, False, _lead("buy")),
+    Col("순매도상위[억]", 23, False, _lead("sell")),
+    Col("포텐셜[½kx²]", 12, True,
+        lambda r, st: f"{r['U']:.0f}" if r.get("U") is not None else "—"),
+    Col("dW/dt[%p/일]", 12, True, _num("P", 3)),
+    Col("종목[수]", 8, True, lambda r, st: str(r.get("n_all", "—"))),
+)
+
+
+def _per_win(w):
+    def fn(r, st):
+        per = r.get("per", {})
+        v = per.get(str(w), per.get(w))
+        return f"{v:.2f}" if v is not None else "—"
+    return fn
+
+
+def table_cols(st: State, width: int) -> list[Col]:
+    """섹터 표의 열 정의 — 렌더·하이라이트·검사가 **모두 이걸 본다**.
+
+    폭에 따라 여기서 열을 빼지 않는다. 순서가 곧 우선순위이고, 자르는 일은
+    `_fit` 하나가 한다 — 폭 임계값이 두 군데에 있으면 언젠가 어긋난다.
+    """
+    if st.window != "종합":
+        return list(_TABLE_COLS)
+    cols = [_TABLE_COLS[0], _TABLE_COLS[1],
+            Col("G[0~1]", 7, True,
+                lambda r, st_: f"{r['G']:.2f}" if r.get("G") is not None else "—")]
+    wins = (st.d.get("combined", {}).get(st.market) or {}).get("windows", [])
+    for w in wins:
+        cols.append(Col(f"{w}일[G]", 8, True, _per_win(w)))
+    cols.append(Col("통과[창]", 8, True,
+                    lambda r, st_: f"{r.get('pass_n', 0)}/{r.get('seen', 0)}"))
+    cols.append(_TABLE_COLS[-1])                      # 종목[수]
     return cols
 
 
-def _fit(cols: list[tuple[str, int, bool]], width: int) -> list[tuple[str, int, bool]]:
+def _fit(cols: list[Col], width: int) -> list[Col]:
     """폭에 **온전히** 들어가는 열까지만 남긴다. 첫 열은 잘려도 남긴다
     (섹터 이름은 잘려도 뜻이 남지만, 숫자는 잘리면 다른 값이 된다)."""
     out, used = [], 0
     for c in cols:
-        need = c[1] + (1 if out else 0)
+        need = c.width + (1 if out else 0)
         if out and used + need > width:
             break
         out.append(c)
@@ -324,73 +513,31 @@ def _fit(cols: list[tuple[str, int, bool]], width: int) -> list[tuple[str, int, 
     return out
 
 
-def col_span(cols: list[tuple[str, int, bool]], header: str) -> tuple[int, int] | None:
+def col_span(cols: list[Col], header: str) -> tuple[int, int] | None:
     """열 헤더의 (시작 표시칸, 폭). 열 사이 공백 1칸을 더해가며 센다."""
     cell = 0
-    for name, w, _r in cols:
-        if name == header:
-            return cell, w
-        cell += w + 1
+    for c in cols:
+        if c.header == header:
+            return cell, c.width
+        cell += c.width + 1
     return None
 
 
+def _render(cols: list[Col], r: dict, st: State, width: int) -> str:
+    return pad(" ".join(pad(c.fn(r, st), c.width, c.right) for c in cols), width)
+
+
 def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[bool], int]:
-    """(행 문자열, 얇은섹터 여부, 헤더 줄 수). 폭에 따라 열을 줄인다."""
-    cols = table_cols(st, width)
-    wide = width >= 100
-    wins = (st.d.get("combined", {}).get(st.market) or {}).get("windows", [])
+    """(행 문자열, 얇은섹터 여부, 헤더 줄 수). 폭에 따라 열을 줄인다.
 
-    # 폭이 모자라면 **열 경계에서** 떨어뜨린다. 줄을 통째로 잘라내면 숫자가
-    # 자릿수 중간에서 끊겨 -1,360 이 -1 로 보인다 — 안 보이는 것보다 나쁘다.
-    cols = _fit(cols, width)
-    ncol = len(cols)
-    head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
-    out = [pad(head, width)]
-    thin = [False]
-
+    폭이 모자라면 **열 경계에서** 떨어뜨린다. 줄을 통째로 잘라내면 숫자가
+    자릿수 중간에서 끊겨 -1,360 이 -1 로 보인다 — 안 보이는 것보다 나쁘다.
+    """
+    cols = _fit(table_cols(st, width), width)
+    head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
+    out, thin = [head], [False]
     for r in st.rows():
-        cells = [pad(r.get("sector", "—"), 11),
-                 pad(str(r.get("n_all", "—")), 8, True),
-                 pad(f"{r['G']:.2f}" if r.get("G") is not None else "—", 7, True),
-                 # 마커는 **별도 1칸 열**이다. 값에 붙이면 ● 가 2칸이라 열이 밀린다.
-                 # 얇은 섹터(~)는 글자로도 표시한다 — 색에만 실으면 무색
-                 # 터미널·색맹에서 경고가 통째로 사라진다(파랑은 검은 바탕에서
-                 # 8색 중 대비가 가장 나쁘고, A_DIM 을 무시하는 터미널도 많다).
-                 pad("~" if r.get("thin") else ("*" if r.get("G_pass") else ""), 1)]
-        if st.window == "종합":
-            per = r.get("per", {})
-            for w in wins:
-                v = per.get(str(w), per.get(w))
-                cells.append(pad(f"{v:.2f}" if v is not None else "—", 8, True))
-            cells.append(pad(f"{r.get('pass_n',0)}/{r.get('seen',0)}", 8, True))
-        else:
-            cells += [pad(fmt_amt(r.get("flow")), 12, True),
-                      pad(fmt_pct(r.get("accel")), 9, True),
-                      pad(fmt_pct(r.get("ret")), 10, True)]
-            if wide:
-                cells += [pad(fmt_pct(r.get("x"), 1), 10, True),
-                          pad(f"{r['U']:.0f}" if r.get("U") is not None else "—",
-                              12, True)]
-            if width >= 132:
-                cells += [pad(fmt_pct(r.get("P"), 3), 12, True),
-                          pad(fmt_pct(r.get("xddot"), 3), 12, True)]
-            top = r.get("top") or {}
-
-            def _lead(side: str) -> str:
-                """이름 13칸 + 금액 7칸(우측정렬). 이름 길이가 제각각이라
-                그냥 이어붙이면 금액이 줄마다 다른 칸에 떨어진다."""
-                arr = (top or {}).get(side) or []
-                t = arr[0] if arr else None
-                if not t:
-                    return pad("—", 13) + " " + pad("", 9, right=True)
-                return (pad(t["name"], 13) + " "
-                        + pad(fmt_amt(t["flow"]) + "억", 9, right=True))
-
-            if wide:
-                cells.append(pad(_lead("buy"), 23))
-            if width >= 150:
-                cells.append(pad(_lead("sell"), 23))
-        out.append(pad(" ".join(cells[:ncol]), width))
+        out.append(_render(cols, r, st, width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
 
@@ -404,10 +551,27 @@ def sort_span(st: State, width: int) -> tuple[int, int] | None:
     return col_span(_fit(table_cols(st, width), width), header) if header else None
 
 
-def names_cols() -> list[tuple[str, int, bool]]:
-    return [("종목", 14, False), ("코드", 7, False),
-            ("순매수[억]", 13, True), ("시총대비[%p]", 12, True),
-            ("시총[억]", 13, True), ("거래대금[억]", 13, True)]
+#: 종목 목록의 열. 누적 기여율이 순매수 바로 옆에 붙고, 80% 를 처음 넘긴 행에
+#: 가로 마커가 선다 — 그 위가 "이 섹터를 움직인 종목", 아래는 스크롤할 0 이다.
+_NAME_COLS = (
+    Col("종목", 14, False, lambda t, st: t.get("name", "—")),
+    Col("코드", 7, False, lambda t, st: t.get("code", "")),
+    Col("순매수[억]", 13, True, lambda t, st: fmt_amt(t.get("flow"))),
+    Col("누적[%]", 8, True,
+        lambda t, st: "—" if t.get("cum") is None else f"{t['cum']:.0f}"),
+    Col("", 1, False, lambda t, st: "-" if t.get("cut") else ""),
+    Col("참여율[%]", 9, True, lambda t, st: fmt_pct(t.get("part"), 1)),
+    Col("시총대비[%p]", 12, True,
+        lambda t, st: fmt_pct(t["a"]) if t.get("a") is not None else "—"),
+    Col("시총[억]", 13, True,
+        lambda t, st: fmt_amt(t["cap"]).replace("+", "") if t.get("cap") else "—"),
+    Col("거래대금[억]", 13, True,
+        lambda t, st: fmt_amt(t.get("tv")).replace("+", "")),
+)
+
+
+def names_cols() -> list[Col]:
+    return list(_NAME_COLS)
 
 
 def name_sort_span(st: State) -> tuple[int, int] | None:
@@ -431,13 +595,23 @@ def detail_lines(st: State, width: int) -> list[str]:
         parts = [f"{t['name']} {fmt_amt(t['flow'])}억" for t in arr[:3]]
         return f" {label}: " + " · ".join(parts)
     n = (r.get("top") or {}).get("n", 0)
-    return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
+    # 표에서 막대로 바뀐 미실현과, 넓은 폭에서만 보이는 포텐셜의 **정확한 값**을
+    # 여기 둔다. 도형은 순서를, 숫자는 크기를 말한다.
+    x, u = r.get("x"), r.get("U")
+    exact = "" if x is None else f" · 미실현 {fmt_pct(x, 1)}%p"
+    exact += "" if u is None else f"(포텐셜 {u:.0f})"
+    return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체{exact}", width),
             pad(side("buy", "순매수 상위"), width),
             pad(side("sell", "순매도 상위"), width)]
 
 
 def names_lines(st: State, width: int) -> tuple[list[str], int]:
-    """종목 목록 화면 — (행, 헤더 줄 수)."""
+    """종목 목록 화면 — (행, 헤더 줄 수).
+
+    ⚠️ 본문 행은 `st.names()` 와 **1:1** 이어야 한다. 80% 가로줄을 별도 행으로
+    끼워 넣으면 화면 선택(`st.drow`)이 그 아래 전 종목에서 한 칸씩 어긋난다 —
+    그래서 줄은 행 안의 1칸 마커 열로 긋는다.
+    """
     r = st.selected()
     if not r:
         return [pad(" (섹터를 고르라)", width)], 1
@@ -445,20 +619,10 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
              f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
     cols = _fit(names_cols(), width)
-    ncol = len(cols)
-    head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
-    out = [pad(title, width), pad(head, width)]
+    head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
+    out = [pad(title, width), head]
     for t in names:
-        a = t.get("a")
-        out.append(pad(" ".join([
-            pad(t.get("name", "—"), 14),
-            pad(t.get("code", ""), 7),
-            pad(fmt_amt(t.get("flow")), 13, True),
-            pad(fmt_pct(a) if a is not None else "—", 12, True),
-            pad(fmt_amt(t.get("cap")).replace("+", "") if t.get("cap") else "—",
-                13, True),
-            pad(fmt_amt(t.get("tv")).replace("+", ""), 13, True),
-        ][:ncol]), width))
+        out.append(_render(cols, t, st, width))
     if not names:
         out.append(pad("  (이 시장·섹터에 대표종목이 없다)", width))
     return out, 2
@@ -490,6 +654,21 @@ def color_spans(line: str) -> list[tuple[int, int, str]]:
     for i, ch in enumerate(line):
         if ch == "*":
             spans.append((cell_at[i], 1, "mark"))
+    # 발산 막대 — 기준선 왼쪽은 음수, 오른쪽은 양수. 막대에는 부호 문자가 없어
+    # 위 정규식이 못 잡는다. 색까지 빠지면 왼쪽/오른쪽만으로 부호를 읽어야 한다.
+    i = 0
+    while i < len(line):
+        if line[i] != BAR_FILL:
+            i += 1
+            continue
+        j = i
+        while j < len(line) and line[j] == BAR_FILL:
+            j += 1
+        if j < len(line) and line[j] == BAR_AXIS:
+            spans.append((cell_at[i], cell_at[j] - cell_at[i], "down"))
+        elif i > 0 and line[i - 1] == BAR_AXIS:
+            spans.append((cell_at[i], cell_at[j] - cell_at[i], "up"))
+        i = j
     return spans
 
 

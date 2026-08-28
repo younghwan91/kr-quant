@@ -31,6 +31,13 @@ def data():
                 "cap": 100000.0,
                 "accel": 1.23, "ret": -4.56, "x": 7.8, "U": 90.1, "P": 0.12,
                 "xdot": 0.3, "xddot": 0.04, "a_idx": 1.23, "cap_idx": 100000.0,
+                # 1년 백분위·구간 모양은 **주체마다 다르다** — 값이 같으면
+                # "선택된 주체를 따르는가" 검사가 헛돈다.
+                "pct1y": {"inst": 96.0, "forgn": 12.0, "indiv": 50.0, "etc": 3.0},
+                "spark": {"inst": [1.0, 2.0, -3.0, 0.0, 5.0, -1.0, 2.0, 8.0],
+                          "forgn": [-8.0, -2.0, 3.0, 0.0, -5.0, 1.0, -2.0, -1.0],
+                          "indiv": [0.0] * 8,
+                          "etc": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
                 "top": {"buy": [{"code": "005930", "name": "삼성전자",
                                  "inst": 100.0, "a": 0.5}],
                         "sell": [{"code": "000660", "name": "SK하이닉스",
@@ -52,8 +59,13 @@ def data():
                 "win": {w: {"inst": inst, "forgn": forgn, "indiv": -inst,
                             "etc": 0.0, "tv": 900.0}
                         for w in ("5", "20", "60", "120")}}
+    # 전기/전자는 종목을 넉넉히 둔다 — 파는 쪽이 사는 쪽보다 크고, 누적 80% 를
+    # 넘기는 행이 여럿이라야 "절댓값 정렬"·"가로줄 하나" 검사가 힘을 갖는다.
     names = {"005930": nm("005930", "삼성전자", "전기/전자", 100.0, -30.0),
              "000660": nm("000660", "SK하이닉스", "전기/전자", -50.0, 80.0),
+             "066570": nm("066570", "LG전자", "전기/전자", 30.0, -12.0),
+             "009150": nm("009150", "삼성전기", "전기/전자", -15.0, 25.0),
+             "000990": nm("000990", "DB하이텍", "전기/전자", 5.0, -3.0),
              "000720": nm("000720", "현대건설", "건설", 40.0, -70.0),
              "006360": nm("006360", "GS건설", "건설", -20.0, 60.0),
              "035420": nm("035420", "NAVER", "IT 서비스", 70.0, -10.0),
@@ -62,6 +74,17 @@ def data():
     return {"asof": "2026-08-28", "finalized": True, "dates": ["2026-01-01", "2026-08-28"],
             "names": names,
             "blocks": blocks, "combined": {m: comb for m in ("전체", "거래소", "코스닥")}}
+
+
+#: **바뀐 열 라벨 대응표** — 새 이름 → 예전 이름(없으면 새로 생긴 열).
+#:
+#: `HELP` 는 이 작업의 소관이 아니라(다른 에이전트가 쥐고 있다) 열 이름이 바뀐 만큼
+#: 도움말이 잠시 뒤처진다. 머지하면서 HELP 를 고치고 **이 표를 비운다**. 표에
+#: 남아 있는데 화면에 안 그려지는 열이 있으면 아래 검사가 잡는다.
+HELP_PENDING = {
+    "1년[%ile]": None,          # 새 열 — 롤링 N일 합의 1년 분포 백분위
+    "추이[8]": None,            # 새 열 — 구간을 8조각으로 나눈 비겹침 합의 모양
+}
 
 
 def test_pad_counts_hangul_as_two_cells():
@@ -236,7 +259,10 @@ def test_help_covers_every_rendered_column(data):
 
     import re as _re
 
-    documented = {name for name, _ in HELP if name}
+    # HELP 는 이 작업에서 **손대지 않는다**(다른 에이전트 소관). 열 이름이 바뀐
+    # 만큼만 여기 적어 두고, 머지할 때 HELP 를 고치면서 이 표를 비운다.
+    # 아래 "안 쓰이는 열" 검사가 있어 표가 조용히 썩지는 않는다.
+    documented = {name for name, _ in HELP if name} | set(HELP_PENDING)
     st = State(data)
     missing = set()
     for wi in range(len(WINDOWS)):
@@ -250,6 +276,14 @@ def test_help_covers_every_rendered_column(data):
                     continue
                 missing.add(h)
     assert not missing, f"도움말에 없는 열: {sorted(missing)}"
+    # 대응표가 썩지 않게 — 이미 안 그려지는 열이 남아 있으면 지워야 한다.
+    rendered = set()
+    for wi in range(len(WINDOWS)):
+        st.wi = wi
+        for width in (80, 120, 160, 200):
+            rendered |= set(table_lines(st, width, 20)[0][0].split())
+    stale = set(HELP_PENDING) - rendered
+    assert not stale, f"HELP_PENDING 에 안 그려지는 열이 남았다: {sorted(stale)}"
 
 
 def test_headers_are_not_truncated_by_their_column_width(data):
@@ -265,12 +299,12 @@ def test_headers_are_not_truncated_by_their_column_width(data):
     for wi in range(len(WINDOWS)):
         st.wi = wi
         for width in (80, 120, 160):
-            for name, w, _r in table_cols(st, width):
-                if name and _w(name) > w:
-                    bad.append(f"{name}({_w(name)}칸) > 열폭 {w}")
-    for name, w, _r in names_cols():
-        if name and _w(name) > w:
-            bad.append(f"[종목목록] {name}({_w(name)}칸) > 열폭 {w}")
+            for c in table_cols(st, width):
+                if c.header and _w(c.header) > c.width:
+                    bad.append(f"{c.header}({_w(c.header)}칸) > 열폭 {c.width}")
+    for c in names_cols():
+        if c.header and _w(c.header) > c.width:
+            bad.append(f"[종목목록] {c.header}({_w(c.header)}칸) > 열폭 {c.width}")
     assert not bad, "헤더가 잘린다: " + "; ".join(sorted(set(bad)))
 
 
@@ -389,12 +423,12 @@ def test_name_sort_highlight_matches_columns():
         assert span, f"{key} 스팬 없음"
         start, w = span
         cell = 0
-        for name, cw, _r in names_cols():
+        for c in names_cols():
             if cell == start:
-                assert name == NAME_SORT_COL[key], f"{key} → {name}"
-                assert cw == w
+                assert c.header == NAME_SORT_COL[key], f"{key} → {c.header}"
+                assert c.width == w
                 break
-            cell += cw + 1
+            cell += c.width + 1
         else:
             pytest.fail(f"{key} 스팬이 어떤 열과도 안 맞는다")
 
@@ -412,7 +446,7 @@ def test_lead_name_and_amount_align_in_fixed_cells(data):
     # 매직넘버 대신 **열 정의에서** 상위종목 열의 구간을 구한다 — 폭이 바뀌면
     # 위치도 바뀌므로 하드코딩하면 무관한 이유로 깨진다(실제로 깨졌다).
     cols = table_cols(st, width)
-    spans = [col_span(cols, n) for n, _w2, _r in cols if n.startswith("순매")]
+    spans = [col_span(cols, c.header) for c in cols if c.header.startswith("순매")]
     assert spans and all(spans), "상위종목 열을 못 찾았다"
     ends = set()
     for line in lines[nhead:]:
@@ -446,7 +480,7 @@ def test_data_cells_sit_under_their_headers(data):
     `.strip()` 하면 안 된다 — 값이 셀보다 짧을 때 1칸 어긋남이 여백에
     먹혀서 폭 변경(헤더 12 · 셀 13)을 놓친다.
     """
-    from kr_quant.tui.flow_view import col_span, table_cols
+    from kr_quant.tui.flow_view import _fit, col_span, table_cols
 
     st = State(data)
     for width in (80, 100, 132, 150, 170):
@@ -454,22 +488,28 @@ def test_data_cells_sit_under_their_headers(data):
             if w == "종합":
                 continue
             st.wi = wi
-            cols = table_cols(st, width)
+            # 렌더가 보는 것과 **같은** 열 목록이어야 한다 — 폭에 안 들어가
+            # 통째로 빠진 열까지 기대하면 검사가 엉뚱한 이유로 실패한다.
+            cols = _fit(table_cols(st, width), width)
             lines, _thin, nhead = table_lines(st, width, 30)
             for r, line in zip(st.rows(), lines[nhead:]):
+                # 기대값은 렌더 함수를 부르지 않고 **여기서 다시 적는다** —
+                # Col.fn 을 그대로 부르면 동어반복이라 아무것도 못 잡는다.
+                pct = r.get("pct")
                 want = {
                     "섹터": r.get("sector", "—"),
                     "종목[수]": str(r.get("n_all", "—")),
                     "임펄스[억]": fmt_amt(r.get("flow")),
                     "가속[%p]": fmt_pct(r.get("accel")),
                     "수익률[%]": fmt_pct(r.get("ret")),
-                    "미실현[%p]": fmt_pct(r.get("x"), 1),
+                    "1년[%ile]": "—" if pct is None else f"{pct:.0f}",
+                    "G[0~1]": ("—" if r.get("G") is None else f"{r['G']:.2f}"),
                 }
                 for hdr, val in want.items():
                     span = col_span(cols, hdr)
                     if span is None:          # 이 폭에선 안 보이는 열
                         continue
-                    right = next(rt for n, _w2, rt in cols if n == hdr)
+                    right = next(c.right for c in cols if c.header == hdr)
                     assert _slice(line, *span) == pad(val, span[1], right), (
                         f"폭{width}·창{w} 의 '{hdr}' 열이 헤더와 어긋났다")
 
@@ -497,10 +537,13 @@ def test_stock_list_cells_sit_under_their_headers(data):
                     "코드": t.get("code", ""),
                     "순매수[억]": fmt_amt(t.get("flow")),
                     "시총대비[%p]": fmt_pct(a) if a is not None else "—",
+                    "참여율[%]": fmt_pct(t.get("part"), 1),
+                    "누적[%]": ("—" if t.get("cum") is None
+                                else f"{t['cum']:.0f}"),
                 }
                 for hdr, val in want.items():
                     span = col_span(cols, hdr)
-                    right = next(rt for n, _w2, rt in cols if n == hdr)
+                    right = next(c.right for c in cols if c.header == hdr)
                     assert _slice(line, *span) == pad(val, span[1], right), (
                         f"폭{width}·정렬{nsi} 의 '{hdr}' 열이 헤더와 어긋났다")
 
@@ -515,7 +558,14 @@ def test_stock_list_is_actually_sorted_by_the_chosen_key(data):
         st.nsi = nsi
         vals = [t.get(key) for t in st.names()]
         got = [v for v in vals if v is not None]
-        want = sorted(got) if key == "name" else sorted(got, reverse=True)
+        if key == "name":
+            want = sorted(got)
+        elif key == "flow":
+            # 섹터를 움직인 건 산 쪽과 판 쪽 **둘 다**라 절댓값 순이다.
+            got = [abs(v) for v in got]
+            want = sorted(got, reverse=True)
+        else:
+            want = sorted(got, reverse=True)
         assert got == want, f"정렬[{label}] 이 {key} 순이 아니다: {got}"
 
 
@@ -559,3 +609,290 @@ def test_thin_sector_warning_survives_without_color(data):
     assert marked, "픽스처에 얇은 섹터가 없다 — 이 검사가 헛돈다"
     for ln in marked:
         assert "~" in ln, f"얇은 섹터인데 글자 표시가 없다: {ln.strip()!r}"
+
+
+# ── 열 정의가 하나뿐이라는 것 ────────────────────────────────────────────
+
+def test_render_walks_the_column_definition_and_nothing_else(data):
+    """회귀 — 렌더가 열 정의 밖에서 셀을 만들어내면 안 된다.
+
+    예전엔 `table_cols()` 와 `table_lines()` 가 폭 상수와 폭 임계값을 각각
+    적었고 분기 모양까지 서로 달랐다. 결과가 같았던 건 우연이다. 이제 셀 수는
+    열 수와 **항상** 같아야 한다 — 이 등식이 깨지면 헤더와 값이 어긋난다.
+    """
+    from kr_quant.tui.flow_view import _fit, table_cols
+
+    st = State(data)
+    for wi in range(len(WINDOWS)):
+        st.wi = wi
+        for width in (60, 80, 100, 132, 150, 200):
+            cols = _fit(table_cols(st, width), width)
+            need = sum(c.width for c in cols) + len(cols) - 1
+            lines, _thin, nhead = table_lines(st, width, 30)
+            for line in lines:
+                # 열 정의가 쓴 만큼까지가 내용이고 그 뒤는 여백이어야 한다.
+                assert not _slice(line, need, max(width - need, 0)).strip(), (
+                    f"폭{width}: 열 정의({need}칸) 밖에 내용이 있다: {line!r}")
+
+
+def test_no_width_threshold_lives_outside_the_column_list():
+    """회귀 — 폭 임계값이 렌더 쪽에 다시 나타나면 이중화가 되살아난 것이다."""
+    import inspect
+
+    from kr_quant.tui import flow_view
+
+    src = inspect.getsource(flow_view.table_lines) + inspect.getsource(
+        flow_view.names_lines) + inspect.getsource(flow_view._render)
+    for bad in (">= 100", ">= 132", ">= 150", ">=100", ">=132", ">=150"):
+        assert bad not in src, f"렌더에 폭 임계값이 되살아났다: {bad}"
+
+
+# ── 스파크라인·발산 막대 ─────────────────────────────────────────────────
+
+def test_spark_and_bar_glyphs_are_never_ambiguous_width():
+    """⚠️ 폭이 '애매' 한 글자를 표에 넣지 않는다.
+
+    블록 문자 ``▁▂▃▄▅▆▇█`` 는 East Asian Width 가 'A'(Ambiguous) 다. `cell_width`
+    는 1칸으로 세지만 한글 로케일 터미널은 2칸으로 그릴 수 있고, 그러면 그 행만
+    8칸씩 밀린다. 브라유(U+28xx)는 'N' 이라 그런 여지가 없다.
+
+    이 검사는 그림 글자에만 건다 — 기존 UI 는 이미 '·'·'—'·'²'(전부 'A')를
+    쓰고 있어서 전면 금지는 이 작업 범위를 넘는다(보고서에 적었다).
+    """
+    import unicodedata
+
+    from kr_quant.tui.flow_view import BAR_AXIS, BAR_FILL, SPARK
+
+    for ch in list(SPARK.values()) + [BAR_FILL, BAR_AXIS]:
+        eaw = unicodedata.east_asian_width(ch)
+        assert eaw not in ("A", "W", "F"), f"{ch!r} 의 폭이 {eaw} 다"
+        assert cell_width(ch) == 1
+
+
+def test_spark_is_exactly_its_column_width_and_recent_is_rightmost():
+    from kr_quant.tui.flow_view import spark
+
+    assert _w(spark([1, 2, 3, 4, 5, 6, 7, 8])) == 8
+    assert _w(spark([1, 2, 3])) == 8              # 조각이 적어도 폭은 같다
+    # 조각이 모자라면 **왼쪽**이 빈다 — 오른쪽 끝이 최근이라는 약속.
+    assert spark([1, 2, 3]).startswith("     ")
+    # 부호가 도형에 실린다
+    up, down = spark([5, 5, 5, 5, 5, 5, 5, 5]), spark([-5] * 8)
+    assert up != down
+    assert _w(spark([])) == 1                     # 값이 없으면 '—'
+
+
+def test_divergence_bar_puts_sign_on_the_side_and_size_in_length():
+    from kr_quant.tui.flow_view import BAR_AXIS, BAR_FILL, xbar
+
+    wide, small, neg = xbar(10.0, 10.0), xbar(1.0, 10.0), xbar(-10.0, 10.0)
+    for b in (wide, small, neg, xbar(0.0, 10.0)):
+        assert _w(b) == 9, b
+        assert b.count(BAR_AXIS) == 1
+    # 크기 = 길이
+    assert wide.count(BAR_FILL) > small.count(BAR_FILL)
+    # 부호 = 기준선의 어느 쪽인가
+    assert wide.index(BAR_FILL) > wide.index(BAR_AXIS)
+    assert neg.index(BAR_FILL) < neg.index(BAR_AXIS)
+    assert xbar(None, 10.0) == "—"
+
+
+def test_divergence_bar_gets_a_color_role_from_its_side():
+    """막대에는 부호 문자가 없다 — 색까지 빠지면 방향 정보가 도형에만 남는다."""
+    from kr_quant.tui.flow_view import color_spans, xbar
+
+    def roles(s):
+        return [r for _, _, r in color_spans(s)]
+
+    assert roles(xbar(5.0, 10.0)) == ["up"]
+    assert roles(xbar(-5.0, 10.0)) == ["down"]
+    assert roles(xbar(0.0, 10.0)) == []
+
+
+# ── 새 열이 선택된 주체를 따르는가 ───────────────────────────────────────
+
+def test_year_percentile_and_spark_follow_the_selected_actor(data):
+    """회귀 — 오늘 고친 버그가 정확히 '한 행 안에 두 주체의 숫자가 섞이는' 것이었다.
+
+    임펄스만 주체를 따르고 새 열이 기관 값에 머물면, 외국인 화면의 한 행이
+    두 주체를 동시에 말한다. 픽스처는 주체마다 다른 값을 싣는다.
+    """
+    from kr_quant.tui.flow_view import col_span, table_cols
+
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    width = 200
+    cols = table_cols(st, width)
+    raw = data["blocks"]["20|전체"]["rows"][0]
+    span = col_span(cols, "1년[%ile]")
+    seen = {}
+    for ai, (key, _label) in enumerate(ACTORS):
+        st.ai = ai
+        r = st.rows()[0]
+        assert r["pct"] == r["pct1y"][key], f"{key} 의 백분위가 안 따라온다"
+        assert r["spark"] == raw["spark"][key], f"{key} 의 스파크라인이 안 따라온다"
+        line = table_lines(st, width, 20)[0][1]
+        seen[key] = _slice(line, *span).strip()
+    assert seen["inst"] == "96" and seen["forgn"] == "12", seen
+    assert len(set(seen.values())) == len(ACTORS), f"주체별로 안 갈린다: {seen}"
+
+
+def test_spark_column_changes_with_the_actor(data):
+    from kr_quant.tui.flow_view import col_span, table_cols
+
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    width = 200
+    span = col_span(table_cols(st, width), "추이[8]")
+    got = set()
+    for ai in range(len(ACTORS)):
+        st.ai = ai
+        got.add(_slice(table_lines(st, width, 20)[0][1], *span))
+    assert len(got) >= 3, f"주체를 바꿔도 스파크라인이 그대로다: {got}"
+
+
+# ── 정보 설계 ────────────────────────────────────────────────────────────
+
+def test_default_sort_is_acceleration_not_the_unvalidated_score(data):
+    """G 는 세 순위의 평균인 **검증 안 된 탐색 점수**다. 화면 순서를 지배할 근거가
+    없다 — 기본은 규모 정규화된 가속이다."""
+    assert SORTS[0][0] == "accel", SORTS[0]
+    st = State(data)
+    assert st.sort_key == "accel"
+
+
+def test_conclusion_columns_come_after_their_inputs(data):
+    """회귀 — 결론(G)이 자기 입력(가속·미실현·풀림)보다 왼쪽에 있으면 안 된다."""
+    from kr_quant.tui.flow_view import table_cols
+
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    order = [c.header for c in table_cols(st, 200)]
+    assert len(order) == len(set(order)), f"헤더가 중복이다: {order}"
+    pos = {}
+    for i, h in enumerate(order):
+        pos.setdefault(h, i)          # 중복이면 col_span 이 가리키는 **앞의 것**
+    for inp in ("가속[%p]", "미실현[%p]", "풀림[%p/일²]"):
+        assert pos[inp] < pos["G[0~1]"], f"{inp} 가 G 보다 오른쪽이다: {order}"
+    # 종목수는 판단 변수가 아니라 데이터 품질 주석이다 — 앞자리를 차지하면 안 된다.
+    assert pos["종목[수]"] > pos["수익률[%]"], order
+
+
+def test_the_screen_at_eighty_columns_shows_force_before_conclusion(data):
+    """좁은 터미널에서 **무엇이 살아남는가** 가 곧 정보 설계다."""
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    head = table_lines(st, 80, 20)[0][0]
+    for must in ("섹터", "가속[%p]", "임펄스[억]", "1년[%ile]", "추이[8]", "수익률[%]"):
+        assert must in head, f"80칸에 {must} 가 없다: {head!r}"
+
+
+# ── 종목 목록 — 누적 기여율 ─────────────────────────────────────────────
+
+def test_cumulative_contribution_reaches_100_and_marks_the_cut(data):
+    st = State(data)
+    st.nsi = 0                              # 순매수(절댓값) 정렬
+    names = st.names()
+    cums = [t["cum"] for t in names]
+    assert cums == sorted(cums), f"누적이 단조증가가 아니다: {cums}"
+    assert abs(cums[-1] - 100.0) < 1e-6, cums
+    cuts = [t for t in names if t["cut"]]
+    assert len(cuts) == 1, f"80% 가로줄이 {len(cuts)}개다"
+    assert cuts[0]["cum"] >= 80.0
+    # 가로줄 **바로 위** 행은 아직 80% 를 못 넘겨야 한다
+    i = names.index(cuts[0])
+    if i:
+        assert names[i - 1]["cum"] < 80.0
+
+
+def test_cumulative_is_blank_where_it_would_be_meaningless(data):
+    """기여도는 |금액| 으로만 정의된다. 종목명 순으로 누적하면 단조증가라서
+    뜻이 있어 보이지만 아무 말도 아니다 — 그런 칸은 비운다."""
+    st = State(data)
+    st.nsi = [k for k, _ in NAME_SORTS].index("name")
+    assert all(t["cum"] is None for t in st.names())
+    from kr_quant.tui.flow_view import col_span, names_cols, names_lines
+    lines, nhead = names_lines(st, 170)
+    span = col_span(names_cols(), "누적[%]")
+    for line in lines[nhead:]:
+        assert _slice(line, *span).strip() == "—"
+
+
+def test_stock_rows_stay_one_to_one_with_the_name_list(data):
+    """회귀 — 80% 가로줄을 별도 행으로 끼워 넣으면 화면 선택(`drow`)이 그 아래
+    전 종목에서 한 칸씩 어긋난다. flow_app 은 본문 i 번째 줄 = names()[i] 로 읽는다.
+    """
+    st = State(data)
+    for nsi in range(len(NAME_SORTS)):
+        st.nsi = nsi
+        names = st.names()
+        from kr_quant.tui.flow_view import names_lines
+        lines, nhead = names_lines(st, 170)
+        assert len(lines) - nhead == len(names), (
+            f"정렬{nsi}: 본문 {len(lines) - nhead}줄 vs 종목 {len(names)}개")
+        for t, line in zip(names, lines[nhead:]):
+            assert t["name"] in line
+
+
+def test_participation_rate_is_flow_over_turnover(data):
+    st = State(data)
+    for t in st.names():
+        if t.get("tv"):
+            assert abs(t["part"] - t["flow"] / t["tv"] * 100) < 1e-9
+
+
+# ── 1년 백분위·구간 조각을 만드는 쪽(scripts/sector_numbers.py) ──────────
+#
+# TUI 는 이 두 값을 그리기만 한다. 값이 틀리면 화면은 아무 불평 없이 틀린 숫자를
+# 예쁘게 그린다 — 그래서 만드는 쪽을 여기서 같이 잠근다.
+
+def _producer():
+    import importlib.util
+    import pathlib
+    p = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "sector_numbers.py"
+    spec = importlib.util.spec_from_file_location("_sector_numbers", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_rolling_percentile_is_a_rank_not_a_z_score():
+    """롤링 창은 겹쳐서 자기상관이 크고 260일에 비겹침 20일 창은 13개뿐이다.
+    z 는 그 표본에서 정밀도를 과장한다 — 백분위는 '몇 등' 만 말한다."""
+    m = _producer()
+    up = list(range(260))                      # 최근이 가장 큼
+    assert m.rolling_pct(up, 20) == 100.0
+    assert m.rolling_pct(up[::-1], 20) == 0.0
+
+
+def test_rolling_percentile_does_not_call_a_silent_sector_a_record():
+    """회귀 — 동률을 `<=` 로 세면 **0 만 있는 조용한 섹터가 전부 100 백분위**가 된다.
+
+    실제 페이로드에는 그런 섹터가 있다(출판/매체복제: 20일 임펄스 +0억).
+    화면에서 '1년 최대치' 라고 외치는데 실은 아무 일도 없었던 것이다.
+    """
+    m = _producer()
+    assert m.rolling_pct([0.0] * 260, 20) == 50.0
+    # 한 번만 튀고 다시 잠잠해진 경우도 현재값은 중간이어야 한다
+    ser = [0.0] * 260
+    ser[100] = 1e9
+    assert 0.0 < m.rolling_pct(ser, 20) < 100.0
+
+
+def test_rolling_percentile_refuses_windows_longer_than_the_history():
+    m = _producer()
+    assert m.rolling_pct([1.0] * 10, 20) is None
+
+
+def test_spark_segments_sum_back_to_the_impulse():
+    """스파크라인의 맨 오른쪽 칸이 임펄스 열의 그 숫자로 이어진다는 약속은,
+    조각이 구간을 **빠짐없이 겹치지 않게** 덮을 때만 성립한다."""
+    m = _producer()
+    ser = [float(i) for i in range(100)]
+    for i0, i1 in ((80, 99), (0, 99), (95, 99), (40, 44)):
+        segs = m.spark_segs(ser, i0, i1)
+        assert abs(sum(segs) - sum(ser[i0:i1 + 1])) < 1e-9, (i0, i1)
+        assert len(segs) == min(8, i1 - i0 + 1)
+    # 마지막 조각은 **가장 최근** 날들이다
+    segs = m.spark_segs(ser, 80, 99)
+    assert abs(segs[-1] - sum(ser[97:100])) < 1e-9 or segs[-1] > segs[0]
