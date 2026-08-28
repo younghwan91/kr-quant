@@ -19,8 +19,8 @@ SORTS = (("G", "성장"), ("inst", "임펄스"), ("accel", "가속"), ("ret", "�
          ("x", "미실현"), ("n_all", "종목수"))
 #: 종목 목록의 정렬. 기본은 **절대 순매수** — 섹터 합계가 금액의 합이므로
 #: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
-NAME_SORTS = (("inst", "순매수"), ("a", "시총대비"), ("tv", "거래대금"),
-              ("name", "종목명"))
+NAME_SORTS = (("inst", "순매수"), ("a", "시총대비"), ("cap", "시총"),
+              ("tv", "거래대금"), ("name", "종목명"))
 
 
 def fmt_amt(v) -> str:
@@ -187,8 +187,15 @@ def header_lines(st: State, width: int) -> list[str]:
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
 
 
-def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[bool], int]:
-    """(행 문자열, 얇은섹터 여부, 헤더 줄 수). 폭에 따라 열을 줄인다."""
+#: 정렬 키 → 그 열의 헤더 이름. 하이라이트할 열을 찾는 데 쓴다.
+SORT_COL = {"G": "G", "inst": "임펄스", "accel": "가속", "ret": "수익률",
+            "x": "미실현", "n_all": "종목"}
+NAME_SORT_COL = {"inst": "순매수", "a": "시총대비", "cap": "시총",
+                 "tv": "거래대금", "name": "종목"}
+
+
+def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
+    """섹터 표의 열 정의 — 렌더와 하이라이트가 **같은 정의**를 봐야 어긋나지 않는다."""
     wide = width >= 100
     if st.window == "종합":
         cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False)]
@@ -196,11 +203,29 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
         for w in wins:
             cols.append((f"{w}일", 6, True))
         cols.append(("통과", 6, True))
-    else:
-        cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False),
-                ("임펄스", 10, True), ("가속", 7, True), ("수익률", 8, True)]
-        if wide:
-            cols += [("미실현", 8, True), ("포텐셜", 8, True), ("순매수상위", 22, False)]
+        return cols
+    cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False),
+            ("임펄스", 10, True), ("가속", 7, True), ("수익률", 8, True)]
+    if wide:
+        cols += [("미실현", 8, True), ("포텐셜", 8, True), ("순매수상위", 22, False)]
+    return cols
+
+
+def col_span(cols: list[tuple[str, int, bool]], header: str) -> tuple[int, int] | None:
+    """열 헤더의 (시작 표시칸, 폭). 열 사이 공백 1칸을 더해가며 센다."""
+    cell = 0
+    for name, w, _r in cols:
+        if name == header:
+            return cell, w
+        cell += w + 1
+    return None
+
+
+def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[bool], int]:
+    """(행 문자열, 얇은섹터 여부, 헤더 줄 수). 폭에 따라 열을 줄인다."""
+    cols = table_cols(st, width)
+    wide = width >= 100
+    wins = (st.d.get("combined", {}).get(st.market) or {}).get("windows", [])
 
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(head, width)]
@@ -233,6 +258,26 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
     return out, thin, 1
 
 
+def sort_span(st: State, width: int) -> tuple[int, int] | None:
+    """지금 정렬 중인 열의 (시작 표시칸, 폭). 종합 화면·이름정렬은 None."""
+    if st.window == "종합":
+        return None
+    header = SORT_COL.get(st.sort_key)
+    return col_span(table_cols(st, width), header) if header else None
+
+
+def names_cols() -> list[tuple[str, int, bool]]:
+    return [("종목", 14, False), ("코드", 7, False),
+            ("순매수", 11, True), ("시총대비", 9, True),
+            ("시총", 11, True), ("거래대금", 11, True)]
+
+
+def name_sort_span(st: State) -> tuple[int, int] | None:
+    """종목 목록에서 지금 정렬 중인 열의 (시작 표시칸, 폭)."""
+    header = NAME_SORT_COL.get(st.name_sort)
+    return col_span(names_cols(), header) if header else None
+
+
 def detail_lines(st: State, width: int) -> list[str]:
     rows = st.rows()
     if not rows:
@@ -261,8 +306,7 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     names = st.names()
     title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
              f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
-    cols = [("종목", 14, False), ("코드", 7, False),
-            ("순매수", 11, True), ("시총대비", 9, True), ("거래대금", 11, True)]
+    cols = names_cols()
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(title, width), pad(head, width)]
     for t in names:
@@ -272,6 +316,8 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
             pad(t.get("code", ""), 7),
             pad(fmt_amt(t.get("inst")), 11, True),
             pad((fmt_pct(a) + "%p") if a is not None else "—", 9, True),
+            pad(fmt_amt(t.get("cap")).replace("+", "") if t.get("cap") else "—",
+                11, True),
             pad(fmt_amt(t.get("tv")).replace("+", ""), 11, True),
         ]), width))
     if not names:
@@ -336,6 +382,7 @@ HELP = [
     ("순매수", "그 구간 기관 순매수 [억원]. **기본 정렬** — 섹터 합계가 금액의"),
     ("", "        합이므로 '누가 이 섹터를 움직였나' 는 금액으로만 정의된다."),
     ("시총대비", "순매수 ÷ 그 종목 시총 × 100 [%p]. 시총 작은 스팩이 위로 올라온다."),
+    ("시총", "그 종목의 구간말 시가총액 [억원]. 시총대비의 분모다."),
     ("거래대금", "그 구간 거래대금 [억원]."),
     ("", ""),
     ("", "── 알아둘 것 ──"),

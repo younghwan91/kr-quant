@@ -300,3 +300,52 @@ def test_detail_panel_shows_the_value_it_sorts_by(data):
     amounts = [v for _, v in vals]
     assert amounts == sorted(amounts, reverse=True), (
         f"화면 순서와 금액 순서가 다르다: {amounts}")
+
+
+def test_sort_highlight_points_at_the_right_header(data):
+    """회귀 — 정렬 하이라이트가 실제 그 열의 헤더 칸을 가리켜야 한다.
+
+    렌더와 하이라이트가 열 정의를 따로 갖고 있으면 조용히 어긋난다.
+    두 경로가 같은 table_cols() 를 쓰는지 결과로 검사한다.
+    """
+    from kr_quant.tui.flow_view import SORTS, SORT_COL, sort_span
+
+    st = State(data)
+    for width in (80, 120):
+        for si, (key, _label) in enumerate(SORTS):
+            st.si = si
+            st.wi = 1                       # 종합이 아닌 창
+            span = sort_span(st, width)
+            header_line = table_lines(st, width, 10)[0][0]
+            want = SORT_COL[key]
+            if span is None:
+                continue
+            start, w = span
+            got, cell = "", 0
+            for ch in header_line:
+                if start <= cell < start + w:
+                    got += ch
+                cell += cell_width(ch)
+            assert want in got, f"정렬[{key}] 하이라이트가 '{got.strip()}' 를 가리킨다"
+
+
+def test_name_sort_highlight_matches_columns():
+    from kr_quant.tui.flow_view import NAME_SORTS, NAME_SORT_COL, name_sort_span, names_cols
+
+    class _S:
+        pass
+    for key, _ in NAME_SORTS:
+        st = _S()
+        st.name_sort = key
+        span = name_sort_span(st)
+        assert span, f"{key} 스팬 없음"
+        start, w = span
+        cell = 0
+        for name, cw, _r in names_cols():
+            if cell == start:
+                assert name == NAME_SORT_COL[key], f"{key} → {name}"
+                assert cw == w
+                break
+            cell += cw + 1
+        else:
+            pytest.fail(f"{key} 스팬이 어떤 열과도 안 맞는다")

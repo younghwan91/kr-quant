@@ -20,7 +20,7 @@ import re
 
 from kr_quant.tui.flow_view import (
     FOOTER, FOOTER_DRILL, State, color_spans, detail_lines, header_lines,
-    help_lines, names_lines, table_lines)
+    help_lines, name_sort_span, names_lines, sort_span, table_lines)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -38,7 +38,7 @@ def load(report_dir: str) -> dict:
 
 
 # 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
-C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK = range(1, 8)
+C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK, C_SORT = range(1, 9)
 
 #: 색을 쓸 수 있는 터미널인가. curses.window 에는 속성을 붙일 수 없어서
 #: (`scr._colored = ...` 는 AttributeError) 모듈 수준으로 둔다.
@@ -63,6 +63,7 @@ def _init_colors() -> bool:
     curses.init_pair(C_DIM, curses.COLOR_BLUE, bg)
     curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
     curses.init_pair(C_MARK, curses.COLOR_GREEN, bg)
+    curses.init_pair(C_SORT, curses.COLOR_WHITE, curses.COLOR_BLUE)
     _COLORED = True
     return True
 
@@ -86,6 +87,18 @@ def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) ->
             scr.chgat(y, start, width, attr | (base & curses.A_BOLD))
         except curses.error:
             pass
+
+
+def _hl_sort(scr, y: int, span, col: bool) -> None:
+    """정렬 중인 열 헤더를 덧칠한다 — 어떤 기준으로 줄세웠는지 한눈에 보이게."""
+    if not span:
+        return
+    start, width = span
+    attr = (curses.color_pair(C_SORT) if col else curses.A_UNDERLINE) | curses.A_BOLD
+    try:
+        scr.chgat(y, start, width, attr)
+    except curses.error:
+        pass
 
 
 def _draw(scr, st: State) -> None:
@@ -133,6 +146,8 @@ def _draw(scr, st: State) -> None:
             else:
                 base = curses.A_NORMAL
             _put(scr, top + i, line, base, col and i > 1, sel)
+            if i == 1:
+                _hl_sort(scr, top + i, name_sort_span(st), col)
         _put(scr, h - 1, pad_footer(FOOTER_DRILL, w),
              curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
         scr.refresh()
@@ -147,6 +162,7 @@ def _draw(scr, st: State) -> None:
 
     _put(scr, top, lines[0],
          curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
+    _hl_sort(scr, top, sort_span(st, w), col)
     for j in range(rows_avail):
         idx = first + j
         if idx >= total:
