@@ -19,8 +19,8 @@ import os
 import re
 
 from kr_quant.tui.flow_view import (
-    FOOTER, FOOTER_DRILL, State, detail_lines, header_lines, names_lines,
-    table_lines)
+    FOOTER, FOOTER_DRILL, State, color_spans, detail_lines, header_lines,
+    names_lines, table_lines)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -37,26 +37,79 @@ def load(report_dir: str) -> dict:
     return json.loads(m.group(1))
 
 
+# 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
+C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK = range(1, 8)
+
+
+def _init_colors() -> bool:
+    if not curses.has_colors():
+        return False
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+        bg = -1
+    except curses.error:
+        bg = curses.COLOR_BLACK
+    curses.init_pair(C_AMBER, curses.COLOR_YELLOW, bg)
+    curses.init_pair(C_UP, curses.COLOR_RED, bg)
+    curses.init_pair(C_DOWN, curses.COLOR_CYAN, bg)
+    curses.init_pair(C_HEAD, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+    curses.init_pair(C_DIM, curses.COLOR_BLUE, bg)
+    curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
+    curses.init_pair(C_MARK, curses.COLOR_GREEN, bg)
+    return True
+
+
+def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) -> None:
+    """한 줄 그리기 — 숫자 구간만 부호색으로 덧칠한다.
+
+    선택행은 반전이라 덧칠하지 않는다(반전 위에 색을 얹으면 읽기 어렵다).
+    """
+    try:
+        scr.addstr(y, 0, line, base)
+    except curses.error:
+        return
+    if not colored or selected:
+        return
+    for start, width, role in color_spans(line):
+        attr = {"up": curses.color_pair(C_UP),
+                "down": curses.color_pair(C_DOWN),
+                "mark": curses.color_pair(C_MARK) | curses.A_BOLD}[role]
+        try:
+            scr.chgat(y, start, width, attr | (base & curses.A_BOLD))
+        except curses.error:
+            pass
+
+
 def _draw(scr, st: State) -> None:
     scr.erase()
     h, w = scr.getmaxyx()
     w = max(w - 1, 20)
 
-    for i, line in enumerate(header_lines(st, w)):
-        scr.addstr(i, 0, line, curses.A_BOLD if i == 0 else curses.A_NORMAL)
-    top = len(header_lines(st, w))
+    col = getattr(scr, "_colored", False)
+    hdr = header_lines(st, w)
+    for i, line in enumerate(hdr):
+        base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
+                else (curses.color_pair(C_AMBER) if col else curses.A_BOLD))
+        _put(scr, i, line, base, col and i > 0)
+    top = len(hdr)
 
     if st.drill:
         lines, nhead = names_lines(st, w)
         avail = h - top - 1
         for i, line in enumerate(lines[:avail]):
-            attr = curses.A_BOLD if i < nhead else curses.A_NORMAL
-            if i == nhead and len(lines) > nhead:
-                attr = curses.A_REVERSE
-            if i >= nhead + 1 and (i - nhead - 1) == st.drow:
-                attr = curses.A_REVERSE | curses.A_BOLD
-            scr.addstr(top + i, 0, line, attr)
-        scr.addstr(h - 1, 0, FOOTER_DRILL[:w], curses.A_REVERSE)
+            sel = i >= nhead and (i - nhead) == st.drow
+            if i == 0:
+                base = curses.color_pair(C_AMBER) | curses.A_BOLD if col else curses.A_BOLD
+            elif i == 1:
+                base = curses.color_pair(C_HEAD) if col else curses.A_REVERSE
+            elif sel:
+                base = curses.color_pair(C_SEL) | curses.A_BOLD if col else curses.A_REVERSE
+            else:
+                base = curses.A_NORMAL
+            _put(scr, top + i, line, base, col and i > 1, sel)
+        _put(scr, h - 1, pad_footer(FOOTER_DRILL, w),
+             curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
         scr.refresh()
         return
 
@@ -67,28 +120,42 @@ def _draw(scr, st: State) -> None:
     first = max(0, min(st.row - rows_avail // 2, total - rows_avail))
     first = max(first, 0)
 
-    scr.addstr(top, 0, lines[0], curses.A_REVERSE)
+    _put(scr, top, lines[0],
+         curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
     for j in range(rows_avail):
         idx = first + j
         if idx >= total:
             break
-        attr = curses.A_NORMAL
-        if thin[idx + nhead]:
-            attr = curses.A_DIM
-        if idx == st.row:
-            attr = curses.A_REVERSE | curses.A_BOLD
-        scr.addstr(top + 1 + j, 0, lines[idx + nhead], attr)
+        sel = idx == st.row
+        if sel:
+            base = curses.color_pair(C_SEL) | curses.A_BOLD if col else curses.A_REVERSE
+        elif thin[idx + nhead]:
+            base = curses.color_pair(C_DIM) if col else curses.A_DIM
+        else:
+            base = curses.A_NORMAL
+        _put(scr, top + 1 + j, lines[idx + nhead], base,
+             col and not thin[idx + nhead], sel)
 
     dtop = h - 4
     for i, line in enumerate(detail_lines(st, w)):
         if dtop + i < h - 1:
-            scr.addstr(dtop + i, 0, line, curses.A_BOLD if i == 0 else curses.A_NORMAL)
-    scr.addstr(h - 1, 0, FOOTER[:w], curses.A_REVERSE)
+            base = (curses.color_pair(C_AMBER) | curses.A_BOLD if col and i == 0
+                    else curses.A_NORMAL)
+            _put(scr, dtop + i, line, base, col and i > 0)
+    _put(scr, h - 1, pad_footer(FOOTER, w),
+         curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
     scr.refresh()
+
+
+def pad_footer(text: str, width: int) -> str:
+    """푸터를 폭에 맞춘다 — 반전 배경이 줄 끝까지 이어지게."""
+    from kr_quant.tui.flow_view import pad
+    return pad(text, width)
 
 
 def _loop(scr, data: dict) -> None:
     curses.curs_set(0)
+    scr._colored = _init_colors()
     st = State(data)
     while True:
         _draw(scr, st)

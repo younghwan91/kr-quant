@@ -261,5 +261,34 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     return out, 2
 
 
+#: 색을 입힐 구간을 찾는 정규식. 렌더는 문자열만 만들고, 어디를 무슨 색으로
+#: 칠할지는 이 함수가 (시작칸, 길이, 역할) 로 낸다 — curses 를 여기 들이지 않는다.
+_NUM = __import__("re").compile(r"[+-][\d,]+(?:\.\d+)?%?p?")
+
+
+def color_spans(line: str) -> list[tuple[int, int, str]]:
+    """한 줄에서 색칠할 구간 — [(시작 표시칸, 표시폭, 역할)].
+
+    역할: ``up``(양수) · ``down``(음수) · ``mark``(통과 표시).
+    문자 인덱스가 아니라 **표시 칸**을 낸다 — 한글이 2칸이라 curses 의 addstr
+    좌표와 문자 인덱스가 다르다(이 저장소가 이미 밟은 함정).
+    """
+    spans = []
+    # 문자 인덱스 → 표시 칸 매핑
+    cell_at, cell = [], 0
+    for ch in line:
+        cell_at.append(cell)
+        cell += cell_width(ch)
+    cell_at.append(cell)
+    for m in _NUM.finditer(line):
+        role = "up" if line[m.start()] == "+" else "down"
+        a, b = cell_at[m.start()], cell_at[m.end()]
+        spans.append((a, b - a, role))
+    for i, ch in enumerate(line):
+        if ch == "*":
+            spans.append((cell_at[i], 1, "mark"))
+    return spans
+
+
 FOOTER = " w:구간  m:시장  a:주체  s:정렬  ↑↓:섹터  Enter:종목  q:종료"
 FOOTER_DRILL = " ↑↓:종목  Esc/←:돌아가기  q:종료"

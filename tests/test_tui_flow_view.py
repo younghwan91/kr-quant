@@ -169,3 +169,40 @@ def test_minus_sign_is_one_cell():
     assert cell_width("가") == 2
     assert _w(fmt_amt(-1234.5)) == _w(fmt_amt(1234.5))
     assert _w(fmt_pct(-1.23)) == _w(fmt_pct(1.23))
+
+
+def test_color_spans_use_display_cells_not_char_index():
+    """색 구간은 **표시 칸**이어야 한다 — curses addstr 좌표가 표시 칸이기 때문.
+
+    한글이 섞인 줄에서 문자 인덱스를 쓰면 색이 엉뚱한 칸에 칠해진다.
+    이 저장소는 같은 함정(문자 인덱스 vs 표시 칸)을 이미 두 번 밟았다.
+    """
+    from kr_quant.tui.flow_view import cell_width, color_spans
+
+    line = "건설   +1,234  -5.67%p"          # 한글 2자 = 4칸
+    spans = color_spans(line)
+    roles = [r for _, _, r in spans]
+    assert roles == ["up", "down"], roles
+    # 첫 구간은 '+' 가 있는 표시 칸에서 시작해야 한다
+    start, width, _ = spans[0]
+    prefix_cells = sum(cell_width(c) for c in line[:line.index("+")])
+    assert start == prefix_cells
+    assert width == sum(cell_width(c) for c in "+1,234")
+
+
+def test_color_spans_marks_pass_flag():
+    from kr_quant.tui.flow_view import color_spans
+    spans = color_spans("IT 서비스   0.62 *   +100")
+    assert any(r == "mark" for _, _, r in spans)
+
+
+def test_color_spans_on_real_rows(data):
+    """실제 렌더 결과에 색 구간이 붙고, 줄 밖으로 안 넘어간다."""
+    from kr_quant.tui.flow_view import color_spans
+    st = State(data)
+    lines, _thin, _nh = table_lines(st, 100, 20)
+    for line in lines:
+        for start, width, role in color_spans(line):
+            assert role in ("up", "down", "mark")
+            assert 0 <= start < 100
+            assert start + width <= 100
