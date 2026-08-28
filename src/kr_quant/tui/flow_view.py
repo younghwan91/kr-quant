@@ -176,6 +176,24 @@ class State:
         self._lead_ck, self._lead_v = ck, out
         return out
 
+    #: 정렬키가 그 블록에서 전멸했을 때 대신 쓸 키 — 앞에서부터 값이 있는 것.
+    SORT_FALLBACK = ("accel", "flow", "ret")
+
+    def effective_sort(self, rows: list[dict]) -> tuple[str, bool]:
+        """실제로 줄세우는 데 쓸 키와, 그게 폴백인지.
+
+        5일 창은 G·풀림이 27/27 전부 결측이다. 예전엔 그대로 정렬해서 전 행이
+        동률이 되어 페이로드 원순서(가나다)로 남았는데, 헤더는 그 열을
+        하이라이트하며 "이걸로 줄세웠다"고 말했다. 정렬이 없는데 있는 척한 것이다.
+        """
+        key = self.sort_key
+        if any(r.get(key) is not None for r in rows):
+            return key, False
+        for alt in self.SORT_FALLBACK:
+            if alt != key and any(r.get(alt) is not None for r in rows):
+                return alt, True
+        return key, False
+
     def rows(self) -> list[dict]:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
@@ -187,7 +205,7 @@ class State:
         if not b:
             return []
         rows = [self._project(r) for r in b["rows"]]
-        key = self.sort_key
+        key, _fell = self.effective_sort(rows)
         def val(r):
             v = r.get(key)
             return (v is None, -(v if v is not None else 0))
@@ -242,8 +260,14 @@ def header_lines(st: State, width: int) -> list[str]:
     d = st.d
     chip = "확정" if d.get("finalized") else "장중·미확정"
     l1 = f" 섹터 자금 흐름 · {d['asof']} {chip}"
+    label, note = SORTS[st.si][1], ""
+    if st.window != "종합":
+        key, fell = st.effective_sort(st.rows())
+        if fell:
+            note = f"  ※ {label} 은 이 창에 값이 없다"
+            label = dict(SORTS).get(key, key)
     l2 = (f" 구간[{st.window}] 시장[{st.market}] 주체[{ACTORS[st.ai][1]}]"
-          f" 정렬[{SORTS[st.si][1]}]")
+          f" 정렬[{label}]{note}")
     if st.actor != "inst" and st.window != "종합":
         l2 += "  ※ 미실현·포텐셜·dW/dt·풀림·G 는 기관 기준"
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
@@ -355,7 +379,8 @@ def sort_span(st: State, width: int) -> tuple[int, int] | None:
     """지금 정렬 중인 열의 (시작 표시칸, 폭). 종합 화면·이름정렬은 None."""
     if st.window == "종합":
         return None
-    header = SORT_COL.get(st.sort_key)
+    key, _fell = st.effective_sort(st.rows())
+    header = SORT_COL.get(key)
     return col_span(table_cols(st, width), header) if header else None
 
 

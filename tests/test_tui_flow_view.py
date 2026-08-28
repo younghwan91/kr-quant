@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from kr_quant.tui.flow_view import (
+    NAME_SORTS,
     ACTORS, SORTS, WINDOWS, State, detail_lines, fmt_amt, fmt_pct,
     header_lines, pad, table_lines,
 )
@@ -421,3 +422,96 @@ def test_lead_name_and_amount_align_in_fixed_cells(data):
                 ends.add(start + w2)
     assert ends, "상위 종목 금액을 못 찾았다"
     assert len(ends) <= len(spans), f"금액 끝 칸이 흩어졌다: {sorted(ends)}"
+
+
+def _slice(line: str, start: int, width: int) -> str:
+    """표시 칸 기준 슬라이스 — 한글이 2칸이라 문자 인덱스로는 못 자른다."""
+    out, cell = "", 0
+    for ch in line:
+        if start <= cell < start + width:
+            out += ch
+        cell += cell_width(ch)
+    return out
+
+
+def test_data_cells_sit_under_their_headers(data):
+    """회귀 — 헤더 열과 그 아래 데이터 셀이 **같은 칸**에 있는가.
+
+    행 폭 검사는 이 부류를 구조적으로 못 잡는다: 렌더가 마지막에 줄 전체를
+    화면 폭으로 패딩하므로, 셀이 통째로 빠지거나 폭이 하나 어긋나도 모든
+    행의 표시 폭은 여전히 정확히 width 다. 열이 밀린 채로 초록이 된다.
+
+    `.strip()` 하면 안 된다 — 값이 셀보다 짧을 때 1칸 어긋남이 여백에
+    먹혀서 폭 변경(헤더 12 · 셀 13)을 놓친다.
+    """
+    from kr_quant.tui.flow_view import col_span, table_cols
+
+    st = State(data)
+    for width in (80, 100, 132, 150, 170):
+        for wi, w in enumerate(WINDOWS):
+            if w == "종합":
+                continue
+            st.wi = wi
+            cols = table_cols(st, width)
+            lines, _thin, nhead = table_lines(st, width, 30)
+            for r, line in zip(st.rows(), lines[nhead:]):
+                want = {
+                    "섹터": r.get("sector", "—"),
+                    "종목[수]": str(r.get("n_all", "—")),
+                    "임펄스[억]": fmt_amt(r.get("flow")),
+                    "가속[%p]": fmt_pct(r.get("accel")),
+                    "수익률[%]": fmt_pct(r.get("ret")),
+                    "미실현[%p]": fmt_pct(r.get("x"), 1),
+                }
+                for hdr, val in want.items():
+                    span = col_span(cols, hdr)
+                    if span is None:          # 이 폭에선 안 보이는 열
+                        continue
+                    right = next(rt for n, _w2, rt in cols if n == hdr)
+                    assert _slice(line, *span) == pad(val, span[1], right), (
+                        f"폭{width}·창{w} 의 '{hdr}' 열이 헤더와 어긋났다")
+
+
+def test_stock_list_cells_sit_under_their_headers(data):
+    """회귀 — 종목 목록도 같은 검사. 이 화면은 오래 무검증이었다.
+
+    픽스처에 `names` 가 없어 `State.names()` 가 늘 빈 목록을 돌려줬고,
+    그래서 셀을 통째로 지워도·정렬을 뒤집어도 전부 초록이었다.
+    """
+    from kr_quant.tui.flow_view import col_span, names_cols, names_lines
+
+    st = State(data)
+    cols = names_cols()
+    for width in (80, 120, 170):
+        for nsi in range(len(NAME_SORTS)):
+            st.nsi = nsi
+            names = st.names()
+            assert names, "픽스처에 종목이 없다 — 이 검사가 헛돈다"
+            lines, nhead = names_lines(st, width)
+            for t, line in zip(names, lines[nhead:]):
+                a = t.get("a")
+                want = {
+                    "종목": t.get("name", "—"),
+                    "코드": t.get("code", ""),
+                    "순매수[억]": fmt_amt(t.get("flow")),
+                    "시총대비[%p]": fmt_pct(a) if a is not None else "—",
+                }
+                for hdr, val in want.items():
+                    span = col_span(cols, hdr)
+                    right = next(rt for n, _w2, rt in cols if n == hdr)
+                    assert _slice(line, *span) == pad(val, span[1], right), (
+                        f"폭{width}·정렬{nsi} 의 '{hdr}' 열이 헤더와 어긋났다")
+
+
+def test_stock_list_is_actually_sorted_by_the_chosen_key(data):
+    """회귀 — 종목 정렬 5종이 실제로 그 키로 줄세우는가.
+
+    정렬 방향을 뒤집어도 어떤 검사도 실패하지 않았다.
+    """
+    st = State(data)
+    for nsi, (key, label) in enumerate(NAME_SORTS):
+        st.nsi = nsi
+        vals = [t.get(key) for t in st.names()]
+        got = [v for v in vals if v is not None]
+        want = sorted(got) if key == "name" else sorted(got, reverse=True)
+        assert got == want, f"정렬[{label}] 이 {key} 순이 아니다: {got}"

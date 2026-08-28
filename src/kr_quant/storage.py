@@ -499,9 +499,11 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
     ph = "%s" if _is_pg(con) else "?"
     where, params = [], []
     if start is not None:
-        where.append(f"date >= {ph}"); params.append(start)
+        where.append(f"date >= {ph}")
+        params.append(start)
     if end is not None:
-        where.append(f"date <= {ph}"); params.append(end)
+        where.append(f"date <= {ph}")
+        params.append(end)
     if sources is not None:
         where.append(f"source IN ({', '.join([ph] * len(sources))})")
         params.extend(sources)
@@ -519,9 +521,11 @@ def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
     ph = "%s" if _is_pg(con) else "?"
     where, params = ["source = " + ph], ["naver"]
     if start is not None:
-        where.append(f"date >= {ph}"); params.append(start)
+        where.append(f"date >= {ph}")
+        params.append(start)
     if end is not None:
-        where.append(f"date <= {ph}"); params.append(end)
+        where.append(f"date <= {ph}")
+        params.append(end)
     sql = (f"SELECT DISTINCT code FROM {SUPPLY_TABLE} "  # noqa: S608 — 모듈 상수
            f"WHERE {' AND '.join(where)}")
     if _is_pg(con):
