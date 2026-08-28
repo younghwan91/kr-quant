@@ -214,10 +214,12 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
     # 상태를 없앤다(dW/dt·풀림으로 줄세워놓고 그 숫자가 화면에 없으면 읽을 수 없다).
     if width >= 132:
         cols += [("dW/dt", 8, True), ("풀림", 8, True)]
+    # 이름만 잘라 넣으면 한글 길이가 제각각이라 줄마다 다르게 잘려 보인다.
+    # **이름 + 금액**을 한 덩어리로 넣고 칸을 고정하면 모양이 일정하다.
     if width >= 150:
-        cols += [("순매수상위", 17, False), ("순매도상위", 17, False)]
+        cols += [("순매수상위", 21, False), ("순매도상위", 21, False)]
     elif wide:
-        cols += [("순매수상위", 22, False)]
+        cols += [("순매수상위", 21, False)]
     return cols
 
 
@@ -264,14 +266,20 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                 cells += [pad(fmt_pct(r.get("P"), 3), 8, True),
                           pad(fmt_pct(r.get("xddot"), 3), 8, True)]
             top = r.get("top") or {}
+
+            def _lead(side: str) -> str:
+                """이름 13칸 + 금액 7칸(우측정렬). 이름 길이가 제각각이라
+                그냥 이어붙이면 금액이 줄마다 다른 칸에 떨어진다."""
+                arr = top.get(side) or []
+                if not arr:
+                    return pad("—", 13) + " " + pad("", 7, right=True)
+                t = arr[0]
+                return pad(t["name"], 13) + " " + pad(fmt_amt(t.get("inst")), 7, right=True)
+
+            if wide:
+                cells.append(pad(_lead("buy"), 21))
             if width >= 150:
-                cells.append(pad(", ".join(t["name"] for t in (top.get("buy") or [])[:2]),
-                                 17))
-                cells.append(pad(", ".join(t["name"] for t in (top.get("sell") or [])[:2]),
-                                 17))
-            elif wide:
-                cells.append(pad(", ".join(t["name"] for t in (top.get("buy") or [])[:2]),
-                                 22))
+                cells.append(pad(_lead("sell"), 21))
         out.append(pad(" ".join(cells), width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
@@ -396,9 +404,9 @@ HELP = [
     ("", "        폭 132칸 이상에서 보인다. 좁으면 정렬만 되고 값은 안 보인다."),
     ("풀림", "미실현 x 가 해소되는 **가속**(ẍ). 구간을 셋으로 갈라 중앙차분한다."),
     ("", "        2차 차분이라 짧은 창(조각 6~7일)에서는 값이 흔들린다."),
-    ("순매수상위", "그 섹터에서 기관이 **가장 많이 산** 종목(금액 기준)."),
-    ("순매도상위", "**가장 많이 판** 종목. 둘은 같은 목록의 위/아래 끝이다."),
-    ("", "        표는 2개, 하단 패널은 3개 — 같은 목록을 자른 것이고 시총과 무관하다."),
+    ("순매수상위", "그 섹터에서 기관이 **가장 많이 산** 종목과 그 금액[억원]."),
+    ("순매도상위", "**가장 많이 판** 종목. 둘은 같은 목록(금액순)의 위/아래 끝이다."),
+    ("", "        표는 1개씩, 하단 패널은 3개씩 — 같은 목록이고 시총과 무관하다."),
     ("", "        순매도상위는 폭 150칸 이상에서 보인다. Enter 로 전 종목."),
     ("", ""),
     ("", "── 종목 목록 (Enter) ──"),

@@ -349,3 +349,23 @@ def test_name_sort_highlight_matches_columns():
             cell += cw + 1
         else:
             pytest.fail(f"{key} 스팬이 어떤 열과도 안 맞는다")
+
+
+def test_lead_name_and_amount_align_in_fixed_cells(data):
+    """회귀 — 순매수/순매도 상위의 금액이 줄마다 같은 칸에서 끝나야 한다.
+
+    이름 길이가 제각각이라 '이름 + 금액' 을 그냥 이어붙이면 금액이 들쭉날쭉해진다.
+    """
+    st = State(data)
+    lines, _thin, nhead = table_lines(st, 160, 20)
+    body = [x for x in lines[nhead:] if x.strip()]
+    ends = set()
+    for line in body:
+        # 마지막 두 열(순매수상위·순매도상위) 안의 부호 숫자 끝 칸
+        for start, width, role in __import__(
+                "kr_quant.tui.flow_view", fromlist=["x"]).color_spans(line):
+            if role in ("up", "down") and start > 100:
+                ends.add(start + width)
+    assert ends, "상위 종목 금액을 못 찾았다"
+    # 두 열이므로 끝나는 칸은 최대 2종류여야 한다
+    assert len(ends) <= 2, f"금액 끝 칸이 흩어졌다: {sorted(ends)}"
