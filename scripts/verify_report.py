@@ -146,8 +146,19 @@ def layer_b(payload: dict, db: str | None) -> None:
     covered = {r["sector"] for r in nm.values()}
     chk("B", "대표종목이 전 섹터를 덮는가", covered >= set(secs) - {"(미분류)"},
         f"{len(covered)}/{len(secs)} 섹터, {len(nm)}종목")
-    chk("B", "대표종목 배열 길이 일치",
-        all(len(r[k]) == n for r in nm.values() for k in ("inst", "forgn", "indiv", "etc", "tv")))
+    # 종목은 일별 배열이 아니라 **구간별 집계**를 싣는다(전 종목을 실으면서 바뀜).
+    wins = {w for r in nm.values() for w in (r.get("win") or {})}
+    chk("B", "종목 구간 집계 존재", bool(wins), f"구간 {sorted(wins, key=int)}")
+    chk("B", "종목 집계에 5개 값이 다 있는가",
+        all(set(v) >= {"inst", "forgn", "indiv", "etc", "tv"}
+            for r in nm.values() for v in (r.get("win") or {}).values()))
+    # 섹터 종목 수가 n_by_sector 와 맞는가 — 전 종목을 싣는다는 주장의 검사다.
+    from collections import Counter
+    cnt = Counter((r["market"], r["sector"]) for r in nm.values())
+    bad = [f"{m}/{s}: names {cnt.get((m,s),0)} vs n_by_sector {v}"
+           for m, d2 in payload.get("n_by_sector", {}).items()
+           for s, v in d2.items() if cnt.get((m, s), 0) != v]
+    chk("B", "섹터별 종목 수 = n_by_sector", not bad, "; ".join(bad[:2]))
 
     if not db:
         print("       (--db-check 없음 — DB 대조는 건너뜀)")

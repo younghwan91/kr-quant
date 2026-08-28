@@ -36,8 +36,8 @@ from kr_quant.storage import (
 EOK = 1e8                 # 원 → 억원
 INDEX_RET: dict = {}
 DEFAULT_DAYS = 260        # 거래일 ≈ 1년
-TOP_BY_TURNOVER = 8      # 섹터당 대표종목(거래대금 상위)
-TOP_BY_FLOW = 4          # 섹터당 기관 순매수 절대값 상위 — 대형주가 아닌 실제 견인주
+#: 종목 집계를 낼 구간(거래일). 수치표·TUI 의 프리셋과 같아야 한다.
+NAME_WINDOWS = (5, 20, 60, 120)
 FINALIZED_KST_HOUR = 17   # 16:00 DAG + ~48분 → 그날 수급은 16:50 경 확정
 
 ACTORS = (("individual", "indiv"), ("foreign_", "forgn"),
@@ -206,44 +206,40 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame,
                caps[caps["market"] == m].groupby("sector")["cap"].sum().items()}
            for m in markets}
 
-    # 종목 드릴다운 — 구간이 임의라 클라이언트가 합산할 수 있게 일별로 실어보낸다.
-    # **섹터마다** 대표종목이 나와야 한다. 전체 거래대금 상위 N 으로 자르면 대형
-    # 섹터가 명단을 독점하고 작은 섹터는 종목이 하나도 안 나온다. 그래서 섹터별로
-    # (거래대금 상위) ∪ (기관 순매수 절대값 상위) 를 뽑는다 — 앞은 그 섹터를
-    # 대표하는 유동주, 뒤는 실제로 자금을 끌어당긴 견인주다(둘은 자주 다르다).
-    # ⚠️ 2026-08-27 수정. 이전 판본은 ("sector", "code") 로만 묶어 **시장 축이
-    # 없었다.** 거래소가 명단을 독점해 코스닥·전기/전자(318종목)에 2개, 화학·금속·
-    # 금융에 각 1개, 건설·운송/창고에는 0개만 남았고, (시장,섹터) 44쌍 중 31쌍이
-    # 6종목 이하가 되어 **같은 종목이 "담은" 과 "던진" 양쪽에 동시에 표시**됐다.
-    # 바로 위 주석이 경고한 그 실패 모드가 market 축에서 재현된 것이다.
-    per = df.groupby(["market", "sector", "code"])[["tv", "inst"]].sum().reset_index()
-    per["inst_abs"] = per["inst"].abs()
-    keys = ["market", "sector"]
-    top = pd.Index(sorted(set(
-        per.groupby(keys, group_keys=False)
-           .apply(lambda g: g.nlargest(TOP_BY_TURNOVER, "tv"), include_groups=False)["code"]
-    ) | set(
-        per.groupby(keys, group_keys=False)
-           .apply(lambda g: g.nlargest(TOP_BY_FLOW, "inst_abs"), include_groups=False)["code"]
-    )))
-    nd = df[df["code"].isin(top)]
-    names: dict = {}
-    meta = nd.drop_duplicates("code").set_index("code")[["name", "sector", "market"]]
-    # 종목 시총(구간말) — 섹터를 가속도로 보면서 종목만 금액 절대값으로 줄세우면
-    # 같은 불일치가 한 단계 아래에서 반복된다(대형주가 명단을 독점한다).
+    # 종목 드릴다운 — **전 종목**의 구간별 집계.
+    #
+    # ⚠️ 이전 판본은 (시장,섹터)당 거래대금 상위 8 ∪ 기관 순매수 상위 4 를 **1년
+    # 전체 기준**으로 미리 뽑아 389종목만 실었다. 그래서 화면의 순위가 "그 섹터
+    # 전체의 순매수 순위"가 아니라 "미리 뽑아둔 12개 안에서의 순위"였다. 밖에 더 큰
+    # 종목이 있어도 안 보였다 — 실측: 20일 기준 각 섹터 순매수 상위 3 중 **32% 누락**,
+    # 금융에서 GS(+1,854억)가 화면에 있는 하림지주(+247억)보다 7배 큰데 빠졌다.
+    # 누락되는 쪽이 하필 **최근에 방향이 바뀐** 종목이라(1년 누적이 0 근처) 성격이 나쁘다.
+    #
+    # 일별 배열로 전 종목을 실으면 ~4MB 가 붙는다. **프리셋 구간의 합계만** 실으면
+    # 2,645종목 × 4구간 × 5값 ≈ 200KB 다. 임의 구간 드릴다운(뷰어의 날짜 직접 지정)을
+    # 포기하고 프리셋(5·20·60·120일)에서 전 종목을 정확히 보는 쪽을 택한다.
     name_cap = (caps.set_index("code")["cap"].to_dict()
                 if "cap" in getattr(caps, "columns", []) else {})
-    for code, grp in nd.groupby("code", sort=False):
+    meta = df.drop_duplicates("code").set_index("code")[["name", "sector", "market"]]
+    names: dict = {}
+    for code in meta.index:
         row = meta.loc[code]
-        rec = {"name": row["name"], "sector": row["sector"], "market": row["market"],
-               "cap": round(float(name_cap.get(code, float("nan"))), 1)
-                      if code in name_cap else None}
-        for k in ("indiv", "forgn", "inst", "etc", "tv"):
-            arr = zeros()
-            for d, v in zip(grp["date"], grp[k]):
-                arr[di[d]] = round(float(v), 2)
-            rec[k] = arr
-        names[code] = rec
+        # ⚠️ `cap` 은 위에서 만든 **섹터 시총 dict** 다. 여기서 같은 이름을 쓰면
+        # 조용히 덮어써서 페이로드의 cap 이 float 하나가 된다(실제로 밟았다).
+        ncap = name_cap.get(code)
+        names[code] = {
+            "name": row["name"], "sector": row["sector"], "market": row["market"],
+            "cap": (round(float(ncap), 1) if ncap is not None and ncap == ncap else None),
+            "win": {},
+        }
+    for win in NAME_WINDOWS:
+        if win > n:
+            continue
+        sub = df[df["date"] >= dates[n - win]]
+        agg = sub.groupby("code")[["inst", "forgn", "indiv", "etc", "tv"]].sum()
+        for code, r in agg.iterrows():
+            names[code]["win"][str(win)] = {
+                k: round(float(r[k]), 1) for k in ("inst", "forgn", "indiv", "etc", "tv")}
 
     # 참고용 자체 계산(전일 시총 가중). 화면의 수익률은 KRX 업종지수를 쓴다 —
     # 아래 값은 지수가 없는 섹터의 폴백이자 대조용이다.

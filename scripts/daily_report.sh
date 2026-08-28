@@ -12,11 +12,15 @@ REPO="/home/young/Documents/git/kr-quant"
 OUT_ROOT="${KR_QUANT_REPORTS:-$HOME/Documents/kr-quant-reports}"
 DAYS="${KR_QUANT_REPORT_DAYS:-260}"
 UV="/home/young/.local/bin/uv"
+# ⚠️ extra 를 명시한다. `uv run` 은 기본 의존성만 맞추므로, 누가 `uv sync --extra dev`
+# 를 돌리면 psycopg2(pg extra)가 사라지고 이 배치가 조용히 죽는다 — 실제로 그렇게
+# 한 번 빠졌다. 여기서 못박아 두면 실행 시점에 항상 복원된다.
+UVR=("$UV" run --quiet --extra pg)
 
 cd "$REPO"
 set -a; . ./.env; set +a
 
-ASOF="$("$UV" run --quiet python - <<'PY' 2>/dev/null
+ASOF="$("${UVR[@]}" python - <<'PY' 2>/dev/null
 import os
 from kr_quant.storage import connect, db_default
 con = connect(os.environ.get("KR_QUANT_DB") or db_default())
@@ -40,13 +44,13 @@ mkdir -p "$DEST"
 echo "[$(date '+%F %T')] 생성 시작 — 기준일 $ASOF, 창 ${DAYS}거래일"
 # 페이로드를 **한 번만** 만들고 둘 다 그걸 쓴다. 월별 시총 계산이 수 분이라
 # 예전처럼 세 번 돌리면 배치가 15분을 넘고 그만큼 실패 창이 넓어진다.
-"$UV" run --quiet python scripts/sector_flow.py    --days "$DAYS" --json "$DEST/payload.json"
-"$UV" run --quiet python scripts/sector_flow.py    --from-json "$DEST/payload.json" --html "$DEST/viewer.html"
-"$UV" run --quiet python scripts/sector_numbers.py --payload "$DEST/payload.json" --html "$DEST/numbers.html"
+"${UVR[@]}" python scripts/sector_flow.py    --days "$DAYS" --json "$DEST/payload.json"
+"${UVR[@]}" python scripts/sector_flow.py    --from-json "$DEST/payload.json" --html "$DEST/viewer.html"
+"${UVR[@]}" python scripts/sector_numbers.py --payload "$DEST/payload.json" --html "$DEST/numbers.html"
 
 # 저장한 것을 그 자리에서 검증한다 — 실패하면 폴더에 VERIFY_FAILED 를 남긴다.
 # 조용히 틀린 리포트가 쌓이는 것이 검증 없이 도는 것보다 나쁘다.
-if "$UV" run --quiet python scripts/verify_report.py --dir "$DEST" --db-check \
+if "${UVR[@]}" python scripts/verify_report.py --dir "$DEST" --db-check \
      > "$DEST/VERIFY.txt" 2>&1; then
   echo "[$(date '+%F %T')] 검증 통과 — $DEST/VERIFY.txt"
 else

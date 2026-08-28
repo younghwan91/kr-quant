@@ -18,6 +18,16 @@ import sys
 import tempfile
 
 WINDOWS = ((5, "5일"), (20, "20일"), (60, "60일"), (120, "120일"))
+# 종목 목록은 **절대 순매수 금액** 순이다.
+#
+# 섹터를 줄세울 때는 시총 대비(가속도)가 맞다 — 크기를 보정해야 대형 섹터가 늘
+# 이기지 않는다. 그런데 섹터 **안에서** "누가 이 섹터를 움직였나" 는 절대 금액이다.
+# 섹터 합계가 절대 금액의 합이므로, 기여도는 금액으로만 정의된다.
+#
+# 처음엔 종목도 시총 대비로 줄세웠는데 시총 작은 스팩이 1위로 올라왔고(금융 20일
+# 키움제11호스팩 +2.64%p / 순매수 +4억), 그걸 막으려 유동성 하한을 넣었더니 이번엔
+# 작은 섹터가 통째로 비었다(종이/목재 20일 0종목). 기준이 틀렸던 것이지 하한이
+# 없어서가 아니었다. 시총 대비는 참고 열로 남긴다.
 
 
 def load_payload(db: str, days: int, cached: str | None = None) -> dict:
@@ -81,23 +91,29 @@ def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
     }
 
 
-def drivers(P: dict, markets: list[str], sec: str, i0: int, i1: int, k: int = 3):
+def drivers(P: dict, markets: list[str], sec: str, i0: int, i1: int,
+            win: int | None = None, k: int = 3):
+    """섹터의 종목 — 시총 대비 순매수(%p) 순. **전 종목**이 대상이다.
+
+    페이로드가 프리셋 구간별 집계를 싣는다(``names[code]["win"]["20"]``). 이전처럼
+    미리 뽑은 12개가 아니라 그 섹터 전 종목을 그 구간 기준으로 줄세운다.
+    """
+    key = str(win) if win is not None else None
     rows = []
     for code, r in P["names"].items():
         if r["sector"] != sec or r["market"] not in markets:
             continue
-        v = sum(r["inst"][i0:i1 + 1])
-        cap = r.get("cap")
+        w = (r.get("win") or {}).get(key) if key else None
+        if not w:
+            continue
+        v, cap = w["inst"], r.get("cap")
         rows.append({"code": code, "name": r["name"], "inst": v, "cap": cap,
-                     "a": (v / cap * 100) if cap else None,
-                     "tv": sum(r["tv"][i0:i1 + 1])})
-    # 시총 대비(종목 가속도) 순 — 없으면 금액 순으로 폴백
-    any_cap = any(x["a"] is not None for x in rows)
-    rows.sort(key=lambda x: -(x["a"] if any_cap and x["a"] is not None else x["inst"]))
-    # 후보가 적으면 상위 k 와 하위 k 가 겹친다 — 겹치지 않게 반씩 나눈다.
+                     "a": (v / cap * 100) if cap else None, "tv": w["tv"]})
+    rows.sort(key=lambda x: -x["inst"])          # 절대 기여도 순
     half = min(k, len(rows) // 2) or (1 if rows else 0)
     return {"buy": [r for r in rows[:half] if r["inst"] > 0],
-            "sell": [r for r in rows[len(rows) - half:][::-1] if r["inst"] < 0]}
+            "sell": [r for r in rows[len(rows) - half:][::-1] if r["inst"] < 0],
+            "n": len(rows)}
 
 
 def power(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> "float | None":
@@ -163,8 +179,12 @@ MIN_NAMES = 10
 
 def build(P: dict) -> dict:
     N = len(P["dates"])
+    # 종목도 함께 싣는다 — TUI 가 이 파일 하나만 읽으므로, 안 실으면 Enter 를 눌러도
+    # 종목이 0개다(실제로 그렇게 비었다). 표와 TUI 가 **같은 파일**을 보게 한다.
     out = {"asof": P["dates"][-1], "finalized": P["finalized"],
-           "dates": [P["dates"][0], P["dates"][-1]], "blocks": {}, "combined": {}}
+           "dates": [P["dates"][0], P["dates"][-1]], "blocks": {}, "combined": {},
+           "names": P.get("names", {}),
+           "n_by_sector": P.get("n_by_sector", {})}
     for win, wl in WINDOWS:
         if win > N:
             continue
@@ -237,7 +257,7 @@ def build(P: dict) -> dict:
                     r["xddot"] = -(xv[2] - 2 * xv[1] + xv[0]) / (cut ** 2)
                 else:
                     r["xdot"] = r["xddot"] = None
-                r["top"] = drivers(P, markets, r["sector"], i0, i1)
+                r["top"] = drivers(P, markets, r["sector"], i0, i1, win)
             # ── 성장 점수 G ──────────────────────────────────────────────
             # 물리로: 아직 눌려 있고(x>0), 계속 밀리고 있고(a>0), 막 풀리기
             # 시작한(ẍ>0) 상태. 세 조건은 **부호 검정**으로 걸러 통과 여부를 내고,

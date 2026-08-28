@@ -11,6 +11,9 @@ from __future__ import annotations
 import unicodedata
 
 WINDOWS = ("5", "20", "60", "120", "종합")
+# 종목 목록은 **절대 순매수 금액** 순이다 — 섹터 합계가 금액의 합이므로 기여도는
+# 금액으로만 정의된다. 시총 대비는 참고 열. (시총 대비로 줄세웠더니 스팩이 1위가
+# 됐고, 그걸 막으려 유동성 하한을 넣었더니 작은 섹터가 통째로 비었다.)
 ACTORS = (("inst", "기관"), ("forgn", "외국인"), ("indiv", "개인"), ("etc", "기타법인"))
 SORTS = (("G", "성장"), ("inst", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
          ("x", "미실현"), ("n_all", "종목수"))
@@ -129,23 +132,30 @@ class State:
         return rows[min(self.row, len(rows) - 1)] if rows else None
 
     def names(self) -> list[dict]:
-        """선택 섹터의 종목 — 시총 대비 순매수(%p) 큰 순.
+        """선택 섹터의 **전 종목** — 시총 대비 순매수(%p) 큰 순.
 
-        ⚠️ 섹터의 **전 종목이 아니다.** 리포트가 싣는 대표종목((시장,섹터)당
-        거래대금 상위 8 ∪ 기관 순매수 절대값 상위 4)만 담긴다. 화면에 그 수를 밝힌다.
+        페이로드가 프리셋 구간별 집계를 싣는다. 이전엔 (시장,섹터)당 12개만 미리
+        뽑아 실어서 "그 12개 안에서의 순위"를 보여줬고, 20일 기준 각 섹터 상위 3 중
+        32% 가 화면에 없었다.
         """
         r = self.selected()
         if not r:
             return []
-        top = r.get("top") or {}
-        seen, out = set(), []
-        for side in ("buy", "sell"):
-            for t in top.get(side) or []:
-                if t["code"] in seen:
-                    continue
-                seen.add(t["code"])
-                out.append(t)
-        out.sort(key=lambda t: -(t.get("a") if t.get("a") is not None else t["inst"]))
+        sec = r.get("sector")
+        win = self.window if self.window != "종합" else "20"
+        mkts = ([self.market] if self.market != "전체" else self.markets[1:])
+        out = []
+        for code, nm in (self.d.get("names") or {}).items():
+            if nm.get("sector") != sec or nm.get("market") not in mkts:
+                continue
+            w = (nm.get("win") or {}).get(win)
+            if not w:
+                continue
+            cap = nm.get("cap")
+            out.append({"code": code, "name": nm.get("name", "—"),
+                        "inst": w.get("inst"), "tv": w.get("tv"), "cap": cap,
+                        "a": (w["inst"] / cap * 100) if cap else None})
+        out.sort(key=lambda t: -(t["inst"] or 0))       # 절대 기여도 순
         return out
 
 
@@ -220,9 +230,8 @@ def detail_lines(st: State, width: int) -> list[str]:
             parts.append(f"{t['name']} {fmt_pct(a)}%p" if a is not None
                          else f"{t['name']} {fmt_amt(t['inst'])}")
         return f" {label}: " + " · ".join(parts)
-    n = len((r.get("top") or {}).get("buy") or []) + \
-        len((r.get("top") or {}).get("sell") or [])
-    return [pad(f" {r.get('sector','—')} · 대표종목 {n}개 · Enter 로 전체", width),
+    n = (r.get("top") or {}).get("n", 0)
+    return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
             pad(side("buy", "기관 순매수 상위"), width),
             pad(side("sell", "기관 순매도 상위"), width)]
 
@@ -233,9 +242,9 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     if not r:
         return [pad(" (섹터를 고르라)", width)], 1
     names = st.names()
-    title = f" {r.get('sector','—')} · 대표종목 {len(names)}개 (섹터 전 종목이 아님)"
+    title = f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
     cols = [("종목", 14, False), ("코드", 7, False),
-            ("시총대비", 9, True), ("순매수", 10, True), ("거래대금", 11, True)]
+            ("순매수", 11, True), ("시총대비", 9, True), ("거래대금", 11, True)]
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(title, width), pad(head, width)]
     for t in names:
@@ -243,8 +252,8 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
         out.append(pad(" ".join([
             pad(t.get("name", "—"), 14),
             pad(t.get("code", ""), 7),
+            pad(fmt_amt(t.get("inst")), 11, True),
             pad((fmt_pct(a) + "%p") if a is not None else "—", 9, True),
-            pad(fmt_amt(t.get("inst")), 10, True),
             pad(fmt_amt(t.get("tv")).replace("+", ""), 11, True),
         ]), width))
     if not names:
