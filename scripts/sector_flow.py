@@ -259,16 +259,9 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame,
         if m in counts:
             counts[m][sec] = int(g["code"].nunique())
 
-    # (시장, 섹터)별 실제 종목 수 — 표에서 "섹터로 읽을 만한가" 를 가리는 기준.
-    counts = {m: {} for m in markets}
-    for (m, sec), g in df.groupby(["market", "sector"], sort=False):
-        if m in counts:
-            counts[m][sec] = int(g["code"].nunique())
-
     return {
         "dates": dates,
         "sectors": sectors,
-        "n_by_sector": counts,
         "n_by_sector": counts,
         "markets": markets,
         "flows": flows,
@@ -341,7 +334,6 @@ def main():
         print(f"wrote {out}  ({dates[0]} ~ {dates[-1]}, {len(dates)}거래일)")
         return
 
-    last = len(dates) - 1
     print(f"# 섹터 자금흐름 — {dates[0]} ~ {dates[-1]} ({len(dates)}거래일)\n")
     print("| 섹터 | 시장 | 기관누적(억) | 비중변화(%p) | 거래대금(억) |")
     print("|---|---|---:|---:|---:|")

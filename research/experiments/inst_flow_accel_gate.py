@@ -141,9 +141,9 @@ def run(date_from: str | None = None, mass: str = "cap",
               f"(정상 종료 기대치 ~60)")
         if pending > SHARES_RESIDUAL_OK and not allow_partial_shares:
             con.close()
-            print(f"  → 백필이 아직 도는 중이다. 지금 돌리면 유니버스를 신호가 아니라 "
-                  f"데이터 가용성이 고른다(v1 VOID 의 원인). 중단한다.\n"
-                  f"     완료 후 재실행하거나, 의도한 것이면 --allow-partial-shares 를 준다.")
+            print("  → 백필이 아직 도는 중이다. 지금 돌리면 유니버스를 신호가 아니라 "
+                  "데이터 가용성이 고른다(v1 VOID 의 원인). 중단한다.\n"
+                  "     완료 후 재실행하거나, 의도한 것이면 --allow-partial-shares 를 준다.")
             return None, None
 
     close, adv, flow = build(prices, sd)
@@ -154,7 +154,8 @@ def run(date_from: str | None = None, mass: str = "cap",
         ent, ret = ent[keep], ret[keep]
         print(f"[구간 제한] 진입 >= {date_from}")
     if len(ret) == 0:
-        print("트레이드 0건 — 보고할 것이 없다"); return None, None
+        print("트레이드 0건 — 보고할 것이 없다")
+        return None, None
     print(f"트레이드 {len(ret)}건 · {min(ent)} ~ {max(ent)}")
 
     # 민감도 격자를 **먼저** — 원장 N 이 사전등록 게이트보다 앞서 쌓여야 DSR 이 걸린다.

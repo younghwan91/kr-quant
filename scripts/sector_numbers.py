@@ -78,7 +78,9 @@ def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
                 continue
             r, wt = ser[i], wser[i]
             if r is not None and wt:
-                num += r * wt; den += wt; any_ = True
+                num += r * wt
+                den += wt
+                any_ = True
         acc *= 1 + (num / den if den else 0.0) / 100.0
     n_all = sum(P.get("n_by_sector", {}).get(m, {}).get(sec, 0) for m in markets)
     return {
