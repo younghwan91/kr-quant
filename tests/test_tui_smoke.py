@@ -60,17 +60,24 @@ def _drain(fd: list[str]):
     return run
 
 
-def _run_tui(d: str, keys: bytes, lines: str = "24", cols: str = "100",
-             env: dict | None = None):
-    """의사 터미널에서 앱을 띄우고 (종료코드, 화면, stderr) 를 돌려준다."""
+def _spawn(d: str, app: str, lines: str, cols: str, stderr=subprocess.PIPE,
+           env: dict | None = None):
+    """pty 를 열고 TUI 앱을 띄운다 — 두 앱(kq-flow·kq-ledger)이 같은 경로를 쓴다."""
     primary, replica = pty.openpty()
     env = {**(env or os.environ), "TERM": "xterm-256color",
            "LINES": lines, "COLUMNS": cols}
     proc = subprocess.Popen(
         [sys.executable, "-c",
-         "from kr_quant.tui.flow_app import main; main()", "--dir", d],
-        stdin=replica, stdout=replica, stderr=subprocess.PIPE, env=env)
+         f"from kr_quant.tui.{app} import main; main()", "--dir", d],
+        stdin=replica, stdout=replica, stderr=stderr, env=env)
     os.close(replica)
+    return primary, proc
+
+
+def _run_tui(d: str, keys: bytes, lines: str = "24", cols: str = "100",
+             env: dict | None = None, app: str = "flow_app"):
+    """의사 터미널에서 앱을 띄우고 (종료코드, 화면, stderr) 를 돌려준다."""
+    primary, proc = _spawn(d, app, lines, cols, env=env)
     screen: list[str] = []
     t = threading.Thread(target=_drain(screen), args=(primary,), daemon=True)
     t.start()
@@ -527,3 +534,134 @@ def test_tall_screens_give_the_extra_height_to_the_table():
     head, rows, detail, hint, foot = layout(50)
     assert head + 1 + rows + detail == hint, "세로 배치에 빈 줄이 남는다"
     assert foot == 49 and hint == 48
+
+# --------------------------------------------------------------- 자금 원장
+#
+# `kq-ledger` 는 `kq-flow` 와 같은 curses 골격 위에 있으므로, flow 가 밟은 지뢰를
+# 그대로 밟는다. 아래 셋은 flow 쪽 회귀(CPU 좀비 · ESC 종료 · 깨진 리포트)를
+# **같은 잣대로** 원장에도 태운다 — 한쪽만 고치면 다른 쪽이 조용히 남는다.
+
+LEDGER_MINIMAL = {
+    "dates": [f"2026-01-{d:02d}" for d in range(1, 26)],
+    "sectors": ["전기/전자", "부동산"],
+    "markets": ["거래소", "코스닥"],
+    "flows": {m: {s: {k: [float((i + j) % 7 - 3) for i in range(25)]
+                      for j, k in enumerate(("indiv", "forgn", "inst", "etc", "tv"))}
+                  for s in ("전기/전자", "부동산")}
+              for m in ("거래소", "코스닥")},
+    "cap": {m: {"전기/전자": 10000.0, "부동산": 300.0} for m in ("거래소", "코스닥")},
+    "n_by_sector": {m: {"전기/전자": 200, "부동산": 1} for m in ("거래소", "코스닥")},
+    "n_names": 202, "finalized": True,
+}
+
+
+def _ledger_dir(d: str) -> str:
+    with open(os.path.join(d, "payload.json"), "w", encoding="utf-8") as f:
+        json.dump(LEDGER_MINIMAL, f, ensure_ascii=False)
+    return d
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_app_starts_and_quits_in_a_pty():
+    """원장 앱이 네 화면을 다 지나 q 로 정상 종료하는가.
+
+    **256색 초기화**와 히트맵 ``chgat`` 은 렌더 테스트가 못 건드리는 자리다 —
+    ``curses.init_pair`` 가 색쌍 한계를 넘으면 여기서만 죽는다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        rc, screen, err = _run_tui(_ledger_dir(d), b"vvvv" b"wmasd" b"\x1b[B\x1b[B" b"q",
+                                   cols="120", app="ledger_app")
+        assert rc == 0, err[-1500:]
+        assert not err.strip(), f"stderr 에 뭔가 나왔다:\n{err[-1500:]}"
+        assert "전기/전자" in screen, "표가 안 그려졌다"
+        assert "미관측" in screen, "한계 배너가 화면에 없다"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+@pytest.mark.parametrize("lines,cols", [("10", "40"), ("24", "80"), ("50", "200")])
+def test_ledger_survives_small_and_large_terminals(lines, cols):
+    """좁은 터미널에서도 죽지 않는가. 폭 40 은 원장이 표를 안 그리는 구간이다."""
+    with tempfile.TemporaryDirectory() as d:
+        rc, _screen, err = _run_tui(_ledger_dir(d), b"vvvvwmasd?q",
+                                    lines=lines, cols=cols, app="ledger_app")
+        assert rc == 0, err[-1500:]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_lone_escape_does_not_quit():
+    """회귀 — ESC 는 종료가 아니다.
+
+    느린 SSH 에서 방향키는 ESC 와 나머지로 쪼개져 도착한다(ESCDELAY 기본 1초).
+    ESC 가 종료면 ↓ 를 눌렀을 뿐인데 앱이 끝난다. flow_app 이 79e14df 에서
+    같은 이유로 뺐고, 원장도 처음엔 `ch in (ord("q"), 27)` 이었다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        # ESC 로 끝나버리면 그 뒤의 `?` 가 안 닿아 한계 화면 전용 문구가 안 나온다.
+        rc, screen, err = _run_tui(_ledger_dir(d), b"\x1b\x1b\x1b" b"?" b"q",
+                                   cols="120", app="ledger_app")
+        assert rc == 0, err[-1500:]
+        assert "돈에 꼬리표가 없다" in screen, (
+            "ESC 뒤에 앱이 이미 죽어서 한계 화면이 안 떴다")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_exits_when_the_terminal_disappears():
+    """회귀 — SSH 가 끊기면 원장도 나가야 한다.
+
+    getch() 가 ERR(-1) 을 즉시 돌려주는데 아무 분기에도 안 태우면 draw→getch→-1
+    로 100% CPU 를 태우며 영원히 돈다. flow_app 과 **같은 골격이라 같은 버그**다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        primary, proc = _spawn(_ledger_dir(d), "ledger_app", "24", "100",
+                               stderr=subprocess.DEVNULL)
+        # 배수 스레드를 쓰지 않는다 — 읽는 중에 같은 fd 를 닫으면 경합이라
+        # 앱이 아니라 테스트 쪽 사정으로 프로세스가 끝날 수 있다.
+        time.sleep(0.5)                        # 한 번은 그리게 둔다
+        os.close(primary)                      # 터미널이 사라진다
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            ticks = "?"
+            try:
+                st = open(f"/proc/{proc.pid}/stat").read().split()
+                ticks = int(st[13]) + int(st[14])
+            except OSError:
+                pass
+            proc.kill()
+            proc.communicate()
+            pytest.fail(f"터미널이 사라졌는데 원장이 계속 돈다 — CPU 좀비 ({ticks} 틱)")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+@pytest.mark.parametrize("payload,expect", [
+    ('{"dates": []}', "flows"),        # 스키마가 다름
+    ("{nope}", "JSON"),                # JSON 이 깨짐
+])
+def test_ledger_broken_payload_says_what_is_wrong(payload, expect):
+    """회귀 — 형식이 바뀐 페이로드가 curses 안에서 생 트레이스백으로 터지면 안 된다."""
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "payload.json"), "w", encoding="utf-8") as f:
+            f.write(payload)
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "from kr_quant.tui.ledger_app import main; main()", "--dir", d],
+            capture_output=True, text=True)
+        assert proc.returncode != 0
+        msg = proc.stdout + proc.stderr
+        assert expect in msg, msg[-800:]
+        assert "Traceback" not in msg, f"생 트레이스백이 나왔다:\n{msg[-800:]}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_dump_is_pipeable():
+    """--dump 는 터미널 없이 돌아야 한다 — SSH 밖으로 내보내는 유일한 경로다."""
+    with tempfile.TemporaryDirectory() as d:
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "from kr_quant.tui.ledger_app import main; main()",
+             "--dir", _ledger_dir(d), "--dump"],
+            capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr[-1500:]
+        assert "### 원장" in r.stdout and "### 한계" in r.stdout
+        assert "미관측" in r.stdout
+        assert "~" in r.stdout, "얇은 섹터 표시가 평문에서 사라졌다"
