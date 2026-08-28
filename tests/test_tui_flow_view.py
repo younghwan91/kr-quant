@@ -311,15 +311,15 @@ def test_sort_highlight_points_at_the_right_header(data):
     from kr_quant.tui.flow_view import SORTS, SORT_COL, sort_span
 
     st = State(data)
-    for width in (80, 120):
+    for width in (80, 120, 140):
         for si, (key, _label) in enumerate(SORTS):
             st.si = si
             st.wi = 1                       # 종합이 아닌 창
             span = sort_span(st, width)
             header_line = table_lines(st, width, 10)[0][0]
-            want = SORT_COL[key]
-            if span is None:
-                continue
+            want = SORT_COL.get(key)
+            if span is None or want is None or want not in header_line:
+                continue                    # 그 폭에 열이 없으면 하이라이트도 없다
             start, w = span
             got, cell = "", 0
             for ch in header_line:

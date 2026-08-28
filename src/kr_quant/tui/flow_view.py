@@ -16,7 +16,8 @@ WINDOWS = ("5", "20", "60", "120", "종합")
 # 됐고, 그걸 막으려 유동성 하한을 넣었더니 작은 섹터가 통째로 비었다.)
 ACTORS = (("inst", "기관"), ("forgn", "외국인"), ("indiv", "개인"), ("etc", "기타법인"))
 SORTS = (("G", "성장"), ("inst", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
-         ("x", "미실현"), ("n_all", "종목수"))
+         ("x", "미실현"), ("U", "포텐셜"), ("P", "dW/dt"), ("xddot", "풀림"),
+         ("tv", "거래대금"), ("cap_idx", "시총"), ("n_all", "종목수"))
 #: 종목 목록의 정렬. 기본은 **절대 순매수** — 섹터 합계가 금액의 합이므로
 #: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
 NAME_SORTS = (("inst", "순매수"), ("a", "시총대비"), ("cap", "시총"),
@@ -189,7 +190,8 @@ def header_lines(st: State, width: int) -> list[str]:
 
 #: 정렬 키 → 그 열의 헤더 이름. 하이라이트할 열을 찾는 데 쓴다.
 SORT_COL = {"G": "G", "inst": "임펄스", "accel": "가속", "ret": "수익률",
-            "x": "미실현", "n_all": "종목"}
+            "x": "미실현", "U": "포텐셜", "P": "dW/dt", "xddot": "풀림",
+            "n_all": "종목"}   # 거래대금·시총은 표에 열이 없어 하이라이트 대상이 아니다
 NAME_SORT_COL = {"inst": "순매수", "a": "시총대비", "cap": "시총",
                  "tv": "거래대금", "name": "종목"}
 
@@ -207,7 +209,13 @@ def table_cols(st: State, width: int) -> list[tuple[str, int, bool]]:
     cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False),
             ("임펄스", 10, True), ("가속", 7, True), ("수익률", 8, True)]
     if wide:
-        cols += [("미실현", 8, True), ("포텐셜", 8, True), ("순매수상위", 22, False)]
+        cols += [("미실현", 8, True), ("포텐셜", 8, True)]
+    # 아주 넓은 터미널에서는 동역학 열까지 보여준다 — 정렬은 되는데 값을 못 보는
+    # 상태를 없앤다(dW/dt·풀림으로 줄세워놓고 그 숫자가 화면에 없으면 읽을 수 없다).
+    if width >= 132:
+        cols += [("dW/dt", 8, True), ("풀림", 8, True)]
+    if wide:
+        cols += [("순매수상위", 22, False)]
     return cols
 
 
@@ -248,11 +256,14 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                       pad(fmt_pct(r.get("accel")), 7, True),
                       pad(fmt_pct(r.get("ret")), 8, True)]
             if wide:
-                top = (r.get("top") or {}).get("buy") or []
-                names = ", ".join(t["name"] for t in top[:2])
                 cells += [pad(fmt_pct(r.get("x"), 1), 8, True),
-                          pad(f"{r['U']:.0f}" if r.get("U") is not None else "—", 8, True),
-                          pad(names, 22)]
+                          pad(f"{r['U']:.0f}" if r.get("U") is not None else "—", 8, True)]
+            if width >= 132:
+                cells += [pad(fmt_pct(r.get("P"), 3), 8, True),
+                          pad(fmt_pct(r.get("xddot"), 3), 8, True)]
+            if wide:
+                top = (r.get("top") or {}).get("buy") or []
+                cells.append(pad(", ".join(t["name"] for t in top[:2]), 22))
         out.append(pad(" ".join(cells), width))
         thin.append(bool(r.get("thin")))
     return out, thin, 1
@@ -371,9 +382,11 @@ HELP = [
     ("예상Δv", "k × 가속 + b. k·b 는 그 창 27개 섹터의 횡단면 회귀(절편 포함 OLS)."),
     ("미실현", "예상Δv − 실제 수익률 [%p]. + 면 덜 갔고(눌림), − 면 이미 더 갔다."),
     ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
-    ("포텐셜", "½·k·x². x 의 제곱이라 부호가 없다 — 미실현과 같이 봐야 방향이 난다."),
+    ("포텐셜", "½·k·x². **x 의 제곱이라 부호가 없다** — 이걸로 정렬하면 '많이 눌린 것'과"),
+    ("", "        '이미 많이 간 것'이 같이 위로 온다. 미실현을 같이 봐야 방향이 갈린다."),
     ("dW/dt", "구간을 반으로 갈라 W=가속×수익률 의 변화. 힘과 운동이 정렬되는가."),
-    ("풀림 ẋ ẍ", "미실현 x 가 해소되는 속도와 그 가속. 구간을 셋으로 갈라 중앙차분."),
+    ("", "        폭 132칸 이상에서 보인다. 좁으면 정렬만 되고 값은 안 보인다."),
+    ("풀림", "미실현 x 가 해소되는 **가속**(ẍ). 구간을 셋으로 갈라 중앙차분한다."),
     ("", "        2차 차분이라 짧은 창(조각 6~7일)에서는 값이 흔들린다."),
     ("순매수상위", "그 구간 기관 순매수가 가장 큰 종목. 표는 2개, 하단 패널은 3개 —"),
     ("", "        **같은 목록을 자른 것**이다. 시총과 무관하다. Enter 로 전 종목."),
