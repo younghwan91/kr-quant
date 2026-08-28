@@ -17,6 +17,10 @@ WINDOWS = ("5", "20", "60", "120", "종합")
 ACTORS = (("inst", "기관"), ("forgn", "외국인"), ("indiv", "개인"), ("etc", "기타법인"))
 SORTS = (("G", "성장"), ("inst", "임펄스"), ("accel", "가속"), ("ret", "수익률"),
          ("x", "미실현"), ("n_all", "종목수"))
+#: 종목 목록의 정렬. 기본은 **절대 순매수** — 섹터 합계가 금액의 합이므로
+#: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
+NAME_SORTS = (("inst", "순매수"), ("a", "시총대비"), ("tv", "거래대금"),
+              ("name", "종목명"))
 
 
 def fmt_amt(v) -> str:
@@ -74,6 +78,9 @@ class State:
         self.row = 0
         self.drill = False      # 종목 목록 화면인가
         self.drow = 0           # 종목 목록에서 선택된 행
+        self.nsi = 0            # 종목 정렬
+        self.help = False       # 도움말 화면인가
+        self.hrow = 0           # 도움말 스크롤
 
     # --- 현재 선택 ---
     @property
@@ -92,6 +99,10 @@ class State:
     def sort_key(self) -> str:
         return SORTS[self.si][0]
 
+    @property
+    def name_sort(self) -> str:
+        return NAME_SORTS[self.nsi][0]
+
     def cycle(self, what: str, step: int = 1) -> None:
         if what == "w":
             self.wi = (self.wi + step) % len(WINDOWS)
@@ -101,6 +112,10 @@ class State:
             self.ai = (self.ai + step) % len(ACTORS)
         elif what == "s":
             self.si = (self.si + step) % len(SORTS)
+        elif what == "ns":
+            self.nsi = (self.nsi + step) % len(NAME_SORTS)
+            self.drow = 0
+            return
         self.row = 0
 
     # --- 데이터 ---
@@ -155,7 +170,11 @@ class State:
             out.append({"code": code, "name": nm.get("name", "—"),
                         "inst": w.get("inst"), "tv": w.get("tv"), "cap": cap,
                         "a": (w["inst"] / cap * 100) if cap else None})
-        out.sort(key=lambda t: -(t["inst"] or 0))       # 절대 기여도 순
+        key = self.name_sort
+        if key == "name":
+            out.sort(key=lambda t: t["name"])
+        else:
+            out.sort(key=lambda t: -(t.get(key) if t.get(key) is not None else -1e18))
         return out
 
 
@@ -181,7 +200,7 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
         cols = [("섹터", 11, False), ("종목", 4, True), ("G", 5, True), ("", 1, False),
                 ("임펄스", 10, True), ("가속", 7, True), ("수익률", 8, True)]
         if wide:
-            cols += [("미실현", 8, True), ("포텐셜", 8, True), ("견인주", 22, False)]
+            cols += [("미실현", 8, True), ("포텐셜", 8, True), ("순매수상위", 22, False)]
 
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     out = [pad(head, width)]
@@ -205,7 +224,7 @@ def table_lines(st: State, width: int, height: int) -> tuple[list[str], list[boo
                       pad(fmt_pct(r.get("ret")), 8, True)]
             if wide:
                 top = (r.get("top") or {}).get("buy") or []
-                names = " ".join(t["name"] for t in top[:2])
+                names = ", ".join(t["name"] for t in top[:2])
                 cells += [pad(fmt_pct(r.get("x"), 1), 8, True),
                           pad(f"{r['U']:.0f}" if r.get("U") is not None else "—", 8, True),
                           pad(names, 22)]
@@ -224,16 +243,14 @@ def detail_lines(st: State, width: int) -> list[str]:
         arr = top.get(key) or []
         if not arr:
             return f" {label}: —"
-        parts = []
-        for t in arr[:3]:
-            a = t.get("a")
-            parts.append(f"{t['name']} {fmt_pct(a)}%p" if a is not None
-                         else f"{t['name']} {fmt_amt(t['inst'])}")
+        # 정렬이 **금액** 순이므로 금액을 보여준다. 시총대비(%p)를 보이면
+        # 표시값과 순서가 어긋나 보인다(현대 +1.34%p 가 대우 +1.40%p 위에 오는 식).
+        parts = [f"{t['name']} {fmt_amt(t['inst'])}억" for t in arr[:3]]
         return f" {label}: " + " · ".join(parts)
     n = (r.get("top") or {}).get("n", 0)
     return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
-            pad(side("buy", "기관 순매수 상위"), width),
-            pad(side("sell", "기관 순매도 상위"), width)]
+            pad(side("buy", "순매수 상위"), width),
+            pad(side("sell", "순매도 상위"), width)]
 
 
 def names_lines(st: State, width: int) -> tuple[list[str], int]:
@@ -242,7 +259,8 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     if not r:
         return [pad(" (섹터를 고르라)", width)], 1
     names = st.names()
-    title = f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
+    title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
+             f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
     cols = [("종목", 14, False), ("코드", 7, False),
             ("순매수", 11, True), ("시총대비", 9, True), ("거래대금", 11, True)]
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
@@ -290,5 +308,57 @@ def color_spans(line: str) -> list[tuple[int, int, str]]:
     return spans
 
 
-FOOTER = " w:구간  m:시장  a:주체  s:정렬  ↑↓:섹터  Enter:종목  q:종료"
-FOOTER_DRILL = " ↑↓:종목  Esc/←:돌아가기  q:종료"
+#: 도움말 — 열의 뜻과 계산식. 화면에서 읽는 사람이 "이 숫자가 뭐냐" 를 물을 자리에
+#: 답을 둔다. 한계도 같이 적는다(추정치·상대지표·유동성 함정).
+HELP = [
+    ("", "── 섹터 표 ──"),
+    ("종목", "그 (시장,섹터)의 상장 종목 수. 10개 미만은 회색 — 벤더 분류가 좁아"),
+    ("", "        사실상 단일종목인 라벨이 있다(부동산 3, 출판/매체복제 2)."),
+    ("G", "성장 점수 0~1. 세 순위의 평균 — 힘(가속도)·압축(미실현)·풀림(ẍ)."),
+    ("", "        * 는 세 조건을 다 만족(a>0 · x>0 · ẍ>0). 검증된 적 없는 탐색 지표다."),
+    ("임펄스", "구간 누적 순매수 [억원] = Σ(순매매 수량 × 그날 종가)."),
+    ("", "        DB 는 수량만 주므로 금액은 종가 환산 근사다(참값은 VWAP 가중)."),
+    ("가속", "임펄스 ÷ 구간말 섹터 시총 × 100 [%p]. 물리로 a = F/m."),
+    ("", "        금액만 보면 대형 섹터가 늘 이기므로 쏠림은 이쪽이 정직하다."),
+    ("수익률", "그 섹터 **자체 바구니**의 구간 수익률 [%], 전일 시총 가중."),
+    ("", "        KRX 업종지수가 아니다 — 구성종목이 달라 분자·분모가 어긋난다."),
+    ("예상Δv", "k × 가속 + b. k·b 는 그 창 27개 섹터의 횡단면 회귀(절편 포함 OLS)."),
+    ("미실현", "예상Δv − 실제 수익률 [%p]. + 면 덜 갔고(눌림), − 면 이미 더 갔다."),
+    ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
+    ("포텐셜", "½·k·x². x 의 제곱이라 부호가 없다 — 미실현과 같이 봐야 방향이 난다."),
+    ("dW/dt", "구간을 반으로 갈라 W=가속×수익률 의 변화. 힘과 운동이 정렬되는가."),
+    ("풀림 ẋ ẍ", "미실현 x 가 해소되는 속도와 그 가속. 구간을 셋으로 갈라 중앙차분."),
+    ("", "        2차 차분이라 짧은 창(조각 6~7일)에서는 값이 흔들린다."),
+    ("순매수상위", "그 구간 기관 순매수가 가장 큰 종목. 표는 2개, 하단 패널은 3개 —"),
+    ("", "        **같은 목록을 자른 것**이다. 시총과 무관하다. Enter 로 전 종목."),
+    ("", ""),
+    ("", "── 종목 목록 (Enter) ──"),
+    ("순매수", "그 구간 기관 순매수 [억원]. **기본 정렬** — 섹터 합계가 금액의"),
+    ("", "        합이므로 '누가 이 섹터를 움직였나' 는 금액으로만 정의된다."),
+    ("시총대비", "순매수 ÷ 그 종목 시총 × 100 [%p]. 시총 작은 스팩이 위로 올라온다."),
+    ("거래대금", "그 구간 거래대금 [억원]."),
+    ("", ""),
+    ("", "── 알아둘 것 ──"),
+    ("", "· k 는 추정치다. 창마다 다르다(5일 15.9 · 20일 14.7 · 60일 9.2 · 120일 9.0)."),
+    ("", "· 위 관계는 **동시기**다. 사면 오른다는 것이지 미래를 예측하지 않는다."),
+    ("", "  예측 가설은 따로 검정해 기각됐다(research/logs/inst_flow_accel)."),
+    ("", "· 값 0 은 '관망' 이 아니라 '0 또는 미보고' 다 — 수집기가 파싱 실패를 0 으로 준다."),
+    ("", "· 코스닥 단독은 관계가 약하다(R² 0.00~0.25). 거래소가 전체를 끈다."),
+]
+
+
+def help_lines(width: int, offset: int, height: int) -> tuple[list[str], int]:
+    """도움말 화면 — (행, 전체 줄 수). offset 부터 height 줄을 낸다."""
+    out = [pad(" 열의 뜻 — ↑↓ 스크롤 · 아무 키나 누르면 닫힘", width)]
+    body = []
+    for name, desc in HELP:
+        # ⚠️ f"{name:>9}" 는 **문자 폭**이라 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)가
+        # 어긋난다. pad 는 표시 칸으로 맞춘다 — 이 저장소가 세 번 밟은 함정이다.
+        body.append(pad((pad(name, 10, right=True) + "  " + desc) if name
+                        else ("   " + desc), width))
+    view = body[offset:offset + max(height - 1, 1)]
+    return out + view, len(body)
+
+
+FOOTER = " w:구간 m:시장 a:주체 s:정렬 ↑↓:섹터 Enter:종목 ?:도움말 q:종료"
+FOOTER_DRILL = " ↑↓:종목  s:정렬  ?:도움말  Esc/←:돌아가기  q:종료"

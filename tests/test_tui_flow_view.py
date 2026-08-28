@@ -15,8 +15,10 @@ from kr_quant.tui.flow_view import (
 )
 
 
+from kr_quant.tui.flow_view import cell_width
+
+
 def _w(text: str) -> int:
-    from kr_quant.tui.flow_view import cell_width
     return sum(cell_width(c) for c in text)
 
 
@@ -206,3 +208,95 @@ def test_color_spans_on_real_rows(data):
             assert role in ("up", "down", "mark")
             assert 0 <= start < 100
             assert start + width <= 100
+
+
+def test_help_covers_every_rendered_column(data):
+    """도움말이 실제로 렌더되는 모든 열을 설명하는가.
+
+    열을 추가하면서 도움말을 안 고치면 설명 없는 열이 생긴다 — 그 부류를 막는다.
+    """
+    from kr_quant.tui.flow_view import HELP, table_lines
+
+    documented = {name for name, _ in HELP if name}
+    st = State(data)
+    missing = set()
+    for wi in range(len(WINDOWS)):
+        st.wi = wi
+        lines, _thin, _nh = table_lines(st, 132, 20)
+        for h in lines[0].split():
+            if h and h not in documented and h not in {"섹터", "통과", "일"} \
+               and not h.endswith("일"):
+                missing.add(h)
+    assert not missing, f"도움말에 없는 열: {sorted(missing)}"
+
+
+def test_help_labels_align_in_display_cells():
+    """회귀 — 도움말 라벨이 표시 칸으로 정렬돼야 한다.
+
+    f"{name:>9}" 같은 문자 폭 서식은 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)를
+    다른 칸에서 끝내 설명문 시작 위치가 행마다 어긋난다.
+    """
+    from kr_quant.tui.flow_view import HELP, help_lines
+
+    lines, _ = help_lines(120, 0, 10**6)
+    starts = set()
+    for (name, desc), line in zip(HELP, lines[1:]):
+        if not name or not desc:
+            continue
+        idx = line.find(desc[:6])
+        assert idx > 0, f"설명문을 못 찾았다: {name}"
+        starts.add(sum(cell_width(c) for c in line[:idx]))
+    assert len(starts) == 1, f"설명문 시작 칸이 섞였다: {sorted(starts)}"
+
+
+def test_help_lines_fit_width_and_scroll():
+    from kr_quant.tui.flow_view import help_lines
+    for width in (80, 120):
+        lines, total = help_lines(width, 0, 20)
+        assert total > 10
+        for line in lines:
+            assert _w(line) == width
+        # 스크롤 끝에서도 안 깨진다
+        tail, _ = help_lines(width, total - 2, 20)
+        assert all(_w(x) == width for x in tail)
+
+
+def test_table_and_detail_show_the_same_top_names(data):
+    """회귀 — 표의 '순매수 상위' 열과 하단 패널이 같은 목록이어야 한다.
+
+    처음엔 열 이름이 '견인주'였고 하단은 '기관 순매수 상위'라, 같은 값인데 다른
+    지표처럼 읽혔다("견인주는 시총 기준이냐"는 질문이 실제로 나왔다).
+    """
+    st = State(data)
+    st.row = 0
+    lines, _thin, nhead = table_lines(st, 132, 20)
+    row_line = lines[nhead + st.row]
+    detail = detail_lines(st, 132)[1]          # '순매수 상위' 줄
+    top = (st.rows()[st.row].get("top") or {}).get("buy") or []
+    for t in top[:2]:
+        assert t["name"] in row_line, f"표에 {t['name']} 가 없다"
+        assert t["name"] in detail, f"하단에 {t['name']} 가 없다"
+
+
+def test_detail_panel_shows_the_value_it_sorts_by(data):
+    """회귀 — 금액 순으로 정렬하면서 %p 를 표시하면 순서가 뒤집혀 보인다.
+
+    실제로 '현대건설 +1.34%p' 가 '대우건설 +1.40%p' 위에 오는 화면이 나왔다.
+    정렬 기준과 표시값이 같아야 읽는 사람이 순서를 의심하지 않는다.
+    """
+    st = State(data)
+    st.row = 0
+    line = detail_lines(st, 132)[1]
+    top = (st.rows()[st.row].get("top") or {}).get("buy") or []
+    shown = [x for x in top[:3]]
+    if len(shown) < 2:
+        pytest.skip("픽스처에 상위 종목이 둘 미만")
+    vals = []
+    for t in shown:
+        idx = line.find(t["name"])
+        assert idx >= 0
+        vals.append((idx, t["inst"]))
+    vals.sort()                       # 화면에 나온 순서
+    amounts = [v for _, v in vals]
+    assert amounts == sorted(amounts, reverse=True), (
+        f"화면 순서와 금액 순서가 다르다: {amounts}")

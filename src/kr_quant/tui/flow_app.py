@@ -20,7 +20,7 @@ import re
 
 from kr_quant.tui.flow_view import (
     FOOTER, FOOTER_DRILL, State, color_spans, detail_lines, header_lines,
-    names_lines, table_lines)
+    help_lines, names_lines, table_lines)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -94,6 +94,19 @@ def _draw(scr, st: State) -> None:
     w = max(w - 1, 20)
 
     col = _COLORED
+
+    if st.help:
+        lines, total = help_lines(w, st.hrow, h - 1)
+        for i, line in enumerate(lines):
+            base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
+                    else curses.A_NORMAL)
+            _put(scr, i, line, base, False)
+        more = f" {st.hrow + 1}-{min(st.hrow + h - 2, total)} / {total}"
+        _put(scr, h - 1, pad_footer(" ↑↓:스크롤  아무 키나:닫기" + more, w),
+             curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
+        scr.refresh()
+        return
+
     hdr = header_lines(st, w)
     for i, line in enumerate(hdr):
         base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
@@ -104,8 +117,13 @@ def _draw(scr, st: State) -> None:
     if st.drill:
         lines, nhead = names_lines(st, w)
         avail = h - top - 1
-        for i, line in enumerate(lines[:avail]):
-            sel = i >= nhead and (i - nhead) == st.drow
+        body = lines[nhead:]
+        rows_avail = max(avail - nhead, 1)
+        first = max(0, min(st.drow - rows_avail // 2, len(body) - rows_avail))
+        first = max(first, 0)
+        view = lines[:nhead] + body[first:first + rows_avail]
+        for i, line in enumerate(view):
+            sel = i >= nhead and (first + i - nhead) == st.drow
             if i == 0:
                 base = curses.color_pair(C_AMBER) | curses.A_BOLD if col else curses.A_BOLD
             elif i == 1:
@@ -174,16 +192,42 @@ def _loop(scr, data: dict) -> None:
         except KeyboardInterrupt:
             return
         n = max(len(st.rows()), 1)
+        if st.help:
+            total = len(help_lines(80, 0, 10**6)[0]) - 1
+            if k in (curses.KEY_DOWN, ord("j")):
+                st.hrow = min(st.hrow + 1, max(total - 5, 0))
+            elif k in (curses.KEY_UP, ord("k")):
+                st.hrow = max(st.hrow - 1, 0)
+            elif k == curses.KEY_NPAGE:
+                st.hrow = min(st.hrow + 10, max(total - 5, 0))
+            elif k == curses.KEY_PPAGE:
+                st.hrow = max(st.hrow - 10, 0)
+            else:
+                st.help = False
+            continue
+        if k in (ord("?"), ord("h")) and not st.drill:
+            st.help = True
+            st.hrow = 0
+            continue
         if st.drill:
             m = max(len(st.names()), 1)
             if k in (ord("q"),):
                 return
-            elif k in (27, curses.KEY_LEFT, ord("h")):
+            elif k == ord("?"):
+                st.help = True
+                st.hrow = 0
+            elif k in (27, curses.KEY_LEFT):
                 st.drill = False
             elif k in (curses.KEY_DOWN, ord("j")):
                 st.drow = min(st.drow + 1, m - 1)
             elif k in (curses.KEY_UP, ord("k")):
                 st.drow = max(st.drow - 1, 0)
+            elif k in (ord("s"), ord("S")):
+                st.cycle("ns", 1 if k == ord("s") else -1)
+            elif k == curses.KEY_NPAGE:
+                st.drow = min(st.drow + 10, m - 1)
+            elif k == curses.KEY_PPAGE:
+                st.drow = max(st.drow - 10, 0)
             continue
         if k in (ord("q"), 27):
             return
