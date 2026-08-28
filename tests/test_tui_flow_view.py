@@ -559,3 +559,72 @@ def test_thin_sector_warning_survives_without_color(data):
     assert marked, "픽스처에 얇은 섹터가 없다 — 이 검사가 헛돈다"
     for ln in marked:
         assert "~" in ln, f"얇은 섹터인데 글자 표시가 없다: {ln.strip()!r}"
+
+
+def test_actor_toggle_changes_every_derived_cell_not_just_impulse(data):
+    """회귀 — 주체를 바꾸면 그 행의 **파생값이 전부** 따라와야 한다.
+
+    예전엔 임펄스 열만 주체를 따르고 가속·견인주·종목목록은 기관 값이 남아
+    한 행 안에 두 주체의 숫자가 섞였다. "외국인이 3,299억 팔았는데 가속 +1.44"
+    같은 줄이 나왔다.
+
+    기대값을 `st.rows()` 에서 가져오면 안 된다 — 그건 이미 투영된 행이라
+    무엇을 넣어도 자기 자신과 같아 **동어반복**이 된다(실제로 그랬다).
+    **원본 블록**에서 직접 계산해 비교한다.
+    """
+    st = State(data)
+    raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
+    seen = {}
+    for ai, (actor, _label) in enumerate(ACTORS):
+        st.ai = ai
+        for r in st.rows():
+            src = raw[r["sector"]]
+            assert r["flow"] == src[actor], (
+                f"주체[{actor}] 인데 임펄스가 {r['flow']} — 원본 {src[actor]}")
+            want = src[actor] / src["cap"] * 100 if src.get("cap") else None
+            assert r["accel"] == pytest.approx(want), (
+                f"주체[{actor}] 인데 가속이 주체를 안 따른다")
+        seen[actor] = [r["flow"] for r in st.rows()]
+    assert len({tuple(v) for v in seen.values()}) > 1, (
+        "주체를 바꿔도 임펄스가 하나도 안 변한다 — 픽스처가 이 검사를 헛돌게 한다")
+
+
+def test_sorting_by_impulse_is_monotone_for_every_actor(data):
+    """회귀 — 정렬 하이라이트가 가리키는 열은 실제로 정렬돼 있어야 한다.
+
+    정렬키가 문자열 "inst" 로 박혀 있어, 외국인 화면에서 화면은 '임펄스 열로
+    줄세웠다' 고 말하면서 그 열의 숫자가 뒤죽박죽이었다.
+    """
+    st = State(data)
+    st.si = next(i for i, (k, _l) in enumerate(SORTS) if k == "flow")
+    for ai in range(len(ACTORS)):
+        st.ai = ai
+        vals = [r["flow"] for r in st.rows() if r.get("flow") is not None]
+        assert vals == sorted(vals, reverse=True), (
+            f"주체[{ACTORS[ai][0]}]·정렬[임펄스] 인데 내림차순이 아니다: {vals}")
+
+
+def test_sort_falls_back_when_the_key_is_missing_for_the_whole_block(data):
+    """회귀 — 정렬키가 그 블록에서 전멸하면 정렬이 **무음 실패**했다.
+
+    5일 창은 G 가 27/27 결측이라 전 행이 동률이 되어 페이로드 원순서로
+    남는데, 헤더는 그 열을 하이라이트하며 '이걸로 줄세웠다' 고 말했다.
+    """
+    # G 를 통째로 지운 블록을 만든다 — 실데이터의 5일 창과 같은 모양.
+    blocks = {k: {**v, "rows": [{**r, "G": None} for r in v["rows"]]}
+              for k, v in data["blocks"].items()}
+    st = State({**data, "blocks": blocks})
+    st.si = next(i for i, (k, _l) in enumerate(SORTS) if k == "G")
+
+    key, fell = st.effective_sort(st.rows())
+    assert fell, "전멸한 키인데 폴백하지 않았다"
+    assert key != "G"
+
+    vals = [r.get(key) for r in st.rows() if r.get(key) is not None]
+    assert vals == sorted(vals, reverse=True), f"폴백 키로도 정렬이 안 됐다: {vals}"
+    assert "값이 없다" in header_lines(st, 170)[1], "헤더가 폴백을 밝히지 않는다"
+
+    # 값이 있는 창에서는 폴백하지 않아야 한다(과잉 폴백 방지).
+    st2 = State(data)
+    st2.si = st.si
+    assert not st2.effective_sort(st2.rows())[1], "멀쩡한 키인데 폴백했다"
