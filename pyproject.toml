@@ -32,6 +32,8 @@ dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8"]
 # 미조정 종가로 돌던 코드라, 남겨두면 이 저장소가 강제한다고 적어둔 규율의 반례였다.
 # 남은 하나는 게이트를 통과한 유일한 알파의 재현 CLI다.
 kq-pead = "kr_quant.strategies.pead:main"
+# SSH 에서 보는 섹터 자금흐름 화면. 일일 리포트가 만든 JSON 만 읽는다(DB 미접속).
+kq-flow = "kr_quant.tui.flow_app:main"
 
 [project.urls]
 Repository = "https://github.com/younghwan91/kr-quant"
