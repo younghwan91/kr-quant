@@ -308,24 +308,30 @@ def test_headers_are_not_truncated_by_their_column_width(data):
 
 
 def test_help_labels_align_in_display_cells():
-    """회귀 — 도움말 라벨이 표시 칸으로 정렬돼야 한다.
+    """회귀 — 도움말 설명문이 **모두 같은 칸에서** 시작해야 한다.
 
     f"{name:>9}" 같은 문자 폭 서식은 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)를
     다른 칸에서 끝내 설명문 시작 위치가 행마다 어긋난다.
+
+    긴 라벨(폭 10 초과)은 자기 줄을 쓰고 설명이 다음 줄로 가므로, 여기서는
+    **한 줄에 라벨과 설명이 같이 있는** 항목만 본다. 긴 라벨이 온전한지는
+    `test_help_labels_are_never_truncated` 가 따로 본다.
     """
-    from kr_quant.tui.flow_view import HELP, help_lines
+    from kr_quant.tui.flow_view import HELP, cell_len, help_lines
 
-    lines, _ = help_lines(120, 0, 10**6)
-    starts = set()
-    for (name, desc), line in zip(HELP, lines[1:]):
-        if not name or not desc:
+    lines = [ln.rstrip() for ln in help_lines(120, 0, 10 ** 6)[0]]
+    starts, checked = set(), 0
+    for name, desc in HELP:
+        if not name or not desc or cell_len(name) > 10:
             continue
-        # 렌더는 소스의 **강조** 표기를 뗀다(화면에 나갈 글자가 아니다).
-        idx = line.find(desc.replace("**", "")[:6])
-        assert idx > 0, f"설명문을 못 찾았다: {name}"
-        starts.add(sum(cell_width(c) for c in line[:idx]))
+        want = desc.replace("**", "")
+        hit = [ln for ln in lines if ln.lstrip().startswith(name) and want[:6] in ln]
+        assert hit, f"설명문을 못 찾았다: {name}"
+        idx = hit[0].find(want[:6])
+        starts.add(sum(cell_width(c) for c in hit[0][:idx]))
+        checked += 1
+    assert checked > 10, f"실제로 확인한 항목이 너무 적다({checked}) — 검사가 헛돈다"
     assert len(starts) == 1, f"설명문 시작 칸이 섞였다: {sorted(starts)}"
-
 
 def test_help_lines_fit_width_and_scroll():
     from kr_quant.tui.flow_view import help_lines
@@ -1100,3 +1106,21 @@ def test_hint_bar_fits_the_width_it_is_given(data):
                     assert sum(cell_width(c) for c in got) <= width, (
                         f"폭{width}·구간{WINDOWS[wi]}·정렬{i}·드릴{drill} 에서 "
                         f"힌트바가 넘친다: {got!r}")
+
+
+def test_help_labels_are_never_truncated():
+    """회귀 — 도움말 라벨이 잘리면 **어느 열 설명인지 알 수 없다.**
+
+    `순매수상위[억]` 이 `순매수상위` 로, `포텐셜[½kx²]` 이 `포텐셜[½kx` 로
+    잘려 있었다(7개). 표 헤더와 이름이 안 맞으면 도움말이 자기 일을 못 한다.
+    열을 넓히면 설명이 폭 80(SSH 기본)을 넘으므로, 긴 라벨은 자기 줄에 둔다.
+    """
+    from kr_quant.tui.flow_view import HELP, cell_len, help_lines
+
+    long = [n for n, _d in HELP if n and cell_len(n) > 10]
+    assert long, "긴 라벨이 없다 — 이 검사가 헛돈다"
+    for width in (80, 100, 132):
+        lines = [ln.rstrip() for ln in help_lines(width, 0, 10 ** 6)[0]]
+        assert all(cell_len(ln) <= width for ln in lines)
+        for name in long:
+            assert name in lines, f"폭{width} 에서 {name!r} 라벨이 잘렸다"

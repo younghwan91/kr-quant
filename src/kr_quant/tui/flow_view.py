@@ -821,8 +821,18 @@ def help_lines(width: int, offset: int, height: int,
         # **강조** 는 소스에서 눈에 띄라고 쓴 표기지 화면에 나갈 글자가 아니다.
         # 힌트바는 떼는데 여기는 안 떼서 `**닫기만**` 이 그대로 보였다.
         desc = desc.replace("**", "")
-        body.append(pad((pad(name, label_w, right=True) + "  " + desc) if name
-                        else ("   " + desc), width))
+        if not name:
+            body.append(pad("   " + desc, width))
+        elif cell_len(name) > label_w:
+            # 라벨이 열보다 길면 **자기 줄에 온전히** 둔다. `pad` 로 자르면
+            # `순매수상위[억]` 이 `순매수상위` 가 되어 표 헤더와 이름이 안 맞고,
+            # 그러면 도움말이 어느 열 설명인지 알려주지 못한다. 열을 넓히면
+            # 설명이 오른쪽으로 밀려 폭 80(SSH 기본)을 넘는다 — 줄을 하나 쓰는
+            # 편이 싸다. (flow 에서 7개가 이렇게 잘려 있었다.)
+            body.append(pad(name, width))
+            body.append(pad(" " * (label_w + 2) + desc, width))
+        else:
+            body.append(pad(pad(name, label_w, right=True) + "  " + desc, width))
     view = body[offset:offset + max(height - 1, 1)]
     return out + view, len(body)
 
