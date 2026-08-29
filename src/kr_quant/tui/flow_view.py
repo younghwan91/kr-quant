@@ -228,7 +228,7 @@ class State:
         """섹터 → 그 주체의 순매수/순매도 1위. 표의 견인주가 종목 목록과
         같은 집합에서 나오도록 `names` 에서 직접 뽑는다(페이로드의 top 은
         기관 전용이고 집계 대상도 미묘하게 달랐다)."""
-        win = self.window if self.window != "종합" else "20"
+        win = self.window if self.window != "종합" else self.COMBINED_WIN
         ck = (win, self.market, self.actor)
         if getattr(self, "_lead_ck", None) == ck:
             return self._lead_v
@@ -254,6 +254,23 @@ class State:
 
     #: 정렬키가 그 블록에서 전멸했을 때 대신 쓸 키 — 앞에서부터 값이 있는 것.
     SORT_FALLBACK = ("accel", "flow", "ret")
+
+    @property
+    def sortable(self) -> bool:
+        """이 화면에 **정렬이 있는가.**
+
+        종합 축은 5·20·60·120 을 G **순위**로 섞은 것이라 페이로드 순서를 그대로
+        쓴다 — 줄세울 키가 없다. 그런데 `s`·`r` 은 눌리기는 해서 헤더 라벨과
+        힌트바가 따라 움직였고, 표는 그대로였다. 사용자는 라벨이 바뀌는 것을
+        보고 정렬이 됐다고 믿는다 — 이 저장소가 리포트 쪽에서 CI 로 막아 온
+        부류다(README §7 D 계층: "파라미터를 바꿨는데 계산은 동일").
+
+        판정을 여기 한 곳에 둔다. 키를 받는 쪽(`handle_key`)과 화면에 적는 쪽
+        (`header_lines`)이 다른 답을 내면 그 순간 다시 거짓말이 된다.
+
+        드릴다운은 **실제로** 정렬한다(`NAME_SORTS`) — 종합에서 들어가도 그렇다.
+        """
+        return self.drill or self.window != "종합"
 
     def effective_sort(self, rows: list[dict]) -> tuple[str, bool]:
         """실제로 줄세우는 데 쓸 키와, 그게 폴백인지.
@@ -286,13 +303,55 @@ class State:
         self._rows_ck, self._rows_v = ck, out
         return out
 
+    #: 종합 화면이 4주체를 볼 때 쓰는 **대표 창**. 견인주(`_leads`)가 이미 같은
+    #: 선택을 하고 있고 드릴다운도 그렇다 — 한 화면 안에서 규칙이 하나여야 한다.
+    COMBINED_WIN = "20"
+
+    def _actor_sums(self) -> dict:
+        """섹터 → 4주체 순매수 합 [억]. **종합 화면 전용**이다.
+
+        종합 블록(`combined`)에는 주체별 값이 없다 — 5·20·60·120 을 G **순위**로
+        섞은 축이라 "그 구간의 순매수" 라는 것이 정의되지 않는다. 그래서 상세
+        패널의 4주체 줄이 종합에서만 `— — — —` 였다.
+
+        답을 페이로드에 새로 싣는 대신 **화면이 종목에서 더한다**. 이유가 셋이다.
+        (i) 이 화면의 견인주가 이미 그렇게 한다(`_leads`, 같은 `COMBINED_WIN`) —
+        같은 사실을 두 곳에서 다르게 구하면 갈라진다. (ii) 리포트 스키마를
+        안 건드리므로 **이미 만들어 둔 리포트가 그대로 고쳐진다.**
+        (iii) 실측으로 값이 맞는다 — 20일 블록의 주체값과 비교해 최대 차이가
+        1억 미만이고(종목별 반올림), 부호·자릿수는 전부 같다.
+
+        어느 창인지는 **화면에 적는다**(`_actors_line` 의 꼬리표). 안 적으면
+        "종합인데 왜 20일 값이냐" 를 물을 자리가 없다.
+        """
+        ck = (self.COMBINED_WIN, self.market)
+        if getattr(self, "_asum_ck", None) == ck:
+            return self._asum_v
+        mkts = [self.market] if self.market != "전체" else self.markets[1:]
+        out: dict = {}
+        for _code, nm in (self.d.get("names") or {}).items():
+            if nm.get("market") not in mkts:
+                continue
+            w = (nm.get("win") or {}).get(self.COMBINED_WIN)
+            if not w:
+                continue
+            a = out.setdefault(nm.get("sector"), {})
+            for key, _ko in ACTORS:
+                v = w.get(key)
+                if v is not None:
+                    a[key] = a.get(key, 0.0) + v
+        self._asum_ck, self._asum_v = ck, out
+        return out
+
     def _rows_uncached(self) -> list[dict]:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
             if not c:
                 return []
             leads = self._leads()
-            return [dict(r, top=leads.get(r.get("sector"))) for r in c["rows"]]
+            sums = self._actor_sums()
+            return [dict(r, top=leads.get(r.get("sector")),
+                         **sums.get(r.get("sector"), {})) for r in c["rows"]]
         b = self.d["blocks"].get(f"{self.window}|{self.market}")
         if not b:
             return []
@@ -389,15 +448,20 @@ def header_lines(st: State, width: int) -> list[str]:
     chip = "확정" if d.get("finalized") else "장중·미확정"
     l1 = f" 섹터 자금 흐름 · {d['asof']} {chip}"
     label, note = SORTS[st.si][1], ""
-    if st.window != "종합":
+    # 종합 화면은 **정렬 자체가 없다**(페이로드 순서). 예전엔 방향 화살표만 빼고
+    # 열 이름은 남겼는데, `s` 를 누르면 그 이름이 바뀌어서 정렬이 된 것처럼
+    # 보였다 — 화살표를 지운 판단을 열 이름까지 밀고 간다. 이 화면이 무엇으로
+    # 줄세워졌는지는 첫 열(G) 이 말한다.
+    if st.sortable:
         key, fell = st.effective_sort(st.rows())
         if fell:
             note = f"  ※ 이 구간에 {label} 값이 없다"
             label = dict(SORTS).get(key, key)
-    # 종합 화면은 정렬 자체가 없다(페이로드 순서) — 없는 방향을 표시하면 또 거짓말이다.
-    arrow = "" if st.window == "종합" else ("▲" if st.rev else "▼")
+        sort_chip = f" 정렬[{label}{'▲' if st.rev else '▼'}]"
+    else:
+        sort_chip = " 정렬없음[G 순]"
     l2 = (f" 구간[{st.window}] 시장[{st.market}] 주체[{ACTORS[st.ai][1]}]"
-          f" 정렬[{label}{arrow}]{note}")
+          f"{sort_chip}{note}")
     if st.actor != "inst" and st.window != "종합":
         l2 += "  ※ 미실현·포텐셜·dW/dt·풀림·G 는 기관 기준"
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
@@ -642,6 +706,31 @@ def name_sort_span(st: State) -> tuple[int, int] | None:
     return col_span(names_cols(), header) if header else None
 
 
+#: 상세 패널 첫 줄의 들여쓰기. :func:`detail_lines` 와 :func:`detail_title_span`
+#: 이 **같은 상수**를 봐야 색이 글자와 어긋나지 않는다.
+DETAIL_INDENT = " "
+
+
+def detail_title_span(st: State, width: int) -> tuple[int, int] | None:
+    """상세 패널 첫 줄에서 **섹터 이름**의 (시작 표시칸, 폭). 없으면 None.
+
+    이 줄에서 "지금 무엇을 보고 있는가" 를 말하는 건 섹터 이름 하나뿐인데,
+    줄 전체가 한 색이라 부속 정보(`종목 56개`·`Enter 로 전체`)에 묻혀 있었다.
+
+    좌표를 **뷰가 낸다.** 앱이 문자열을 다시 뜯어 이름 길이를 추측하면 문구를
+    고칠 때 색이 조용히 어긋난다 — 이 저장소는 표 헤더와 셀, 히트맵과 색에서
+    이미 두 번 밟았다(`col_span`·`name_sort_span`·`is_section` 이 같은 관용구다).
+    한글이 두 칸이라 문자 인덱스가 아니라 **표시 칸**을 낸다.
+    """
+    rows = st.rows()
+    if not rows:
+        return None
+    name = rows[min(st.row, len(rows) - 1)].get("sector") or "—"
+    start = cell_len(DETAIL_INDENT)
+    w = min(cell_len(name), max(width - start, 0))
+    return (start, w) if w > 0 else None
+
+
 def detail_lines(st: State, width: int) -> list[str]:
     rows = st.rows()
     if not rows:
@@ -657,13 +746,23 @@ def detail_lines(st: State, width: int) -> list[str]:
         parts = [f"{t['name']} {fmt_amt(t['flow'])}억" for t in arr[:3]]
         return f" {label}: " + " · ".join(parts)
     n = (r.get("top") or {}).get("n", 0)
-    # 표에서 막대로 바뀐 미실현과, 넓은 폭에서만 보이는 포텐셜의 **정확한 값**을
-    # 여기 둔다. 도형은 순서를, 숫자는 크기를 말한다.
-    x, u = r.get("x"), r.get("U")
-    exact = "" if x is None else f" · 미실현 {fmt_pct(x, 1)}%p"
-    exact += "" if u is None else f"(포텐셜 {u:.0f})"
-    return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체{exact}", width),
-            pad(_actors_line(r, width), width),
+    # 미실현·포텐셜은 여기 안 적는다. 미실현은 **표에 이미 숫자로 있고**
+    # (`Col("미실현[%p]", …, _num("x", 1))`), 이 줄은 그것이 발산 막대였던
+    # 시절 "도형은 순서를, 숫자는 크기를" 이라며 붙인 것이다 — 막대를 숫자로
+    # 되돌리면서 이쪽을 안 지워 같은 값이 두 자리에 남았다.
+    #
+    # 포텐셜(U = ½k·x²)은 `x` 가 제곱돼 **부호가 죽는다** — 미실현 +2.9 인
+    # 섹터와 −2.9 인 섹터가 같은 U 를 받는다. 도움말이 말하는 Spearman 1.0000
+    # 도 `x` 가 아니라 `|x|` 와의 순위상관이고 k>0 인 한에서만 성립한다.
+    # 그런데 이 화면의 논지는 방향이 핵심이라(`G_pass` 가 x>0 을 요구한다),
+    # 방향을 지운 값이 무슨 질문에 답하는지가 불분명하다. 정렬 열로는 남는다.
+    # 종합은 창을 섞은 축이라 4주체가 **대표 창(20일)** 값이다 — 그 사실을 줄에
+    # 적는다. 안 적으면 위 표(종합)와 이 줄(20일)이 다른 것을 말하는데 화면은
+    # 같은 것처럼 보인다.
+    note = " · 20일 기준" if st.window == "종합" else ""
+    return [pad(f"{DETAIL_INDENT}{r.get('sector','—')}"
+                f" · 종목 {n}개 · Enter 로 전체", width),
+            pad(_actors_line(r, width, note), width),
             pad(side("buy", "순매수 상위"), width),
             pad(side("sell", "순매도 상위"), width)]
 
@@ -677,27 +776,35 @@ _ACTORS_TIERS = (
 _ACTOR_KEY = dict((ko, k) for k, ko in ACTORS)
 
 
-def _actors_line(r: dict, width: int) -> str:
-    """선택 섹터의 **4주체 순매수**를 한 줄에.
+def _actors_line(r: dict, width: int, note: str = "") -> str:
+    """선택 섹터의 **4주체 순매수 분해**를 한 줄에 — 표에 없는 나머지 셋까지.
 
     화면이 한 번에 한 주체만 보여주므로 "기관이 팔았다" 까지는 알아도
     **누가 받았는지**는 앱을 바꿔야 알 수 있었다(`kq-ledger` 의 원장 화면).
     주식은 누가 사면 누가 판 것이고 4주체 합은 0 에 닫히므로, 그 답은
     같은 페이로드 안에 이미 있다 — 화면을 바꿀 이유가 없다.
 
-    잔여(= −Σ4주체)는 여기 안 적는다. 원장에는 그 열이 있지만 이 줄은
-    "누가 반대편인가" 한 가지만 답한다 — 다섯째 주체까지 말하려면
-    설명이 붙어야 하고, 그건 원장이 할 일이다.
+    라벨은 안 붙인다. ``개인 -69 · 외국인 -1 · 기관 +14 · 기타법인 +56 [억]``
+    은 무엇인지 딱 봐도 읽히고, 붙어 있던 ``반대편:`` 은 **틀린 이름이었다** —
+    이 줄은 선택한 주체까지 포함해 넷을 다 적는데(위 예의 `기관 +14` 는 바로
+    위 표에서 보던 그 값이다), "반대편" 은 선택 주체를 뺀 나머지를 뜻한다.
+    라벨을 떼면 폭도 6칸 벌어 좁은 화면에서 `기타법인` 이 늦게 잘린다.
+
+    잔여(= −Σ4주체)는 여기 안 적는다. 원장에는 그 열이 있지만, 다섯째 주체까지
+    말하려면 설명이 붙어야 하고 그건 원장이 할 일이다.
     """
     for names in _ACTORS_TIERS:
         parts = []
         for ko in names:
             v = r.get(_ACTOR_KEY[ko])
             parts.append(f"{ko} {fmt_amt(v)}" if v is not None else f"{ko} —")
-        line = " 반대편: " + " · ".join(parts) + " [억]"
+        # 앞의 공백 한 칸은 다른 패널 줄과 들여쓰기를 맞추는 것이다.
+        line = " " + " · ".join(parts) + " [억]" + note
         if cell_len(line) + 1 <= width:
             return line
-    return " 반대편: —"
+    # 꼬리표는 값이 하나라도 보이는 동안 안 뗀다 — 그건 장식이 아니라 **어느 창의
+    # 값인가** 다. 반대로 값이 하나도 안 보이면 꼬리표도 뜻이 없다.
+    return " —"
 
 
 def names_lines(st: State, width: int) -> tuple[list[str], int]:
@@ -711,7 +818,10 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     if not r:
         return [pad(" (섹터를 고르라)", width)], 1
     names = st.names()
-    title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
+    # 종합에서 Enter 를 누르면 나오는 목록은 **20일** 이다(`State.names`). 예전엔
+    # 제목이 `종합일 기준` 이라고 적어서, 화면이 스스로 없는 구간을 말했다.
+    win_note = ("20일 기준(종합)" if st.window == "종합" else f"{st.window}일 기준")
+    title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {win_note}"
              f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
     cols = _fit(names_cols(), width)
     head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
@@ -725,7 +835,13 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
 
 #: 색을 입힐 구간을 찾는 정규식. 렌더는 문자열만 만들고, 어디를 무슨 색으로
 #: 칠할지는 이 함수가 (시작칸, 길이, 역할) 로 낸다 — curses 를 여기 들이지 않는다.
-_NUM = __import__("re").compile(r"[+-][\d,]+(?:\.\d+)?%?p?")
+#:
+#: 앞의 ``(?<![\d\w-])`` 는 **날짜를 음수로 읽지 않기 위한 것**이다. 헤더의
+#: ``2026-07-31 ~ 2026-08-28`` 에서 `-07-31` `-08-28` 이 음수로 잡혀 하락색으로
+#: 칠해졌다. 표의 숫자는 앞이 공백이거나 줄 처음이라 이 제한에 안 걸린다.
+#: (배색을 검은 바탕으로 옮기면서 그 청록이 더 눈에 띄었다 — 값이 아닌 것이
+#: 값처럼 보이는 건 배색 취향 문제가 아니다.)
+_NUM = __import__("re").compile(r"(?<![\d\w-])[+-][\d,]+(?:\.\d+)?%?p?")
 
 
 def color_spans(line: str) -> list[tuple[int, int, str]]:
@@ -767,6 +883,8 @@ HELP = [
     ("", "        **순매도 상위**(가장 많이 판 쪽)는 이걸 켜야 위로 온다."),
     ("? F1", "이 도움말. q·Esc·?·Enter 로 닫는다."),
     ("q", "종료. 단 도움말 안에서는 **닫기만** 한다(한 번 더 눌러야 종료)."),
+    ("", "한영 상태에서도 위 키가 그대로 듣는다. 다만 자판이 Shift 를 구분하지"),
+    ("", "        않는 자리가 있어 **대문자 역방향은 w·r 만** 된다(끝으로는 End)."),
     ("", ""),
     ("", "── 섹터 표 ──"),
     ("섹터", "벤더 분류(stocks.sector) 27개. KRX 업종 분류와 다르다."),
@@ -798,7 +916,7 @@ HELP = [
     ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
     ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
     ("포텐셜[½kx²]", "½·k·x². k 가 블록당 상수라 **|미실현| 의 순증가 변환**이다 — 4개 구간"),
-    ("", "        전부 Spearman 1.0000(실측). 즉 미실현 막대와 같은 크기를"),
+    ("", "        전부 Spearman 1.0000(실측). 즉 미실현 열과 같은 크기를"),
     ("", "        부호 없이 다시 적은 값이라 정보가 겹친다. 넓은 폭에서만 보이고"),
     ("", "        정렬 옵션으로 남겼다."),
     ("dW/dt[%p/일]", "구간을 반으로 갈라 W=가속×수익률 의 변화. 힘과 운동이 정렬되는가."),
@@ -859,6 +977,58 @@ def help_desc(entries: list[tuple[str, str]], name: str) -> str:
     return ""
 
 
+#: 힌트바 전용 **짧은 설명** — 열 이름 → 한 줄. 없으면 :data:`HELP` 로 떨어진다.
+#:
+#: 왜 두 벌인가: 같은 문장을 길이 제약이 **정반대**인 두 자리에 쓰고 있었다.
+#: 도움말은 86줄 모달이라 비유·유래·주의사항이 다 들어가도 되지만, 힌트바는
+#: 한 줄이라 그 뒤가 `…` 로 잘려나간다 — 그리고 잘린 설명은 설명이 아니다
+#: (:func:`hint_line` 독스트링이 스스로 인정하는 문제였다).
+#:
+#: 실제로 가속 정렬에서 화면에 늘 떠 있던 줄이 이랬다:
+#: ``정렬 가속[%p]▼ · 임펄스 ÷ 구간말 섹터 시총 × 100 [%p]. 물리로 a = F/m.``
+#: 값을 읽는 데 필요한 것은 "임펄스 ÷ 시총" 까지고, 물리 비유는 한 줄짜리
+#: 힌트바에서 아무 일도 안 한다. 게다가 정확하지도 않다 — 여기 `a` 는 자금
+#: 축의 0차 비율(F/m)이고 `ẍ`(풀림)는 가격 갭의 2차 시간미분인데, 둘 다
+#: "가속" 이라 불러서 읽는 사람을 헷갈리게 했다. 비유는 도움말에 남는다.
+#:
+#: 규칙: **그 숫자를 읽는 데 필요한 것만** — 분자·분모와 단위까지. 비유·유래·
+#: 한계는 `?` 의 일이다. 길이는 폭 80 에서 `…` 로 잘리지 않는 선을 지킨다
+#: (검사가 전 열 × 폭 80 을 돌며 확인한다).
+HINT_DESC = {
+    # 섹터 표
+    "가속[%p]": "임펄스 ÷ 구간말 섹터 시총 × 100 [%p]",
+    "임펄스[억]": "구간 누적 순매수 [억원] — 수량 × 그날 종가",
+    "1년[%ile]": "이 순매수가 최근 1년 분포에서 몇 등 [0~100]",
+    "추이[8]": "구간 동안 순매수가 누적된 경로. 왼쪽이 시작",
+    "수익률[%]": "그 섹터 바구니의 구간 수익률 [%], 시총 가중",
+    "미실현[%p]": "예상Δv − 실제 수익률 [%p]. + 면 덜 갔다",
+    "풀림[%p/일²]": "미실현이 해소되는 2차 변화 [%p/일²]",
+    "G[0~1]": "가속·미실현·풀림 세 순위의 평균 [0~1]",
+    "포텐셜[½kx²]": "½·k·x² — |미실현| 을 부호 없이 다시 적은 값",
+    "dW/dt[%p/일]": "전·후반 W=가속×수익률 의 변화 [%p/일]",
+    "종목[수]": "그 (시장,섹터)의 상장 종목 수. ~ 는 10개 미만",
+    # 종목 목록(드릴다운)
+    "종목": "종목명 가나다순",
+    "순매수[억]": "선택 주체의 구간 순매수 [억원], 절댓값 순",
+    "누적[%]": "|순매수| 큰 순으로 훑을 때의 누적 기여율. - 가 80%",
+    "참여율[%]": "순매수 ÷ 그 종목 거래대금 × 100 [%]",
+    "시총대비[%p]": "순매수 ÷ 그 종목 시총 × 100 [%p]",
+    # 이 둘은 **두 화면이 같은 헤더를 쓴다** — 섹터 표에서는 섹터 합계고
+    # 드릴다운에서는 종목 값이다. 어느 쪽에서도 참인 말로 적는다.
+    "시총[억]": "구간말 시가총액 [억원] — 가속·시총대비의 분모",
+    "거래대금[억]": "그 구간 거래대금 [억원]",
+}
+
+
+def hint_desc(header: str) -> str:
+    """힌트바 한 줄 설명 — 짧은 것이 있으면 그것, 없으면 도움말의 긴 설명.
+
+    폴백을 남기는 이유: 열이 하나 늘었는데 여기 안 적히면 힌트바가 **비어**
+    버린다. 긴 설명은 잘리기라도 하지만 빈 줄은 아무 말도 안 한다.
+    """
+    return HINT_DESC.get(header) or help_desc(HELP, header)
+
+
 def hint_line(head: str, desc: str, width: int) -> str:
     """항상 보이는 한 줄 힌트 — ``head · desc`` 를 폭에 **맞춰서** 낸다.
 
@@ -880,6 +1050,16 @@ def hint_line(head: str, desc: str, width: int) -> str:
             used += w2
         desc = cut.rstrip() + "…"
     return head + " · " + desc
+
+
+def is_section(line: str) -> bool:
+    """도움말에서 **구역 제목 줄**인가 — ``── 키 ──`` ``── 섹터 표 ──``.
+
+    색을 입히는 쪽(`flow_app`)이 문자열을 다시 뜯어 맞히면 문구를 고칠 때
+    조용히 어긋난다. 줄을 만드는 쪽이 판정을 진다 — 이 저장소가 헤더와 셀,
+    히트맵과 색에서 이미 두 번 밟은 자리다.
+    """
+    return line.strip().startswith("──")
 
 
 def help_lines(width: int, offset: int, height: int,
@@ -926,18 +1106,26 @@ def help_lines(width: int, offset: int, height: int,
 #: 푸터는 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 좁은 터미널에서
 #: 잘렸고(무엇이 잘렸는지도 몰랐고), 넓은 터미널에서는 절반이 비어 있는데도
 #: 대문자 역방향·g/G·PgUp/PgDn·r 이 화면 어디에도 안 적혀 있었다.
+#:
+#: 그 뒤 반대로 기울었다 — ``w/W m/M a/A s/S`` 처럼 **한 키의 두 방향을 다 적으니**
+#: 푸터가 길어져서 정작 무슨 키가 있는지가 안 읽혔다. 이제 푸터는 역방향 대문자를
+#: 안 적는다. 다만 ``G``(끝)는 ``g``(처음)의 **역방향이 아니라 별개 동작**이라
+#: 남긴다 — 안 적으면 목록 끝으로 가는 길이 화면에서 사라진다.
+#: 대문자 역방향·``l``·``←``·``Esc`` 는 **여전히 듣고**,
+#: :data:`HELP` 의 키 절에 그대로 적혀 있다 — 화면 어디에도 안 적혀 있으면
+#: 없는 기능이라는 원칙은 그대로다. 바뀐 것은 **어느 화면에 적히느냐** 뿐이다.
 FOOTER_TIERS = (
-    " w/W:구간 m/M:시장 a/A:주체 s/S:정렬 r:역순 ↑↓:섹터 g/G:처음/끝"
-    " PgUp/PgDn:쪽 Enter/l:종목 ?:도움말 q:종료",
+    " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 g/G:처음/끝"
+    " PgUp/PgDn:쪽 Enter:종목 ?:도움말 q:종료",
     " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 Enter:종목 ?:도움말 q:종료",
     " w m a s:바꾸기 r:역순 Enter:종목 ?:전체 키 q:종료",
     " w m a s r:바꾸기 Enter:종목 ?:키 q:종료",
     " ?:키 q:종료",
 )
 FOOTER_DRILL_TIERS = (
-    " ↑↓:종목 s/S:정렬 r:역순 g/G:처음/끝 PgUp/PgDn:쪽 w/W:구간 m:시장 a:주체"
-    " h/←/Esc:돌아가기 ?:도움말 q:종료",
-    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h/←:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 g/G:처음/끝 PgUp/PgDn:쪽 w:구간 m:시장 a:주체"
+    " h:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h:돌아가기 ?:도움말 q:종료",
     " s:정렬 r:역순 w m a:바꾸기 h:돌아가기 ?:전체 키 q:종료",
     " s r w m a:바꾸기 h:뒤로 ?:키 q:종료",
     " ?:키 h:뒤로 q:종료",

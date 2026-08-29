@@ -453,16 +453,16 @@ def test_hint_bar_explains_the_column_being_sorted():
     푸터 위 한 줄은 늘 떠 있고, s 로 정렬을 바꾸면 같이 바뀐다.
     """
     from kr_quant.tui.flow_app import hint_text
-    from kr_quant.tui.flow_view import HELP, SORTS
+    from kr_quant.tui.flow_view import SORTS, hint_desc
 
     st = _st()
     seen = set()
     for _ in range(len(SORTS)):
         line = hint_text(st)
         header = line.split("정렬 ", 1)[1].split("▼")[0].split("▲")[0]
-        desc = next((d for n, d in HELP if n == header), None)
-        assert desc, f"'{header}' 의 설명이 HELP 에 없다 — 힌트바가 빈다"
-        # 힌트바는 HELP 의 **강조** 별표를 뗀다(통과 마커 * 와 헷갈린다).
+        desc = hint_desc(header)
+        assert desc, f"'{header}' 의 설명이 어디에도 없다 — 힌트바가 빈다"
+        # 힌트바는 **강조** 별표를 뗀다(통과 마커 * 와 헷갈린다).
         assert desc.strip().replace("**", "")[:12] in line, f"열 설명이 없다: {line}"
         assert ("▼" in line) != ("▲" in line), f"정렬 방향 표시가 없다: {line}"
         seen.add(line)
@@ -474,6 +474,82 @@ def test_hint_bar_explains_the_column_being_sorted():
     st.rev = False
     handle_key(st, ord("l"))
     assert "순매수" in hint_text(st), hint_text(st)
+
+
+def _snap(st: State) -> tuple:
+    """키 하나가 무엇을 바꿨는지 볼 상태 사진."""
+    return (st.wi, st.mi, st.ai, st.si, st.nsi, st.row, st.drow,
+            st.drill, st.help, st.hrow, st.rev, st.nrev)
+
+
+def test_hangul_jamo_keys_do_what_their_latin_twins_do():
+    """한영을 켜 두면 `w` 가 `ㅈ` 으로 도착해 아무 일도 안 했다.
+
+    두벌식은 자판 **자리** 대응이라 같은 자리는 같은 일을 해야 한다. 화면
+    표기는 영문 그대로다(사용자가 한글 병기를 원하지 않았다).
+
+    주입: `normalize_key` 가 자모를 그대로 `ord` 하면 전부 실패한다.
+    """
+    from kr_quant.tui.flow_app import normalize_key
+
+    pairs = [("ㅂ", "q"), ("ㅈ", "w"), ("ㅉ", "W"), ("ㄱ", "r"), ("ㄲ", "R"),
+             ("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m"),
+             ("ㅗ", "h"), ("ㅓ", "j"), ("ㅏ", "k"), ("ㅣ", "l")]
+    for jamo, latin in pairs:
+        for drill in (False, True):
+            a, b = _st(), _st()
+            a.drill = b.drill = drill
+            # 커서를 가운데로 — 0 에서는 위·아래가 둘 다 제자리라 j/k 가 안 갈린다.
+            a.row = b.row = 1
+            a.drow = b.drow = 0
+            ka = handle_key(a, normalize_key(jamo))
+            kb = handle_key(b, ord(latin))
+            assert (ka, _snap(a)) == (kb, _snap(b)), (
+                f"{jamo!r} 가 {latin!r} 와 다르게 동작한다(드릴{drill})")
+    # 첫가끝 자모(U+11xx)로 보내는 IME 도 있다 — 둘 다 받는다.
+    assert normalize_key("\u110c") == ord("w")
+
+
+def test_hangul_cannot_tell_some_capitals_apart_so_they_fall_back(): 
+    """두벌식에서 Shift 로 다른 글자가 나오는 자음은 `ㅂㅈㄷㄱㅅ` 뿐이다.
+
+    `A`·`S`·`G`·`M` 은 Shift 를 눌러도 같은 자모라, 터미널에 도착한 뒤에는
+    구분할 정보가 **이미 없다.** 앱이 할 수 있는 일은 소문자 동작으로 떨어뜨리는
+    것뿐이고, 그 사실은 주석과 도움말에 적혀 있어야 한다.
+    """
+    from kr_quant.tui.flow_app import normalize_key
+    from kr_quant.tui.flow_view import HELP
+
+    for jamo, latin in (("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m")):
+        assert normalize_key(jamo) == ord(latin), f"{jamo!r} 가 소문자로 안 떨어진다"
+    # 구분되는 쪽은 역방향이 살아 있어야 한다 — 그게 없으면 한글에서 정렬을
+    # 되돌릴 길이 아예 없어진다.
+    a, b = _st(), _st()
+    handle_key(a, normalize_key("ㅈ"))
+    handle_key(b, normalize_key("ㅉ"))
+    assert a.wi != b.wi, "ㅈ 과 ㅉ 이 같은 방향으로 돈다"
+    said = " ".join(n + " " + d for n, d in HELP)
+    assert "한영" in said, "한글 상태에서도 듣는다는 사실이 화면 어디에도 없다"
+
+
+def test_the_screen_never_prints_the_hangul_keys():
+    """한글 키를 **적지는** 않는다 — 사용자가 병기를 원하지 않았다."""
+    from kr_quant.tui.flow_view import FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP
+
+    text = " ".join(FOOTER_TIERS + FOOTER_DRILL_TIERS
+                    + tuple(n + " " + d for n, d in HELP))
+    for jamo in "ㅂㅈㅉㄱㄲㅁㄴㅎㅡㅗㅓㅏㅣ":
+        assert jamo not in text, f"화면에 자모 {jamo!r} 가 적혀 있다"
+
+
+def test_normal_windows_still_sort():
+    """회귀 — 종합만 막는 것이지 정렬을 없애는 게 아니다."""
+    st = _st()
+    order = [r.get("sector") for r in st.rows()]
+    handle_key(st, ord("s"))
+    assert st.si != 0 and st.sortable
+    handle_key(st, ord("r"))
+    assert st.rev and [r.get("sector") for r in st.rows()] != order
 
 
 def test_footer_grows_and_shrinks_with_the_width():
@@ -523,20 +599,53 @@ def test_help_scroll_stops_where_the_last_line_is_at_the_bottom():
 def test_detail_panel_folds_on_short_screens_so_the_table_survives():
     """6줄 터미널에서 상세 패널이 헤더를 덮어써 표가 통째로 사라졌다."""
     for h in (6, 8, 9):
-        _head, rows, detail, _hint, _foot = layout(h)
-        assert detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
-        assert rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
+        lay = layout(h)
+        assert lay.detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
+        assert lay.rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
     # 줄 수를 박으면 패널에 줄이 늘 때 무관한 이유로 깨진다 — 있고,
     # 좁아지면 줄어들고, 더 좁아지면 접힌다는 **성질**만 본다.
-    assert layout(24)[2] >= 3, "정상 높이에서는 상세 패널이 있어야 한다"
-    assert layout(24)[2] >= layout(11)[2] >= 3, "높이가 줄면 패널도 줄어야 한다"
+    assert layout(24).detail >= 3, "정상 높이에서는 상세 패널이 있어야 한다"
+    assert layout(24).detail >= layout(11).detail >= 3, "높이가 줄면 패널도 줄어야 한다"
 
 
 def test_tall_screens_give_the_extra_height_to_the_table():
     """200x50 에서 표와 상세 패널 사이에 빈 줄이 14줄 남던 회귀."""
-    head, rows, detail, hint, foot = layout(50)
-    assert head + 1 + rows + detail == hint, "세로 배치에 빈 줄이 남는다"
-    assert foot == 49 and hint == 48
+    lay = layout(50)
+    assert lay.head + 1 + lay.rows + lay.gap + lay.detail == lay.hint_y, \
+        "세로 배치에 뜻 없는 빈 줄이 남는다"
+    assert lay.foot_y == 49 and lay.hint_y == 48
+
+
+def test_detail_panel_is_set_off_from_the_table_by_a_blank_line():
+    """상세 패널이 표 마지막 행에 딱 붙어 패널 첫 줄이 표의 다음 행처럼 읽혔다.
+
+    주입: `layout` 이 `gap` 을 늘 0 으로 내면 첫 단언이 실패한다.
+    """
+    for h in (24, 30, 50):
+        assert layout(h).gap == 1, f"h={h} 에서 표와 패널이 붙어 있다"
+    # 드릴다운에는 패널이 없다 — 띄울 것이 없으면 빈 줄도 없다.
+    assert layout(50, drill=True).gap == 0, "패널도 없는데 빈 줄만 남았다"
+
+
+def test_the_blank_line_is_the_first_thing_given_up_when_the_screen_is_short():
+    """여백은 **가장 먼저 포기하는** 것이다 — 폭에서 문구를 단계적으로 줄이는
+    (`tier_for`) 것과 같은 규율을 높이에도 쓴다.
+
+    주입: `layout` 이 자리를 안 보고 `gap=1` 을 박으면, 낮은 화면에서 패널이
+    잘리거나(detail 감소) 표가 비어(rows<1) 실패한다.
+    """
+    tall = layout(24)
+    for h in range(10, 24):
+        lay = layout(h)
+        assert lay.rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
+        assert lay.detail >= 3, f"h={h} 에서 여백이 패널 줄을 잡아먹었다"
+        assert lay.head + 1 + lay.rows + lay.gap + lay.detail == lay.hint_y, \
+            f"h={h} 세로 배치가 안 맞는다: {lay}"
+        # 여백을 지키려고 맨 위 헤더를 버리지는 않는다 — 날짜·구간 줄이 먼저다.
+        assert lay.head == tall.head or lay.gap == 0, \
+            f"h={h} 에서 빈 줄 하나 때문에 헤더가 사라졌다: {lay}"
+    # 낮아질수록 여백은 도로 없어진다(먼저 포기한다는 뜻).
+    assert layout(11).gap == 0 and layout(10).gap == 0
 
 # --------------------------------------------------------------- 자금 원장
 #

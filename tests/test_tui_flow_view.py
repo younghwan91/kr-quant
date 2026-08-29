@@ -368,6 +368,52 @@ def test_help_body_is_not_truncated_at_the_default_ssh_width():
     assert not over, "폭 80 에서 잘리는 도움말 줄: " + repr(over)
 
 
+def test_help_section_headers_are_named_by_the_view_not_guessed_by_the_app():
+    """구역 제목(``── 키 ──``)을 색칠하는 쪽이 문자열을 다시 뜯으면 안 된다.
+
+    주입: `is_section` 이 늘 False 를 내면 첫 단언이, 아무 줄에나 True 를 내면
+    둘째 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_view import HELP, help_lines, is_section
+
+    heads = [d for n, d in HELP if not n and d.strip().startswith("──")]
+    assert heads, "도움말에 구역 제목이 없다 — 검사가 헛돈다"
+    for d in heads:
+        assert is_section(d), f"구역 제목을 못 알아본다: {d!r}"
+    body = help_lines(120, 0, 10 ** 6)[0]
+    marked = [ln for ln in body if is_section(ln)]
+    assert len(marked) == len(heads), f"구역 제목이 아닌 줄까지 골랐다: {marked}"
+
+
+def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
+    """푸터는 **소문자 한 벌**만 적고, 대문자 역방향은 도움말이 진다.
+
+    `w/W m/M a/A s/S` 를 다 적으니 푸터가 길어져 정작 무슨 키가 있는지가 안
+    읽혔다. 그렇다고 그냥 지우면 이 저장소가 이미 버그로 친 상태 — "기능이
+    화면 어디에도 안 적혀 있다" — 로 돌아간다. 그래서 **옮겼는지**를 본다.
+
+    주입: 푸터 단계에 `w/W` 를 되살리면 앞 절반이, 도움말에서 대문자 설명을
+    빼면 뒷 절반이 실패한다.
+    """
+    from kr_quant.tui.flow_view import (
+        FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP, help_desc)
+
+    for ts in (FOOTER_TIERS, FOOTER_DRILL_TIERS):
+        for t in ts:
+            # `g/G` 는 예외다 — `G`(끝)는 `g`(처음)의 역방향이 아니라 별개
+            # 동작이라, 안 적으면 목록 끝으로 가는 길이 화면에서 사라진다.
+            for pair in ("w/W", "m/M", "a/A", "s/S", "Enter/l", "h/←"):
+                assert pair not in t, f"푸터에 대문자·동의 키 병기가 남았다: {t}"
+    assert any("g/G" in t for t in FOOTER_TIERS), "목록 끝으로 가는 G 가 푸터에서 사라졌다"
+    # 그 대신 도움말에는 남아 있어야 한다 — 키 자체는 그대로 듣는다.
+    for name in ("w W", "m M", "a A", "s S"):
+        assert "역방향" in help_desc(HELP, name), f"도움말이 {name} 의 역방향을 안 적는다"
+    keys = " ".join(n for n, _d in HELP)
+    for token in ("Enter", "l", "h", "Esc", "G", "End", "PgUp"):
+        assert token in keys + " " + " ".join(d for _n, d in HELP), \
+            f"도움말에 {token!r} 가 없다"
+
+
 def test_width_tiers_all_go_through_one_helper():
     """회귀 — 폭 단계 고르기가 네 벌 각자 구현이었고 이미 갈라져 있었다.
 
@@ -1109,6 +1155,82 @@ def test_hint_bar_fits_the_width_it_is_given(data):
                         f"힌트바가 넘친다: {got!r}")
 
 
+def test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80(data):
+    """힌트바가 도움말 문장을 통째로 재사용해 폭 80 에서 `…` 로 잘렸다.
+
+    잘리지 않는 자리에서도 한 줄을 비유가 잡아먹었다 — 가속 정렬에서 화면에
+    늘 떠 있던 문장이 ``… × 100 [%p]. 물리로 a = F/m.`` 이었다. 값을 읽는 데
+    필요한 건 정의와 단위까지고, 비유는 `?` 도움말의 일이다.
+
+    주입: `hint_desc` 가 `HINT_DESC` 를 안 보고 `help_desc` 만 내면(예전 동작)
+    폭 80 에서 잘리는 열이 나와 실패한다.
+    """
+    from kr_quant.tui.flow_app import hint_text
+    from kr_quant.tui.flow_view import (
+        HINT_DESC, NAME_SORT_COL, SORT_COL, hint_desc)
+
+    st = State(data)
+    for width in (80, 90, 100, 132):
+        for drill in (False, True):
+            st.drill = drill
+            n = len(NAME_SORTS) if drill else len(SORTS)
+            for i in range(n):
+                if drill:
+                    st.nsi = i
+                else:
+                    st.si = i
+                line = hint_text(st, width)
+                assert "…" not in line, f"폭{width}·드릴{drill} 힌트바가 잘렸다: {line}"
+
+    # 줄세울 수 있는 열은 **전부** 짧은 설명을 가진다. 없으면 도움말 문장으로
+    # 떨어지는데, 그건 폴백이지 기본값이 아니다.
+    for header in list(SORT_COL.values()) + list(NAME_SORT_COL.values()):
+        assert header in HINT_DESC, f"{header!r} 의 짧은 설명이 없다"
+    # 그래도 폴백은 살아 있어야 한다 — 열이 하나 늘었을 때 빈 줄이 되면 안 된다.
+    assert hint_desc("포텐셜[½kx²]")
+    assert "27개" in hint_desc("섹터"), "짧은 설명이 없는 항목의 폴백이 죽었다"
+
+
+def test_the_long_explanations_stay_in_the_help(data):
+    """짧게 만든 건 힌트바뿐이다 — 비유·유래·한계는 도움말에 그대로 남는다.
+
+    주입: `HELP` 에서 물리 비유를 지우면 실패한다. 힌트바를 짧게 만든 대가로
+    설명을 **잃지는 않았다**는 사실이 이 검사의 내용이다.
+    """
+    from kr_quant.tui.flow_view import HELP, HINT_DESC, help_desc
+
+    assert "물리로 a = F/m" in help_desc(HELP, "가속[%p]")
+    assert "물리로" not in HINT_DESC["가속[%p]"], "비유가 힌트바에 남았다"
+    for header, short in HINT_DESC.items():
+        long = help_desc(HELP, header)
+        if long:        # 표에 없는 열(종목명 등)은 도움말 항목이 없을 수 있다
+            assert len(short) <= len(long), (
+                f"{header!r} 의 힌트바 문장이 도움말보다 길다 — 두 벌로 나눈 뜻이 없다")
+
+
+def test_dates_are_not_painted_as_negative_numbers(data):
+    """헤더의 `2026-07-31 ~ 2026-08-28` 이 음수로 잡혀 하락색으로 칠해졌다.
+
+    값이 아닌 것이 값처럼 보이면 그건 배색 취향 문제가 아니다. 표·패널의
+    진짜 부호는 그대로 칠해져야 하므로 **양쪽을** 본다.
+
+    주입: `_NUM` 앞에 새로 붙인 "숫자·글자 뒤에서는 안 잡는다" 제한을 지우면
+    첫 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_view import (
+        color_spans, detail_lines, header_lines, table_lines)
+
+    st = State(data)
+    for line in header_lines(st, 200):
+        for start, _w, _role in color_spans(line):
+            # 날짜가 있는 줄에서는 아무 것도 안 칠해야 한다(그 줄에 부호값이 없다).
+            assert False, f"헤더에 색을 칠했다: {line[start:start + 12]!r} · {line!r}"
+    # 그리고 진짜 부호는 여전히 칠한다 — 규칙이 넓어져 다 죽으면 안 된다.
+    lines = table_lines(st, 200, 20)[0][1:] + detail_lines(st, 200)
+    roles = {role for ln in lines for _s, _w, role in color_spans(ln)}
+    assert {"up", "down"} <= roles, f"부호색이 통째로 죽었다: {roles}"
+
+
 def test_help_labels_are_never_truncated():
     """회귀 — 도움말 라벨이 잘리면 **어느 열 설명인지 알 수 없다.**
 
@@ -1239,6 +1361,174 @@ def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
     assert span_at([5, 5, 5], 2) == (12, 5)
 
 
+def test_the_panel_marks_the_sector_name_and_the_view_gives_the_coordinates(data):
+    """패널 첫 줄은 줄 전체가 한 색이라 섹터 이름이 부속 정보에 묻혔다.
+
+    그 줄에서 "지금 무엇을 보고 있는가" 를 말하는 건 이름 하나뿐이다. 좌표는
+    **뷰가 낸다** — 앱이 문자열을 다시 뜯어 길이를 추측하면 문구를 고칠 때 색이
+    조용히 어긋난다(`col_span`·`name_sort_span`·`is_section` 과 같은 관용구).
+
+    주입: `detail_title_span` 이 문자 수(`len`)로 폭을 내면 한글 섹터에서
+    칠하는 칸이 절반으로 어긋나 실패한다.
+    """
+    from kr_quant.tui.flow_view import cell_len, detail_lines, detail_title_span
+
+    st = State(data)
+    for row in range(min(5, len(st.rows()))):
+        st.row = row
+        sector = st.rows()[row].get("sector")
+        for width in (40, 80, 120, 200):
+            line = detail_lines(st, width)[0]
+            span = detail_title_span(st, width)
+            assert span, f"폭{width} 에서 강조할 자리를 못 냈다"
+            start, w = span
+            # 칠하는 칸이 **섹터 이름 위**여야 한다 — 한글이 두 칸이라 문자
+            # 인덱스로 세면 절반씩 어긋난다. 표시 칸으로 되짚어 확인한다.
+            cells = []
+            for ch in line:
+                cells.append(ch)
+                cells += [""] * (cell_width(ch) - 1)
+            painted = "".join(cells[start:start + w])
+            assert sector.startswith(painted.rstrip()) and painted.strip(), (
+                f"폭{width}: 칠하는 자리가 이름이 아니다 {painted!r} vs {sector!r}")
+            assert start + w <= width, f"폭{width} 를 넘겨 칠한다: {span}"
+            if width >= cell_len(sector) + 2:
+                assert w == cell_len(sector), f"이름 전체를 안 덮는다: {span}"
+    # 색이 없어도 줄은 그대로다 — 강조는 속성일 뿐 글자를 바꾸지 않는다.
+    assert detail_lines(st, 200)[0].strip().startswith(st.rows()[st.row]["sector"])
+
+
+def test_the_combined_screen_neither_sorts_nor_claims_to(data):
+    """종합에서 `s`·`r` 은 눌리는데 표는 안 바뀌었다 — 그런데 헤더 라벨은 바뀌어서
+    정렬이 된 것처럼 보였다.
+
+    이 저장소가 리포트 쪽에서 CI 로 막아 온 부류다(README §7 D 계층: "파라미터를
+    바꿨는데 계산은 동일"). 화살표를 안 그리기로 한 판단(`header_lines` 주석)을
+    열 이름까지 밀고 간다 — 새 동작을 만드는 게 아니라 이미 내린 판단을 끝까지
+    적용하는 일이다.
+
+    주입: `handle_key` 의 `and st.sortable` 을 지우면 상태가 바뀌어 실패하고,
+    헤더가 `정렬[…]` 을 다시 적으면 마지막 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_app import handle_key, hint_text
+    from kr_quant.tui.flow_view import State, header_lines
+
+    st = State(data)
+    st.wi = WINDOWS.index("종합")
+    if not st.rows():
+        pytest.skip("이 픽스처에 종합 블록이 없다")
+    before = (st.si, st.rev, st.nsi, st.nrev, st.row, st.wi, st.mi, st.ai)
+    order = [r.get("sector") for r in st.rows()]
+    for key in (ord("s"), ord("S"), ord("r")):
+        assert handle_key(st, key) is True
+        assert (st.si, st.rev, st.nsi, st.nrev, st.row, st.wi, st.mi,
+                st.ai) == before, f"{chr(key)!r} 가 종합에서 상태를 바꿨다"
+        assert [r.get("sector") for r in st.rows()] == order
+    # 그리고 화면이 그 사실을 말한다 — 키가 조용히 안 듣기만 하면 그것도 거짓말이다.
+    head = header_lines(st, 200)[1]
+    assert "정렬[" not in head, f"없는 정렬을 헤더가 말한다: {head.strip()!r}"
+    assert "정렬" in head and "없" in head, f"정렬이 없다는 사실이 없다: {head.strip()!r}"
+    assert "정렬" in hint_text(st, 200) and "없다" in hint_text(st, 200)
+
+    # 드릴다운은 **실제로** 정렬한다 — 종합에서 들어가도 그렇다.
+    handle_key(st, ord("l"))
+    assert st.drill and st.sortable
+    codes = [t.get("code") for t in st.names()]
+    handle_key(st, ord("s"))
+    assert st.nsi != 0, "드릴다운에서 s 까지 죽였다"
+    handle_key(st, ord("r"))
+    assert st.nrev, "드릴다운에서 r 까지 죽였다"
+    assert codes, "픽스처에 종목이 없다 — 이 검사가 헛돈다"
+
+
+def test_combined_screen_shows_the_four_actors_and_says_which_window(data):
+    """종합 구간에서만 4주체가 `— · — · — · —` 였다.
+
+    원인은 렌더가 아니라 데이터다 — 종합 블록은 5·20·60·120 을 **G 순위**로
+    섞은 축이라 `inst`·`forgn`·`indiv`·`etc` 가 아예 없다. 이 화면의 견인주는
+    같은 처지에서 이미 **종목에서 대표 창(20일)으로 더해** 답을 만들고 있었다
+    (`_leads`). 4주체도 같은 규칙으로 만든다 — 그리고 **어느 창인지 적는다.**
+
+    주입: `_rows_uncached` 의 종합 갈래에서 `_actor_sums` 를 빼면 대시가 돌아와
+    실패하고, `_actors_line` 의 꼬리표를 지우면 마지막 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_view import ACTORS, State, detail_lines, fmt_amt
+
+    st = State(data)
+    st.wi = WINDOWS.index("종합")
+    if not st.rows():
+        pytest.skip("이 픽스처에 종합 블록이 없다")
+    line = detail_lines(st, 200)[1]
+    assert "—" not in line, f"종합에서 4주체가 아직 대시다: {line.strip()!r}"
+    for _key, ko in ACTORS:
+        assert ko in line, f"{ko} 가 없다: {line.strip()!r}"
+    # 값은 **그 섹터 종목들의 20일 순매수 합**이어야 한다 — 화면이 스스로 지어낸
+    # 숫자면 안 된다. 기대값을 여기서 따로 더해 맞춰 본다.
+    sec = st.rows()[st.row]["sector"]
+    want = {}
+    for _code, nm in data["names"].items():
+        if nm.get("sector") != sec:
+            continue
+        w = (nm.get("win") or {}).get("20") or {}
+        for key, _ko in ACTORS:
+            if w.get(key) is not None:
+                want[key] = want.get(key, 0.0) + w[key]
+    assert want, "픽스처에 그 섹터 종목이 없다 — 이 검사가 헛돈다"
+    for key, ko in ACTORS:
+        assert f"{ko} {fmt_amt(want.get(key))}" in line, (
+            f"{ko} 가 종목 합({want.get(key)})과 다르다: {line.strip()!r}")
+    # 어느 창의 값인지가 화면에 있어야 한다 — 없으면 위 표(종합)와 이 줄(20일)이
+    # 다른 것을 말하는데 화면은 같은 것처럼 보인다.
+    assert "20일" in line, f"대표 창을 안 적었다: {line.strip()!r}"
+
+
+def test_the_drill_title_says_20_days_when_the_window_is_combined(data):
+    """종합에서 Enter 를 누르면 나오는 목록은 **20일** 인데 제목이 `종합일 기준`
+    이라고 적었다 — 화면이 스스로 없는 구간을 말했다.
+
+    주입: 제목을 `f"{st.window}일 기준"` 으로 되돌리면 실패한다.
+    """
+    from kr_quant.tui.flow_view import State, names_lines
+
+    st = State(data)
+    st.wi = WINDOWS.index("종합")
+    if not st.rows():
+        pytest.skip("이 픽스처에 종합 블록이 없다")
+    st.drill = True
+    title = names_lines(st, 200)[0][0]
+    assert "종합일" not in title, f"없는 구간을 말한다: {title.strip()!r}"
+    assert "20일" in title, f"어느 구간인지 안 적었다: {title.strip()!r}"
+
+
+def test_detail_panel_does_not_repeat_what_the_table_already_shows(data):
+    """상세 패널 첫 줄이 표에 있는 값을 한 번 더 적고 있었다.
+
+    ``· 미실현 +2.9%p(포텐셜 60)`` 은 미실현이 **발산 막대**였던 시절 "도형은
+    순서를, 숫자는 크기를" 이라며 붙인 것이다. 막대를 숫자로 되돌리면서
+    (`Col("미실현[%p]", …, _num("x", 1))`) 이쪽을 안 지워 같은 값이 두 자리에
+    남았다. 포텐셜은 x 를 제곱해 **부호를 지운 값**이라 방향이 핵심인 이
+    화면에서 무슨 질문에 답하는지도 불분명하다.
+
+    주입: 첫 줄에 `f" · 미실현 {fmt_pct(x, 1)}%p"` 를 되살리면 실패한다.
+    """
+    from kr_quant.tui.flow_view import detail_lines, table_cols
+
+    st = State(data)
+    # `섹터`·`종목`(수) 는 이 줄이 지고 있는 일 자체다 — 무슨 섹터의 몇 종목인가.
+    headers = {c.header.split("[")[0] for c in table_cols(st, 200)
+               if c.header} - {"섹터", "종목"}
+    assert "미실현" in headers, "표에 미실현 열이 없다 — 이 검사가 헛돈다"
+    for row in range(min(5, len(st.rows()))):
+        st.row = row
+        first = detail_lines(st, 200)[0]
+        for h in headers:
+            assert h not in first, (
+                f"패널 첫 줄이 표의 {h!r} 열을 또 적는다: {first.strip()!r}")
+        assert "포텐셜" not in first, f"부호를 지운 값이 남았다: {first.strip()!r}"
+        # 대신 이 줄이 지고 있는 일 — 무슨 섹터인지·몇 종목인지·어떻게 여는지.
+        assert "Enter" in first and "종목" in first, first
+
+
 def test_detail_panel_answers_who_took_the_other_side(data):
     """회귀 — "기관이 팔았다" 다음 질문은 **"그럼 누가 받았지"** 다.
 
@@ -1252,10 +1542,14 @@ def test_detail_panel_answers_who_took_the_other_side(data):
     raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
     for row in range(min(3, len(st.rows()))):
         st.row = row
-        line = next(ln for ln in detail_lines(st, 170) if "반대편" in ln)
+        line = next(ln for ln in detail_lines(st, 170) if "기타법인" in ln)
+        # 라벨은 없다 — 넷을 다 적는 줄에 "반대편"(선택 주체를 뺀 나머지)이라는
+        # 이름이 붙어 있었다. 들여쓰기는 다른 패널 줄과 같은 한 칸이다.
+        assert "반대편" not in line, f"틀린 라벨이 아직 붙어 있다: {line!r}"
+        assert line.startswith(" ") and not line.startswith("  "), repr(line)
         src = raw[st.rows()[row]["sector"]]
         for key, ko in ACTORS:
-            assert ko in line, f"{ko} 가 반대편 줄에 없다"
+            assert ko in line, f"{ko} 가 4주체 줄에 없다"
             assert fmt_amt(src[key]) in line, (
                 f"{ko} 금액이 원본과 다르다 — 기대 {fmt_amt(src[key])}, 줄: {line!r}")
         # 네 주체가 서로 다른 값이어야 이 검사가 헛돌지 않는다.
@@ -1270,7 +1564,10 @@ def test_detail_panel_answers_who_took_the_other_side(data):
     r = st.rows()[0]
     for width in range(24, 180, 3):
         raw_line = _actors_line(r, width)
-        assert cell_len(raw_line) + 1 <= width or raw_line == " 반대편: —", (
+        assert cell_len(raw_line) + 1 <= width or raw_line == " —", (
             f"폭{width} 에서 {cell_len(raw_line)}칸: {raw_line!r}")
-        if width >= 90:
+        # 폭 80(SSH 기본)에서는 네 주체가 다 들어가야 한다 — 라벨(`반대편: `,
+        # 6칸)이 붙어 있던 시절엔 `기타법인` 이 먼저 잘렸는데, 예시처럼 그
+        # 종목의 주역이 기타법인인 경우가 있어 그게 실질 손실이었다.
+        if width >= 80:
             assert "기타법인" in raw_line, f"폭{width} 인데 주체가 빠졌다"
