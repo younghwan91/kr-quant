@@ -28,10 +28,17 @@ jobs:
 
       - name: 커밋 신원 검사
         env:
-          # 개인 이메일 + GitHub noreply만 허용
+          # 개인 이메일 + GitHub/Anthropic noreply만 허용.
+          #
+          # noreply@github.com 은 **웹에서 PR 을 머지할 때 GitHub 이 찍는
+          # committer** 다. 이게 빠져 있어서 PR 을 머지하는 순간 main 이
+          # 빨개졌다(PR 검사에서는 머지 커밋이 아직 없어 안 걸린다).
+          # 같은 규칙이 scripts/check_guardrails.py 에도 있으니 한쪽만
+          # 고치면 또 갈라진다.
           ALLOWED_EMAILS: |
             chyohw97@gmail.com
             48156556+younghwan91@users.noreply.github.com
+            noreply@github.com
             noreply@anthropic.com
         run: |
           set -euo pipefail

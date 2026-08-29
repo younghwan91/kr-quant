@@ -254,3 +254,51 @@ def test_scan_is_not_silenced_by_an_ancestor_directory_name(lint, tmp_path):
     (root / "pkg").mkdir(parents=True)
     (root / "pkg" / "real.py").write_text("x = 1\n", encoding="utf-8")
     assert [p.name for p in lint._iter_py(root)] == ["real.py"]
+
+
+def test_identity_allows_github_merge_commits_but_not_other_addresses(lint, tmp_path,
+                                                                      monkeypatch):
+    """회귀 — PR 을 웹에서 머지하면 GitHub 이 신원을 자기 주소로 찍는다.
+
+    author 는 계정 프라이버시 주소(`…@users.noreply.github.com`), committer 는
+    `noreply@github.com` 이다. 이걸 안 봐주면 **머지할 때마다 CI 가 빨개진다.**
+
+    반대로 넓게 열면 규칙이 사라진다 — 이 규칙이 막으려는 것은 의도치 않은
+    주소가 공개 이력에 박히는 것이다. 둘 다 검사한다.
+    """
+    import os
+    import subprocess
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def git(*a, env_extra=None):
+        env = {**os.environ, **(env_extra or {})}
+        return subprocess.run(("git", *a), cwd=repo, capture_output=True,
+                              text=True, check=False, env=env)
+
+    git("init", "-q")
+    git("config", "user.name", "T")
+    git("config", "user.email", "me@example.com")
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "ok")
+    monkeypatch.setattr(lint, "REPO", repo)
+    assert lint.check_commit_identity() == []
+
+    # GitHub 웹 머지가 찍는 신원 — 통과해야 한다.
+    (repo / "f.txt").write_text("y", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "Merge pull request #5",
+        env_extra={"GIT_AUTHOR_EMAIL": "48156556+someone@users.noreply.github.com",
+                   "GIT_COMMITTER_EMAIL": "noreply@github.com"})
+    assert lint.check_commit_identity() == [], "GitHub 머지 커밋이 잡혔다"
+
+    # 사내 메일은 **여전히** 잡혀야 한다 — 봐주기가 넓어지지 않았는가.
+    (repo / "f.txt").write_text("z", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "bad",
+        env_extra={"GIT_AUTHOR_EMAIL": "someone@corp.example.com",
+                   "GIT_COMMITTER_EMAIL": "someone@corp.example.com"})
+    out = lint.check_commit_identity()
+    assert out and "corp.example.com" in out[0], f"사내 메일을 못 잡는다: {out}"

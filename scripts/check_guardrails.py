@@ -346,6 +346,22 @@ def check_commit_identity() -> list[str]:
         except Exception:  # noqa: BLE001 — git 이 없거나 저장소가 아니면 검사 생략
             return ""
 
+    def _ok_identity(addr: str, want: str) -> bool:
+        """레포 설정이거나, **GitHub 이 스스로 찍는 주소**면 통과.
+
+        PR 을 웹에서 머지하면 GitHub 이 author 를 계정의 프라이버시 주소
+        (`…@users.noreply.github.com`), committer 를 `noreply@github.com` 으로
+        찍는다. 사람이 신원을 덮어쓴 게 아니라 GitHub 이 만든 커밋이다.
+        이걸 안 봐주면 **PR 을 머지할 때마다 CI 가 빨개진다.**
+
+        허용 범위는 이 둘로 좁힌다 — 이 규칙이 막으려는 것은 의도치 않은
+        주소(특히 사내 메일)가 공개 이력에 박히는 것이고, GitHub noreply 는
+        구성상 그럴 수 없다. 임의 도메인을 열어주면 규칙이 사라진다.
+        """
+        return (addr == want
+                or addr == "noreply@github.com"
+                or addr.endswith("@users.noreply.github.com"))
+
     want = _git("config", "--get", "user.email")
     if not want:
         return []                     # 설정이 없으면 비교할 기준이 없다
@@ -356,7 +372,9 @@ def check_commit_identity() -> list[str]:
         if len(parts) != 3:
             continue
         sha, ae, ce = parts
-        if ae != want or ce != want:
+        if _ok_identity(ae, want) and _ok_identity(ce, want):
+            continue
+        if True:
             bad.append(
                 f"[identity] {sha} — 커밋 신원이 레포 설정과 다르다 "
                 f"(author={ae} committer={ce}, 설정={want}). "
