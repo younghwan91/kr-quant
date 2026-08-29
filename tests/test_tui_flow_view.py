@@ -825,9 +825,9 @@ def test_spark_and_bar_glyphs_are_never_ambiguous_width():
     """
     import unicodedata
 
-    from kr_quant.tui.flow_view import SPARK
+    from kr_quant.tui.flow_view import SPARK, SPARK_EMPTY
 
-    for ch in SPARK.values():
+    for ch in list(SPARK) + [SPARK_EMPTY]:
         eaw = unicodedata.east_asian_width(ch)
         assert eaw not in ("A", "W", "F"), f"{ch!r} 의 폭이 {eaw} 다"
         assert cell_width(ch) == 1
@@ -836,14 +836,26 @@ def test_spark_and_bar_glyphs_are_never_ambiguous_width():
 def test_spark_is_exactly_its_column_width_and_recent_is_rightmost():
     from kr_quant.tui.flow_view import spark
 
+    from kr_quant.tui.flow_view import SPARK, SPARK_EMPTY
+
     assert _w(spark([1, 2, 3, 4, 5, 6, 7, 8])) == 8
     assert _w(spark([1, 2, 3])) == 8              # 조각이 적어도 폭은 같다
-    # 조각이 모자라면 **왼쪽**이 빈다 — 오른쪽 끝이 최근이라는 약속.
-    assert spark([1, 2, 3]).startswith("     ")
-    # 부호가 도형에 실린다
-    up, down = spark([5, 5, 5, 5, 5, 5, 5, 5]), spark([-5] * 8)
-    assert up != down
-    assert _w(spark([])) == 1                     # 값이 없으면 '—'
+    # 조각이 모자라면 **왼쪽**이 빈다 — 오른쪽 끝이 구간 끝이라는 약속.
+    assert spark([1, 2, 3]).startswith(SPARK_EMPTY * 5)
+    # 빈 자리와 값 0 은 다른 글자다 — 예전엔 둘 다 빈칸이라 구분이 안 됐다.
+    assert SPARK_EMPTY not in spark([0] * 8)
+
+    # 누적이 오르면 오른쪽이 높고, 내리면 오른쪽이 낮다 — 기울기가 곧 답이다.
+    up, down = spark([5] * 8), spark([-5] * 8)
+    assert SPARK.index(up[-1]) > SPARK.index(up[0]), f"유입인데 안 오른다: {up}"
+    assert SPARK.index(down[-1]) < SPARK.index(down[0]), f"유출인데 안 내린다: {down}"
+
+    # 같은 임펄스라도 **언제** 들어왔는지가 모양으로 갈린다.
+    early, late = spark([4, 4, 0, 0, 0, 0, 0, 0]), spark([0, 0, 0, 0, 0, 0, 4, 4])
+    assert early != late, "앞에서 들어온 것과 지금 들어오는 것이 같아 보인다"
+    assert sum(SPARK.index(c) for c in early) > sum(SPARK.index(c) for c in late)
+
+    assert _w(spark([])) == 8                     # 값이 없어도 폭은 같다
 
 
 def test_year_percentile_and_spark_follow_the_selected_actor(data):
