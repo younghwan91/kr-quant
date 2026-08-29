@@ -339,6 +339,59 @@ def test_help_lines_fit_width_and_scroll():
         assert all(_w(x) == width for x in tail)
 
 
+def test_help_body_is_not_truncated_at_the_default_ssh_width():
+    """회귀 — 도움말 5줄이 폭 80 에서 잘려 있었다.
+
+    도움말은 **읽으러 연 화면**이다. 거기서 설명이 문장 중간에 끊기면
+    (`…분포에서 몇 등인` · `…0 으로 준` 처럼) 고칠 곳이 화면에 안 보인다.
+
+    ⚠️ 이 부류를 `help_lines` 의 출력으로는 못 잡는다 — `pad` 가 넘치면 자르고
+    모자라면 채워서 **모든 줄이 정확히 width 칸**이 되기 때문이다. 옆에 있는
+    `test_help_lines_fit_width_and_scroll` 이 `_w(line) == width` 를 보는데,
+    그건 `pad` 가 일을 했다는 뜻일 뿐 글이 온전하다는 뜻이 아니다. 그래서
+    여기서는 **자르기 전 원문**을 렌더와 같은 방식으로 조립해 잰다.
+    """
+    from kr_quant.tui.flow_view import HELP
+
+    over = []
+    for name, desc in HELP:
+        body = desc.replace("**", "")           # 렌더가 떼는 강조 표기
+        raw = (pad(name, 10, right=True) + "  " + body) if name else ("   " + body)
+        if _w(raw) > 80:
+            over.append((_w(raw), raw))
+    assert not over, "폭 80 에서 잘리는 도움말 줄: " + repr(over)
+
+
+def test_width_tiers_all_go_through_one_helper():
+    """회귀 — 폭 단계 고르기가 네 벌 각자 구현이었고 이미 갈라져 있었다.
+
+    푸터는 못 맞으면 마지막 단계로 내려갔는데 도움말 제목은 `next()` 를 기본값
+    없이 써서 **폭 6 이하에서 StopIteration 으로 TUI 를 통째로 죽였다.**
+    """
+    from kr_quant.tui.flow_app import HINT_COMBINED_TIERS
+    from kr_quant.tui.flow_view import (
+        FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP_TITLE_TIERS, footer_line,
+        help_lines, tier_for,
+    )
+    from kr_quant.tui.ledger_view import BANNER_TIERS, TIMELINE_NOTE_TIERS, banner_for
+
+    tiers = (FOOTER_TIERS, FOOTER_DRILL_TIERS, HELP_TITLE_TIERS,
+             HINT_COMBINED_TIERS, BANNER_TIERS, TIMELINE_NOTE_TIERS)
+    for ts in tiers:
+        # 넓은 것부터여야 `tier_for` 가 "가장 자세한 것" 을 고른다.
+        assert [_w(t) for t in ts] == sorted((_w(t) for t in ts), reverse=True), ts
+        # 하나도 안 맞으면 마지막(가장 짧은 것). 예외로 죽지 않는다.
+        assert tier_for(ts, 0) == ts[-1]
+        for width in range(1, 200):
+            assert _w(tier_for(ts, width)) <= max(width, _w(ts[-1]))
+
+    # 폭이 아무리 좁아도 죽지 않는다 — 예전엔 폭 1·5·6 이 StopIteration 이었다.
+    for width in (1, 5, 6, 7, 40, 200):
+        help_lines(width, 0, 5)
+        footer_line(width)
+        banner_for(width)
+
+
 def test_table_and_detail_show_the_same_top_names(data):
     """회귀 — 표의 '순매수 상위' 열과 하단 패널이 같은 목록이어야 한다.
 
@@ -1036,15 +1089,28 @@ def test_hint_bar_fits_the_width_it_is_given(data):
     만들어 놓고 정작 새로 만든 힌트바에는 안 쓴 셈이었다.
 
     그 검사는 늘 기본값 width=200 으로만 불러서 좁은 폭을 한 번도 안 봤다.
+
+    그리고 이 검사도 같은 구멍이 있었다 — `st.wi` 를 한 번도 안 바꿔서 **종합
+    화면 분기를 한 번도 안 지났고**(그 분기는 폭을 아예 안 보는 고정 문구였다),
+    폭도 30 부터라 `room > 4` 가 자르기를 통째로 건너뛰는 구간을 못 봤다.
+    실측으로 폭 20~27 에서 88칸짜리 줄이, 폭 20~69 에서 70칸짜리 종합 문구가
+    그대로 나갔다. 이제 **모든 구간 × 모든 정렬 × 드릴다운 × 폭 20~200** 을 본다.
     """
     from kr_quant.tui.flow_app import hint_text
 
     st = State(data)
-    for width in range(30, 160, 5):
-        for si in range(len(SORTS)):
-            st.si = si
+    for width in range(20, 201):
+        for wi in range(len(WINDOWS)):
+            st.wi = wi
             for drill in (False, True):
                 st.drill = drill
-                got = hint_text(st, width)
-                assert sum(cell_width(c) for c in got) <= width, (
-                    f"폭{width}·정렬{si}·드릴{drill} 에서 힌트바가 넘친다: {got!r}")
+                n = len(NAME_SORTS) if drill else len(SORTS)
+                for i in range(n):
+                    if drill:
+                        st.nsi = i
+                    else:
+                        st.si = i
+                    got = hint_text(st, width)
+                    assert sum(cell_width(c) for c in got) <= width, (
+                        f"폭{width}·구간{WINDOWS[wi]}·정렬{i}·드릴{drill} 에서 "
+                        f"힌트바가 넘친다: {got!r}")
