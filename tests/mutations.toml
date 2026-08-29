@@ -270,10 +270,12 @@ id = "ledger-hint-line-missing"
 why = "힌트 줄이 빠지면 상태줄이 그 자리로 올라와 같은 내용이 두 줄에 찍힌다"
 guards = ["tests/test_tui_ledger_view.py::test_hint_bar_is_on_every_screen_and_fits_the_width"]
 file = "src/kr_quant/tui/ledger_view.py"
-find = """    out = body + [pad(hint_text(mo, width), width), status_line(mo, width),
-                  banner_footer(width)]"""
-replace = """    out = body + [status_line(mo, width), status_line(mo, width),
-                  banner_footer(width)]"""
+find = """    out = (body + [pad("", width)] * gap
+           + [pad(hint_text(mo, width), width), status_line(mo, width),
+              banner_footer(width)])"""
+replace = """    out = (body + [pad("", width)] * gap
+           + [status_line(mo, width), status_line(mo, width),
+              banner_footer(width)])"""
 
 [[mutation]]
 id = "ledger-help-scrolls-past-the-end"
@@ -415,8 +417,7 @@ why = """`s 정렬` 은 동시성 화면에서 아무 일도 하지 않는데(�
 아무 일도 안 일어나는 것을 자기 탓으로 돌린다."""
 guards = ["tests/test_tui_ledger_view.py::test_comove_header_does_not_advertise_a_sort_that_does_nothing"]
 file = "src/kr_quant/tui/ledger_view.py"
-find = """    order = (\"순서[평균상관]\" if mo.view == \"comove\"
-             else f\"정렬[{SORTS[mo.si][1]}]\")"""
+find = "    order = (f\"정렬[{SORTS[mo.si][1]}]\" if mo.sortable else \"순서[평균상관]\")"
 replace = "    order = f\"정렬[{SORTS[mo.si][1]}]\""
 
 [[mutation]]
@@ -559,12 +560,12 @@ why = """`status_line` 이 한계 화면에서도 `selected()`→`rows()` 를 �
 나서 `if view == \"limits\"` 로 되돌아간다. 매 프레임 안 쓸 표를 만든다."""
 guards = ["tests/test_tui_ledger_view.py::test_screens_do_not_compute_what_they_throw_away"]
 file = "src/kr_quant/tui/ledger_view.py"
-find = """    if mo.view == "limits":
-        return pad(" " + banner_for(width), width)
+find = """    if not mo.has_cursor:
+        return pad("", width)
     r = mo.selected()
     if not r:"""
 replace = """    r = mo.selected()
-    if mo.view == "limits" or not r:"""
+    if not mo.has_cursor or not r:"""
 
 [[mutation]]
 id = "ledger-comove-computes-a-matrix-it-discards"
@@ -601,3 +602,147 @@ guards = ["tests/test_tui_ledger_view.py::test_signed_bar_points_the_right_way"]
 file = "src/kr_quant/tui/ledger_view.py"
 find = 'BLOCK_FULL, BLOCK_L, BLOCK_R = "⣿", "⡇", "⢸"'
 replace = 'BLOCK_FULL, BLOCK_L, BLOCK_R = "⣿", "⡇", "⡇"'
+
+# ----------------------------------------------------------------- 원장 패리티
+# `kq-flow` 에서 고친 부류를 원장에서 다시 본 검사들. 변이는 **고치기 전 코드**를
+# 되살린다 — 즉 여기 적힌 replace 는 전부 "예전에 실제로 그랬던 것" 이다.
+
+[[mutation]]
+id = "ledger-footer-writes-both-cases-again"
+why = """푸터가 한 키의 두 방향을 다 적어 길어지면 정작 무슨 키가 있는지가 안
+읽힌다. 대문자 역방향은 도움말이 지고 푸터는 소문자 한 벌만 적는다."""
+guards = ["tests/test_tui_ledger_view.py::test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    \" v:화면 w:구간 m:시장 a:주체 s:정렬 d:β제거 ↑↓:섹터\"
+    \" Home:처음 ?:도움말 q:종료\","""
+replace = """    \" v/V:화면 w/W:구간 m/M:시장 a/A:주체 s/S:정렬 d:β제거 ↑↓:섹터\"
+    \" Home:처음 ?:도움말 q:종료\","""
+
+[[mutation]]
+id = "ledger-hint-borrows-the-help-sentence"
+why = """힌트바가 도움말의 긴 문장을 그대로 쓰면 폭 80·120 에서 뒤가 `…` 로
+잘린다. 잘린 설명은 설명이 아니다."""
+guards = ["tests/test_tui_ledger_view.py::test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    return LEDGER_HINT_DESC.get(header) or help_desc(LEDGER_HELP, header)"
+replace = "    return help_desc(LEDGER_HELP, header)"
+
+[[mutation]]
+id = "ledger-status-repeats-the-table"
+why = """상태줄이 표에 이미 있는 4주체 금액을 한 번 더 적는다. 폭만 먹고, 하필
+뒤에 붙던 것(표에 없는 값)이 먼저 잘려 나간다."""
+guards = ["tests/test_tui_ledger_view.py::test_status_line_does_not_repeat_what_the_table_already_shows"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    parts += [f\"{ko} {fmt_amt(r[k])}\" for k, ko in ACTORS
+              if f\"{ko}[억]\" not in shown]"""
+replace = """    parts += [f\"{ko} {fmt_amt(r[k])}\" for k, ko in ACTORS]"""
+
+[[mutation]]
+id = "ledger-title-span-counts-characters-not-cells"
+why = """강조 구간을 문자 수로 재면 한글 섹터에서 칠하는 칸이 절반으로 어긋난다 —
+이 저장소가 표 헤더·히트맵에서 이미 두 번 밟은 자리다."""
+guards = ["tests/test_tui_ledger_view.py::test_status_line_marks_the_sector_name_and_the_view_gives_the_coordinates"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    w = min(cell_len(r[\"sector\"]), max(width - start, 0))"
+replace = "    w = min(len(r[\"sector\"]), max(width - start, 0))"
+
+[[mutation]]
+id = "ledger-status-names-a-row-that-is-not-on-screen"
+why = """동시성·한계에는 커서가 없는데 상태줄이 `rows()[row]` 의 섹터를 이름까지
+댔다. 화면이 없는 선택을 보고한다 — 그 화면의 행 순서는 평균상관이라 `row` 번째
+행조차 아니다."""
+guards = ["tests/test_tui_ledger_view.py::test_the_status_line_does_not_name_a_row_the_screen_does_not_have"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "        return self.view in (\"ledger\", \"timeline\")"
+replace = "        return True"
+
+[[mutation]]
+id = "ledger-comove-sort-key-still-turns"
+why = """동시성에서 `s` 가 `si` 를 돌린다. 그 화면은 안 바뀌는데 돌아오면 정렬이
+바뀌어 있다 — 누른 사람은 방금 여기서 무슨 일이 일어났다고 믿는다."""
+guards = ["tests/test_tui_ledger_view.py::test_the_comove_screen_neither_sorts_nor_claims_to"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = "    elif ch in (ord(\"s\"), ord(\"S\")) and mo.sortable:"
+replace = "    elif ch in (ord(\"s\"), ord(\"S\")):"
+
+[[mutation]]
+id = "ledger-table-touches-the-bottom-lines"
+why = """표 마지막 행이 힌트바에 딱 붙어 어디까지가 표인지 눈이 못 끊는다."""
+guards = ["tests/test_tui_ledger_view.py::test_the_table_is_set_off_from_the_bottom_lines_by_a_blank_line"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    return BOTTOM_GAP if height - 3 - BOTTOM_GAP >= GAP_MIN_BODY else 0"
+replace = "    return 0"
+
+[[mutation]]
+id = "ledger-keeps-the-header-until-no-row-is-left"
+why = """낮은 창에서 헤더 두 줄을 끝까지 지키면 표가 한 행도 안 남는다 — 무엇을
+보는지는 적혀 있는데 볼 것이 없다."""
+guards = ["tests/test_tui_ledger_view.py::test_a_short_screen_gives_up_the_header_before_the_last_row"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "        while head_lines and body_h - len(head_lines) - nh < 1:"
+replace = "        while False and head_lines and body_h - len(head_lines) - nh < 1:"
+
+[[mutation]]
+id = "ledger-scans-signs-with-its-own-second-copy"
+why = """원장이 "이 줄에서 어디가 부호값인가" 를 따로 한 벌 갖고 있으면 `kq-flow`
+가 고친 날짜 회귀(`2026-04-07` 의 `-04-07` 을 음수로 칠함)가 여기만 살아남는다."""
+guards = ["tests/test_tui_ledger_app.py::test_dates_in_the_body_are_not_painted_as_negative_numbers"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = "    for start, width, role in color_spans(line):"
+replace = """    import re as _re
+
+    from kr_quant.tui.flow_view import cell_width as _cw
+    for _m in _re.finditer(r\"[+-][\\d,]+(?:\\.\\d+)?\", line):
+        start = sum(_cw(c) for c in line[:_m.start()])
+        width = sum(_cw(c) for c in _m.group())
+        role = \"up\" if _m.group()[0] == \"+\" else \"down\""""
+
+[[mutation]]
+id = "ledger-ignores-no-color"
+why = """NO_COLOR 표준을 원장만 안 보면 리다이렉트·로그 캡처에 색이 그대로 나간다.
+같은 제품인데 한쪽만 지키는 규율은 규율이 아니다."""
+guards = ["tests/test_tui_ledger_app.py::test_no_color_env_turns_the_colours_off"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = """    if os.environ.get(\"NO_COLOR\"):
+        return 0
+"""
+replace = ""
+
+[[mutation]]
+id = "ledger-reads-bytes-so-hangul-keys-die"
+why = """`getch` 는 자모를 세 바이트로 쪼개 준다 — `ord(\"v\")` 와 비교하는 구조로는
+한영을 켜 둔 채로 키가 하나도 안 듣는다."""
+guards = ["tests/test_tui_ledger_app.py::test_hangul_jamo_keys_do_what_their_latin_twins_do"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = """    if isinstance(ch, str) and len(ch) == 1:
+        return LEDGER_JAMO_KEY(ch)
+    return normalize_key(ch)"""
+replace = """    return ch if isinstance(ch, int) else -1"""
+
+[[mutation]]
+id = "ledger-rewrites-the-shared-jamo-table"
+why = """자모 표를 두 앱이 각자 가지면 한쪽만 늘어난다. 원장은 공용 표에 자기 키
+(`v`·`d`)를 **더할** 뿐이다."""
+guards = ["tests/test_tui_ledger_app.py::test_hangul_jamo_keys_do_what_their_latin_twins_do"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = """LEDGER_JAMO = dict(JAMO_TO_ASCII,
+                   **{\"ㅍ\": \"v\", \"ㅇ\": \"d\", \"\\u1111\": \"v\", \"\\u110b\": \"d\"})"""
+replace = """LEDGER_JAMO = {\"ㅍ\": \"v\", \"ㅇ\": \"d\"}"""
+
+[[mutation]]
+id = "ledger-panel-title-is-not-marked"
+why = """상태줄이 줄 전체 한 색이면 "지금 무엇을 보고 있는가" 를 말하는 유일한
+조각(섹터 이름)이 부속 정보에 묻힌다."""
+guards = ["tests/test_tui_ledger_app.py::test_the_app_paints_the_sector_name_using_the_coordinates_the_view_gives"]
+file = "src/kr_quant/tui/ledger_app.py"
+find = """    _hl_span(scr, s[\"status_y\"], status_title_span(mo, w),"""
+replace = """    _hl_span(scr, s[\"status_y\"], None,"""
+
+[[mutation]]
+id = "ledger-help-reports-a-stale-neighbour"
+why = """도움말이 "한계 화면 7번은 아직 옛 문장이다" 라고 적는데 그 화면은 이미
+같은 실측치로 고쳐져 있다 — 화면이 옆 화면의 상태를 잘못 보고한다."""
+guards = ["tests/test_tui_ledger_view.py::test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    (\"\", \"  빠진 **금액**은 거래소가 4배다. v 로 한계 화면 7번에 더 적었다.\"),"
+replace = "    (\"\", \"  빠진 **금액**은 거래소가 4배다. 한계 화면 7번은 아직 옛 문장이다.\"),"

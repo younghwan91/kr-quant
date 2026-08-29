@@ -437,9 +437,12 @@ def test_banner_is_on_screen_not_in_a_footnote(data):
     body = screen(mo, 100, 40)["lines"]
     assert any("돈에 꼬리표가 없다" in line for line in body)
     assert any("주변합" in line for line in LIMITS)
-    # 원장 화면의 상태줄은 커서가 놓인 칸의 전체 수치를 보여준다(툴팁의 등가물).
+    # 원장 화면의 상태줄은 커서가 놓인 행에서 **표를 봐도 알 수 없는 것**을
+    # 보여준다(툴팁의 등가물). 잔여·4주체는 바로 위 표에 열로 있으므로 여기서
+    # 뺐다 — 그 규칙은 `test_status_line_does_not_repeat_what_the_table_already_shows`
+    # 가 양방향으로 본다.
     mo.vi = 0
-    assert "잔여" in status_line(mo, 200)
+    assert "균등" in status_line(mo, 200)
 
 
 def test_limits_screen_names_both_refusals(data):
@@ -740,7 +743,10 @@ def test_hint_bar_names_the_column_you_sorted_by(data):
     # 설명이 있어야 힌트다 — 열 이름만 되풀이하면 아무 도움이 안 된다.
     mo.si = [k for k, _ in SORTS].index("spike")
     line = hint_text(mo, 200)
-    assert "최대일몫[%]" in line and "하루가 차지한 몫" in line, line
+    # 문장을 여기 박으면 힌트바 전용 짧은 설명(`LEDGER_HINT_DESC`)을 고칠 때마다
+    # 무관한 이유로 깨진다. 열 이름과 **그 열의 설명**이 같이 있는지만 본다.
+    from kr_quant.tui.ledger_view import hint_desc
+    assert "최대일몫[%]" in line and hint_desc("최대일몫[%]")[:14] in line, line
     # 주체를 바꾸면 그 주체의 열을 가리킨다.
     mo.si = [k for k, _ in SORTS].index("actor")
     mo.ai = 1
@@ -1357,7 +1363,9 @@ def test_screens_do_not_compute_what_they_throw_away(data):
     mo = Model(data)
     mo.vi = [v for v, _ in VIEWS].index("limits")
     mo.rows = lambda: (_ for _ in ()).throw(AssertionError("한계 화면이 표를 만들었다"))
-    assert "미관측" in status_line(mo, 120)
+    # 커서가 없는 화면의 상태줄은 비어 있다(배너는 바로 아래 줄에 있다) — 여기서
+    # 보는 것은 **그 줄을 만들면서 표를 안 만든다**는 것이다.
+    assert status_line(mo, 120).strip() == ""
 
     mo2 = Model(data)
     mo2.vi = [v for v, _ in VIEWS].index("comove")
@@ -1366,3 +1374,308 @@ def test_screens_do_not_compute_what_they_throw_away(data):
         AssertionError("짧은 구간에서 27×27 을 만들었다"))
     lines, marks, _h = comove_lines(mo2, 120)
     assert marks == [] and "상관을 내지 않는다" in lines[0]
+
+
+# --------------------------------------------- 6. kq-flow 와 같은 규율(패리티)
+#
+# 아래 검사들은 `kq-flow` 에서 고친 **부류**를 원장에서 다시 본다. 두 앱은 같은
+# 제품이고 같은 손이 쓴다 — 한쪽에서만 고친 규율은 다른 쪽에서 조용히 살아난다.
+
+def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
+    """푸터가 ``v/V w/W m/M a/A s/S`` 로 한 키의 두 방향을 다 적어, 정작 무슨 키가
+    있는지가 안 읽혔다. 병기를 걷되 **키는 하나도 안 건드린다** — 대문자 역방향은
+    도움말이 그대로 진다.
+
+    주입: 푸터 단계에 ``w/W`` 를 되살리면 앞 절반이, 도움말에서 "역방향" 을 빼면
+    뒷 절반이 실패한다.
+    """
+    from kr_quant.tui.ledger_view import FOOTER_TIERS, LEDGER_HELP, help_desc
+
+    for t in FOOTER_TIERS:
+        for pair in ("v/V", "w/W", "m/M", "a/A", "s/S"):
+            assert pair not in t, f"푸터에 대문자 병기가 남았다: {t}"
+    for name in ("v V", "w W", "m M", "a A", "s S"):
+        assert "역방향" in help_desc(LEDGER_HELP, name), \
+            f"도움말이 {name} 의 역방향을 안 적는다"
+    # 가장 넓은 단계는 여전히 모든 글자 키를 적는다 — 줄인 것은 병기지 기능이 아니다.
+    for k in "vwmasd":
+        assert f" {k}:" in FOOTER_TIERS[0], f"{k} 가 푸터에서 사라졌다"
+
+
+def test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80(data):
+    """힌트바가 도움말 문장을 통째로 빌려 써서 폭 80·120 에서 `…` 로 잘렸다.
+
+    실측(폭 120): ``정렬 절대크기▼ · 정렬 전용 값 — Σ|4주체|. 열로는 안 보인다.
+    부호를 지우고 더하므로`` — 뒤가 잘린 설명은 설명이 아니다.
+
+    주입: `hint_desc` 가 `LEDGER_HINT_DESC` 를 안 보고 `help_desc` 만 내면(예전
+    동작) 폭 80 에서 잘리는 정렬이 나와 실패한다.
+    """
+    from kr_quant.tui.ledger_view import (
+        LEDGER_HINT_DESC, _SORT_HELP, hint_desc, hint_text)
+
+    mo = Model(data)
+    for width in (80, 100, 120, 200):
+        for vi in range(len(VIEWS)):
+            mo.vi = vi
+            for si in range(len(SORTS)):
+                mo.si = si
+                for ai in range(len(ACTORS)):
+                    mo.ai = ai
+                    line = hint_text(mo, width)
+                    assert "…" not in line, f"폭{width} 힌트바가 잘렸다: {line!r}"
+    # 줄세울 수 있는 것은 **전부** 짧은 설명을 가진다. 주체 열 넷도 포함이다
+    # (`s` 가 `선택주체` 면 힌트가 가리키는 헤더가 `a` 따라 바뀐다).
+    for header in list(_SORT_HELP.values()) + [f"{ko}[억]" for _k, ko in ACTORS]:
+        assert header in LEDGER_HINT_DESC, f"{header!r} 의 짧은 설명이 없다"
+    # 폴백은 살아 있어야 한다 — 열이 하나 늘었을 때 힌트바가 **비는** 것이
+    # 잘리는 것보다 나쁘다.
+    assert "누적" in hint_desc("누적[억]"), "짧은 설명이 없는 항목의 폴백이 죽었다"
+
+
+def test_the_long_explanations_stay_in_the_help():
+    """짧게 만든 건 힌트바뿐이다 — 유래·경고·실측치는 도움말에 그대로 남는다.
+
+    주입: `LEDGER_HELP` 의 `최대일몫[%]` 설명을 힌트바 문장으로 갈아치우면 실패한다.
+    """
+    from kr_quant.tui.ledger_view import LEDGER_HELP, LEDGER_HINT_DESC
+
+    said = " ".join(d for _n, d in LEDGER_HELP)
+    assert "블록딜" in said, "도움말에서 실측·유래가 사라졌다"
+    assert "블록딜" not in LEDGER_HINT_DESC["최대일몫[%]"], "유래가 힌트바에 남았다"
+    def _full(name: str) -> str:
+        """도움말 한 항목의 **전문** — 이어쓰기 줄까지. `help_desc` 는 첫 줄만 준다."""
+        out, on = [], False
+        for n, d in LEDGER_HELP:
+            if n == name:
+                on, out = True, [d]
+            elif on and not n:
+                out.append(d)
+            elif on:
+                break
+        return " ".join(out).replace("**", "")
+
+    for header, short in LEDGER_HINT_DESC.items():
+        long = _full(header)
+        # 도움말이 **앞 항목으로 미루는** 항목(`같은 계산.`)은 뺀다 — 힌트바는 홀로
+        # 뜨는 한 줄이라 미룰 앞이 없어서, 짧게 쓰고도 길어질 수 있다.
+        if long and "같은 계산" not in long:
+            assert len(short) <= len(long), (
+                f"{header!r} 의 힌트바 문장이 도움말보다 길다 — 두 벌로 나눈 뜻이 없다")
+
+
+def test_status_line_does_not_repeat_what_the_table_already_shows(data):
+    """상태줄이 **바로 위 표에 있는 값**을 한 번 더 적었다 — 4주체 금액·잔여·종목수.
+
+    상태줄의 자리값은 "표를 봐도 알 수 없는 것"(균등 앵커·고른 주체)이다. 표에
+    이미 있는 값을 다시 적으면 폭만 먹고, 하필 그 뒤에 붙던 것이 잘려 나갔다.
+
+    판정은 **지금 그려지는 열**로 한다 — 전개 화면에는 4주체 열이 없으므로
+    거기서는 상태줄이 유일한 자리다. 폭이 좁아 표를 아예 안 그릴 때도 마찬가지다.
+
+    주입: 상태줄이 늘 4주체를 붙이게 되돌리면 첫 단언이, 전개에서 빼면 둘째가
+    실패한다.
+    """
+    from kr_quant.tui.ledger_view import visible_columns
+
+    mo = Model(data)
+    seen_dropped = False
+    for width in (80, 100, 132, 200):
+        line = status_line(mo, width)
+        cols = visible_columns(mo, width)
+        assert "잔여[억]" in cols, f"폭{width} 원장에 잔여 열이 없다 — 전제가 틀렸다"
+        # 규칙은 양방향이다: 표에 있으면 상태줄에 없고, 표에서 떨어졌으면 있다.
+        for _k, ko in ACTORS:
+            assert (f"{ko} " in line) == (f"{ko}[억]" not in cols), \
+                f"폭{width}: {ko} · 표={f'{ko}[억]' in cols} 줄={line!r}"
+        assert ("잔여 " in line) == ("잔여[억]" not in cols), line
+        # 잔여몫은 **따로** 판정한다 — 폭이 좁으면 그 열만 먼저 떨어진다.
+        assert ("잔여몫" in line or "일별" in line) == ("잔여몫[%]" not in cols), \
+            f"폭{width}: 잔여몫 · 표={'잔여몫[%]' in cols} 줄={line!r}"
+        assert ("종목 " in line) == ("종목[수]" not in cols), \
+            f"폭{width}: 종목 · 표={'종목[수]' in cols} 줄={line!r}"
+        seen_dropped = seen_dropped or "종목[수]" not in cols
+    assert seen_dropped, "어느 폭에서도 열이 안 떨어졌다 — 양방향 검사가 반쪽이다"
+    # 전개 화면에는 그 열들이 **없다** — 거기서는 상태줄이 유일한 자리다.
+    mo.vi = [v for v, _ in VIEWS].index("timeline")
+    line = status_line(mo, 200)
+    for _k, ko in ACTORS:
+        assert f"{ko} " in line, f"전개에서 {ko} 까지 지웠다: {line!r}"
+    assert "잔여" in line
+    # 폭이 좁아 표를 못 그리는 원장에서도 마찬가지다.
+    mo.vi = 0
+    narrow = status_line(mo, LEDGER_MIN_W - 1)
+    assert "잔여 " in narrow, f"표를 안 그리는데 상태줄까지 비었다: {narrow!r}"
+
+
+def test_status_line_marks_the_sector_name_and_the_view_gives_the_coordinates(data):
+    """상태줄이 줄 전체 한 색이라, "지금 무엇을 보고 있는가" 를 말하는 유일한
+    조각(섹터 이름)이 부속 정보에 묻혔다.
+
+    좌표는 **뷰가 낸다** — 앱이 문자열을 다시 뜯어 이름 길이를 추측하면 문구를
+    고칠 때 색이 조용히 어긋난다(`kq-flow` 의 `detail_title_span` 과 같은 관용구).
+
+    주입: `status_title_span` 이 문자 수(`len`)로 폭을 내면 한글 섹터에서 칠하는
+    칸이 절반으로 어긋나 실패한다.
+    """
+    from kr_quant.tui.ledger_view import status_title_span
+
+    def cell_width_sum(t: str) -> int:
+        return sum(cell_width(c) for c in t)
+
+    mo = Model(data)
+    for row in range(min(3, len(mo.rows()))):
+        mo.row = row
+        sector = mo.rows()[row]["sector"]
+        for width in (60, 80, 120, 200):
+            line = status_line(mo, width)
+            span = status_title_span(mo, width)
+            assert span, f"폭{width} 에서 강조할 자리를 못 냈다"
+            start, w = span
+            cells = []
+            for ch in line:
+                cells.append(ch)
+                cells += [""] * (cell_width(ch) - 1)
+            painted = "".join(cells[start:start + w])
+            assert sector.startswith(painted.rstrip()) and painted.strip(), (
+                f"폭{width}: 칠하는 자리가 이름이 아니다 {painted!r} vs {sector!r}")
+            assert start + w <= width
+            if width >= cell_width_sum(sector) + 2:
+                assert w == cell_width_sum(sector), \
+                    f"폭{width}: 이름 전체를 안 덮는다 {span} vs {sector!r}"
+    # 커서가 없는 화면(동시성·한계)에는 세울 이름이 없다.
+    for v in ("comove", "limits"):
+        mo.vi = [x for x, _ in VIEWS].index(v)
+        assert status_title_span(mo, 200) is None, f"{v} 에 없는 커서를 세운다"
+
+
+def test_the_status_line_does_not_name_a_row_the_screen_does_not_have(data):
+    """동시성 화면에는 **커서가 없다**(`screen()` 이 cursor=None 을 낸다). 그런데
+    상태줄은 `rows()[row]` 의 섹터를 이름까지 대며 적고 있었다 — 그 화면의 행
+    순서는 평균상관이라 `row` 번째 행조차 아니다. 화면이 없는 선택을 보고했다.
+
+    판정은 한 곳(`Model.has_cursor`)에서만 한다 — 커서를 그리는 쪽과 상태줄이
+    다른 답을 내면 그 순간 다시 거짓말이 된다.
+
+    주입: `status_line` 에서 `has_cursor` 검사를 빼면 첫 단언이, `screen()` 이
+    커서를 도로 내면 둘째가 실패한다.
+    """
+    mo = Model(data)
+    mo.vi = [v for v, _ in VIEWS].index("comove")
+    for row in (0, 1, 2):
+        mo.row = row
+        line = status_line(mo, 200)
+        assert not any(r["sector"] in line for r in mo.rows()), \
+            f"동시성 상태줄이 없는 선택을 적는다: {line!r}"
+        # 그 자리는 **비운다** — 배너를 넣던 시절엔 같은 문장이 인접한 두 줄에
+        # 두 번 찍혔다(상태줄과 마지막 줄).
+        assert line.strip() == "", f"없는 선택 대신 무언가를 적는다: {line!r}"
+    s = screen(mo, 120, 24)
+    assert "미관측" in s["lines"][s["banner_y"]], "배너까지 없앴다"
+    assert s["lines"][s["status_y"]].strip() == ""
+    assert mo.has_cursor is False
+    assert screen(mo, 120, 24)["cursor"] is None
+    mo.vi = 0
+    assert mo.has_cursor is True and screen(mo, 120, 24)["cursor"] is not None
+
+
+def test_the_comove_screen_neither_sorts_nor_claims_to(data):
+    """동시성에서 `s` 는 눌리기는 해서 `si` 가 돌았다 — 표는 그대로인데 다른
+    화면으로 돌아가면 정렬이 바뀌어 있었다. 판정을 `Model.sortable` 한 곳에 두고
+    키를 무시한다. 헤더는 이미 사실을 적고 있다(`순서[평균상관]`).
+
+    주입: `_key` 의 `and mo.sortable` 을 지우면 실패한다.
+    """
+    from kr_quant.tui import ledger_app
+    from kr_quant.tui.ledger_view import header_lines
+
+    mo = Model(data)
+    for v in ("comove", "limits"):
+        mo.vi = [x for x, _ in VIEWS].index(v)
+        assert mo.sortable is False, f"{v} 에 없는 정렬이 있다고 한다"
+        before = mo.si
+        for key in (ord("s"), ord("S")):
+            assert ledger_app._key(mo, key, 10) is True
+            assert mo.si == before, f"{v} 에서 {chr(key)} 가 정렬을 바꿨다"
+    # 표 화면에서는 그대로 듣는다 — 없애는 게 아니라 없는 곳에서만 막는 것이다.
+    mo.vi = 0
+    assert mo.sortable is True
+    assert ledger_app._key(mo, ord("s"), 10) and mo.si != 0
+    assert "정렬" in header_lines(mo, 120)[1]
+
+
+def test_the_table_is_set_off_from_the_bottom_lines_by_a_blank_line(data):
+    """표 마지막 행이 힌트바에 딱 붙어 있어 어디까지가 표인지 눈이 못 끊었다.
+
+    다만 그 빈 줄 때문에 볼 것이 없어지면 안 된다 — 여백은 **가장 먼저 포기하는**
+    것이다(폭에서 `tier_for` 가 문구를 줄이는 것과 같은 규율).
+
+    주입: `bottom_gap` 이 늘 1 을 내면 낮은 화면에서 본문이 한 줄만 남아 실패하고,
+    늘 0 을 내면 첫 단언이 실패한다.
+    """
+    from kr_quant.tui.ledger_view import bottom_gap
+
+    mo = Model(data)
+    for h in (20, 24, 30, 50):
+        assert bottom_gap(h) == 1, f"h={h} 에서 표와 하단이 붙어 있다"
+        s = screen(mo, 120, h)
+        assert s["lines"][s["hint_y"] - 1].strip() == "", \
+            f"h={h}: 힌트바 바로 위가 빈 줄이 아니다"
+        assert len(s["lines"]) == h
+    # 낮아지면 여백부터 돌려준다 — 본문이 최소 6줄(헤더 2 + 열이름 1 + 3행)은 남는다.
+    for h in range(4, 12):
+        s = screen(mo, 120, h)
+        assert len(s["lines"]) == max(4, h)
+        body = [ln for ln in s["lines"][:max(1, h - 3)] if ln.strip()]
+        assert body, f"h={h} 에서 본문이 통째로 사라졌다"
+    assert bottom_gap(9) == 0, "낮은 화면에서 여백을 안 돌려준다"
+
+
+def test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there(data):
+    """도움말이 "한계 화면 7번은 아직 옛 문장이다" 라고 적고 있었는데, 한계 §7 은
+    이미 고쳐진 문장이다. 화면이 **옆 화면의 상태를 잘못 보고**했다.
+
+    주입: 그 문장을 되살리면 첫 단언이, 한계 §7 에서 실측치를 지우면 둘째가 실패한다.
+    """
+    from kr_quant.tui.ledger_view import LEDGER_HELP
+
+    said = " ".join(f"{n} {d}" for n, d in LEDGER_HELP)
+    assert "옛 문장" not in said, "도움말이 사실이 아닌 상태 보고를 남겼다"
+    limits = " ".join(LIMITS)
+    for num in ("0.195%", "0.046%", "0.152%"):
+        assert num in limits and num in said, f"{num} 이 두 화면 중 하나에 없다"
+
+
+def test_the_screen_never_prints_the_hangul_keys():
+    """한글 상태에서도 키가 듣지만 자모를 **적지는** 않는다 — 표기는 영문 한 벌이다."""
+    from kr_quant.tui.ledger_view import (
+        BANNER_TIERS, FOOTER_TIERS, LEDGER_HELP, LIMITS)
+
+    text = " ".join(FOOTER_TIERS + BANNER_TIERS + tuple(LIMITS)
+                    + tuple(f"{n} {d}" for n, d in LEDGER_HELP))
+    for jamo in "ㅂㅈㅉㄱㄲㅁㄴㅎㅡㅗㅓㅏㅣ":
+        assert jamo not in text, f"화면에 자모 {jamo!r} 가 적혀 있다"
+
+
+def test_a_short_screen_gives_up_the_header_before_the_last_row(data):
+    """낮은 창에서 표가 **한 행도** 안 남았다 — 무엇을 보는지는 적혀 있는데 볼
+    것이 없었다(실측 h=6: 헤더 2줄 + 열 이름뿐).
+
+    버리는 순서는 여백 → 맨 위 헤더 → 그 다음이다. 뒤에서부터 버리므로 날짜 줄이
+    마지막까지 남는다.
+
+    주입: `screen()` 의 헤더 축소 루프를 지우면 h=6 에서 실패한다.
+    """
+    mo = Model(data)
+    names = [r["sector"] for r in mo.rows()]
+    for h in range(5, 14):
+        sc = screen(mo, 120, h)
+        body = sc["lines"][:sc["hint_y"]]
+        assert any(any(n in ln for n in names) for ln in body), \
+            f"h={h} 에서 표가 한 행도 안 남았다: {[ln.strip() for ln in body]}"
+    # 헤더를 버리는 것은 **자리가 없을 때뿐**이다.
+    tall = screen(mo, 120, 30)["lines"]
+    assert "자금 원장" in tall[0] and "화면[" in tall[1]
+    # 한 줄만 남길 때는 날짜 줄이 남는다.
+    six = screen(mo, 120, 6)["lines"]
+    assert "자금 원장" in six[0], six[0]
