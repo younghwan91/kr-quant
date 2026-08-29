@@ -50,29 +50,43 @@ def data():
     for w in ("5", "20", "60", "120"):
         for m in ("전체", "거래소", "코스닥"):
             blocks[f"{w}|{m}"] = {"from": "2026-01-01", "to": "2026-08-28",
-                                  "k": 1.5, "b": 0.1, "t": 2.0, "rows": rows}
+                                  "k": 1.5, "b": 0.1, "t": 2.0,
+                                  # 블록마다 **자기 행**을 갖는다. 12개 블록이 한
+                                  # 리스트를 공유하면 "이 창의 값을 읽는가" 를
+                                  # 검사할 수 없다(한 창을 바꾸면 전부 바뀐다).
+                                  "rows": [dict(r) for r in rows]}
     comb = {"windows": [20, 60, 120],
             "rows": [{**r, "per": {"20": 0.5, "60": 0.6, "120": 0.7},
                       "pass_n": 2, "seen": 3} for r in rows]}
     # 견인주·종목 목록은 `names` 에서 나온다 — 주체를 바꾸면 같이 바뀌어야 하므로
     # 픽스처도 실제 페이로드처럼 4주체를 모두 싣는다.
-    def nm(code, name, sec, inst, forgn):
+    #: 창별 배수 — 창마다 값이 **달라야** `최근집중`(5일 ÷ 이 창) 검사가 힘을 갖는다.
+    #: 창이 전부 같은 값이던 예전 픽스처에서는 그 비율이 늘 100% 라, 분자와 분모를
+    #: 바꿔 넣어도 검사가 통과했다. 20일은 기존 값 그대로 둔다 — 다른 검사들이
+    #: 기본 창(20일)을 보고 있어서 여기를 흔들면 무관한 검사가 같이 흔들린다.
+    scale = {"5": 0.4, "20": 1.0, "60": 2.5, "120": 3.0}
+
+    def nm(code, name, sec, inst, forgn, ret=0.0):
         return {"name": name, "sector": sec, "market": "거래소", "cap": 50000.0,
-                "win": {w: {"inst": inst, "forgn": forgn, "indiv": -inst,
-                            "etc": 0.0, "tv": 900.0}
-                        for w in ("5", "20", "60", "120")}}
+                "win": {w: {"inst": inst * s, "forgn": forgn * s, "indiv": -inst * s,
+                            "etc": 0.0, "tv": 900.0 * s,
+                            # 기관 세부 — 기관 총액이 같아도 이 둘이 채운 것과
+                            # 금투가 채운 것은 다른 이야기다.
+                            "invtrt": inst * s * 0.6, "penfnd_etc": inst * s * 0.25,
+                            "ret": ret * s}
+                        for w, s in scale.items()}}
     # 전기/전자는 종목을 넉넉히 둔다 — 파는 쪽이 사는 쪽보다 크고, 누적 80% 를
     # 넘기는 행이 여럿이라야 "절댓값 정렬"·"가로줄 하나" 검사가 힘을 갖는다.
-    names = {"005930": nm("005930", "삼성전자", "전기/전자", 100.0, -30.0),
-             "000660": nm("000660", "SK하이닉스", "전기/전자", -50.0, 80.0),
-             "066570": nm("066570", "LG전자", "전기/전자", 30.0, -12.0),
-             "009150": nm("009150", "삼성전기", "전기/전자", -15.0, 25.0),
-             "000990": nm("000990", "DB하이텍", "전기/전자", 5.0, -3.0),
-             "000720": nm("000720", "현대건설", "건설", 40.0, -70.0),
-             "006360": nm("006360", "GS건설", "건설", -20.0, 60.0),
-             "035420": nm("035420", "NAVER", "IT 서비스", 70.0, -10.0),
-             "035720": nm("035720", "카카오", "IT 서비스", -60.0, 20.0),
-             "034020": nm("034020", "두산에너빌리티", "부동산", 10.0, -5.0)}
+    names = {"005930": nm("005930", "삼성전자", "전기/전자", 100.0, -30.0, 3.1),
+             "000660": nm("000660", "SK하이닉스", "전기/전자", -50.0, 80.0, -7.2),
+             "066570": nm("066570", "LG전자", "전기/전자", 30.0, -12.0, 0.4),
+             "009150": nm("009150", "삼성전기", "전기/전자", -15.0, 25.0, -1.9),
+             "000990": nm("000990", "DB하이텍", "전기/전자", 5.0, -3.0, 12.5),
+             "000720": nm("000720", "현대건설", "건설", 40.0, -70.0, 2.2),
+             "006360": nm("006360", "GS건설", "건설", -20.0, 60.0, -4.4),
+             "035420": nm("035420", "NAVER", "IT 서비스", 70.0, -10.0, 8.8),
+             "035720": nm("035720", "카카오", "IT 서비스", -60.0, 20.0, -0.6),
+             "034020": nm("034020", "두산에너빌리티", "부동산", 10.0, -5.0, 5.0)}
     return {"asof": "2026-08-28", "finalized": True, "dates": ["2026-01-01", "2026-08-28"],
             "names": names,
             "blocks": blocks, "combined": {m: comb for m in ("전체", "거래소", "코스닥")}}
@@ -666,11 +680,15 @@ def test_stock_list_cells_sit_under_their_headers(data):
     픽스처에 `names` 가 없어 `State.names()` 가 늘 빈 목록을 돌려줬고,
     그래서 셀을 통째로 지워도·정렬을 뒤집어도 전부 초록이었다.
     """
-    from kr_quant.tui.flow_view import col_span, names_cols, names_lines
+    from kr_quant.tui.flow_view import (
+        COL_INVTRT, COL_PENFND, _fit, col_span, fmt_conc, names_cols, names_lines)
 
     st = State(data)
     cols = names_cols()
-    for width in (80, 120, 170):
+    for width in (80, 100, 120, 170):
+        # 그 폭에 **온전히 들어간 열만** 본다. 열은 경계에서 통째로 빠지므로
+        # (`_fit`), 안 들어간 열의 칸을 읽으면 빈 문자열과 비교하게 된다.
+        shown = {c.header for c in _fit(cols, width)}
         for nsi in range(len(NAME_SORTS)):
             st.nsi = nsi
             names = st.names()
@@ -686,8 +704,14 @@ def test_stock_list_cells_sit_under_their_headers(data):
                     "참여율[%]": fmt_pct(t.get("part"), 1),
                     "누적[%]": ("—" if t.get("cum") is None
                                 else f"{t['cum']:.0f}"),
+                    COL_INVTRT: fmt_amt(t.get("invtrt")),
+                    COL_PENFND: fmt_amt(t.get("penfnd")),
+                    "상대수익[%p]": fmt_pct(t.get("rrel"), 1),
+                    "최근집중[%]": fmt_conc(t.get("conc")),
                 }
                 for hdr, val in want.items():
+                    if hdr not in shown:
+                        continue
                     span = col_span(cols, hdr)
                     right = next(c.right for c in cols if c.header == hdr)
                     assert _slice(line, *span) == pad(val, span[1], right), (
@@ -1571,3 +1595,166 @@ def test_detail_panel_answers_who_took_the_other_side(data):
         # 종목의 주역이 기타법인인 경우가 있어 그게 실질 손실이었다.
         if width >= 80:
             assert "기타법인" in raw_line, f"폭{width} 인데 주체가 빠졌다"
+
+
+# ── 종목 목록의 세 축 (자금 성격 · 지속성 · 가격) ──────────────────────────
+#
+# 이 화면의 여섯 열은 전부 **같은 분자**(선택 주체의 구간 순매수)를 분모만 바꿔
+# 여섯 번 보여줬다: 금액 그대로 · 섹터 합 대비 · 거래대금 대비 · 시총 대비, 그리고
+# 그 두 분모 자체. 축이 하나뿐이면 "이 섹터에서 어느 종목을 살까" 에 답할 수 없다.
+# 여기서 잠그는 것은 새로 들어온 세 축이 **다른 질문에 답하는가** 다.
+
+def test_stock_list_has_three_axes_not_one_number_rescaled(data):
+    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, names_cols
+
+    heads = [c.header for c in names_cols()]
+    for h in (COL_INVTRT, COL_PENFND, "최근집중[%]", "상대수익[%p]"):
+        assert h in heads, f"'{h}' 열이 없다: {heads}"
+
+
+def test_the_new_axes_survive_at_eighty_columns(data):
+    """폭 80(기본 SSH)에서 세 축이 **다 보여야** 한다.
+
+    `_fit` 은 앞에서부터 자르므로 순서가 곧 우선순위다. 새 축을 오른쪽 끝에
+    붙이면 이 화면을 실제로 보는 폭에서 통째로 사라진다 — 그러면 만든 적이
+    없는 것과 같다.
+    """
+    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, _fit, names_cols
+
+    heads = [c.header for c in _fit(names_cols(), 80)]
+    for h in (COL_INVTRT, COL_PENFND, "상대수익[%p]"):
+        assert h in heads, f"폭 80 에서 '{h}' 가 잘려 나갔다: {heads}"
+
+
+def test_recent_concentration_is_the_short_window_over_this_one(data):
+    """최근집중 = 5일 순매수 ÷ 이 창의 순매수 × 100.
+
+    창이 5 ⊂ 20 ⊂ 60 ⊂ 120 으로 겹치는 것이 여기선 자산이다 — 이미 실린 값의
+    비율일 뿐이라 페이로드가 한 바이트도 안 늘어난다.
+    """
+    st = State(data)                                  # 기본 창 20일
+    seen = 0
+    for t in st.names():
+        w5 = data["names"][t["code"]]["win"]["5"]["inst"]
+        assert t["conc"] is not None, t
+        assert abs(t["conc"] - w5 / t["flow"] * 100) < 1e-9
+        seen += 1
+    assert seen, "픽스처에 종목이 없다 — 이 검사가 헛돈다"
+
+
+def test_recent_concentration_follows_the_window_the_list_shows(data):
+    """60일 화면의 분모는 60일이다. 창을 바꿨는데 값이 그대로면 라벨만
+    바뀐 것이다 — 이 저장소가 리포트 쪽에서 CI 로 막아 온 부류다."""
+    st = State(data)
+    by_win = {}
+    for w in ("20", "60", "120"):
+        st.wi = WINDOWS.index(w)
+        by_win[w] = [t["conc"] for t in st.names()]
+    assert by_win["20"] != by_win["60"] != by_win["120"], by_win
+    st.wi = WINDOWS.index("60")
+    for t in st.names():
+        w5 = data["names"][t["code"]]["win"]["5"]["inst"]
+        assert abs(t["conc"] - w5 / t["flow"] * 100) < 1e-9
+
+
+def test_recent_concentration_is_blank_where_the_ratio_stops_meaning_anything(data):
+    """분모가 0 근처면 비율이 폭발한다 — 5일 +40억 ÷ 20일 +0.2억 = 20,000%.
+    그건 '집중' 이 아니라 나눗셈 사고다. 못 읽는 칸은 비운다.
+    가장 짧은 창(5일)에서는 분자와 분모가 같아 늘 100% 라 역시 비운다."""
+    import copy
+
+    d = copy.deepcopy(data)
+    d["names"]["005930"]["win"]["20"]["inst"] = 0.2
+    st = State(d)
+    t = next(t for t in st.names() if t["code"] == "005930")
+    assert t["conc"] is None, t["conc"]
+
+    st = State(data)
+    st.wi = WINDOWS.index("5")
+    assert all(t["conc"] is None for t in st.names())
+
+
+def test_relative_return_is_the_stock_minus_its_sector(data):
+    """상대수익 = 종목 구간수익률 − 섹터 구간수익률.
+
+    섹터의 `미실현`(x)을 종목에 내리지 않는 이유: 그 k·b 는 27개 섹터
+    횡단면에서 적합된 것이라 2,645종목 위에서는 적합된 적이 없다. 뺄셈은
+    회귀 없이 "섹터는 갔는데 이건 안 갔다" 를 직접 답한다.
+    """
+    st = State(data)
+    sec_ret = st.selected()["ret"]
+    seen = 0
+    for t in st.names():
+        assert abs(t["rrel"] - (t["ret"] - sec_ret)) < 1e-9, t
+        seen += 1
+    assert seen
+
+
+def test_relative_return_reads_the_window_the_list_reads(data):
+    """종합 축은 창을 섞은 것이라 그 행에 수익률이 없다. 목록은 20일을 쓰므로
+    기준선도 **20일 블록**에서 꺼내야 한다 — 다른 창끼리 빼면 뜻이 없다."""
+    import copy
+
+    d = copy.deepcopy(data)
+    for m in ("전체", "거래소", "코스닥"):
+        for r in d["blocks"][f"20|{m}"]["rows"]:
+            r["ret"] = 10.0
+        for r in d["blocks"][f"60|{m}"]["rows"]:
+            r["ret"] = -99.0
+    st = State(d)
+    st.wi = WINDOWS.index("종합")
+    seen = 0
+    for t in st.names():
+        assert abs(t["rrel"] - (t["ret"] - 10.0)) < 1e-9, t
+        seen += 1
+    assert seen
+
+
+def test_fund_detail_columns_are_not_the_institution_total_rescaled(data):
+    """투신·연기금은 `기관` 한 덩어리에서 뽑아낼 수 없는 값이다.
+
+    실측(20거래일): SK하이닉스는 기관 −13,157억인데 투신 +1,549 · 연기금 +4,614 ·
+    금투 −22,611 이다. 기관 총액만 보면 "판다" 지만 이 화면이 믿는 두 주체는
+    사고 있었다. 그래서 페이로드에서 **따로** 와야 한다.
+    """
+    import copy
+
+    d = copy.deepcopy(data)
+    w = d["names"]["000660"]["win"]["20"]
+    w["invtrt"], w["penfnd_etc"] = 1548.6, 4614.2      # 기관은 그대로 −50.0
+    st = State(d)
+    t = next(t for t in st.names() if t["code"] == "000660")
+    assert t["invtrt_amt"] == 1548.6
+    assert t["penfnd_amt"] == 4614.2
+    assert t["flow"] == -50.0
+
+
+def test_a_report_without_the_new_fields_still_renders(data):
+    """회귀 — 옛 페이로드에는 투신·연기금·종목수익률이 없다.
+
+    화면이 깨지면 안 된다. 값이 없는 칸은 `—` 로 남고 나머지 열은 그대로여야
+    하며, 폭 불변식도 지켜져야 한다. (이 저장소의 서명 같은 실패 모드는 그
+    반대다 — producer 가 키를 빠뜨려도 화면이 예쁘게 `—` 를 그리는 것. 그쪽은
+    `scripts/verify_report.py` 가 잡는다.)
+    """
+    import copy
+
+    from kr_quant.tui.flow_view import names_lines
+
+    d = copy.deepcopy(data)
+    for nmv in d["names"].values():
+        for w in nmv["win"].values():
+            for k in ("invtrt", "penfnd_etc", "ret"):
+                w.pop(k, None)
+    st = State(d)
+    for nsi in range(len(NAME_SORTS)):
+        st.nsi = nsi
+        names = st.names()
+        assert names
+        assert all(t["invtrt"] is None and t["penfnd"] is None
+                   and t["rrel"] is None for t in names)
+        for width in (80, 120, 170):
+            lines, nhead = names_lines(st, width)
+            assert len(lines) - nhead == len(names)
+            for ln in lines:
+                assert _w(ln) == width, (width, repr(ln))

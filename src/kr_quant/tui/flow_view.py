@@ -64,8 +64,40 @@ SORTS = (("accel", "가속"), ("flow", "임펄스"), ("pct", "1년%"), ("ret", "
 #: "누가 이 섹터를 움직였나" 는 금액으로만 정의된다. 나머지는 다른 질문에 답한다.
 #: (`flow` 는 **절댓값** 순이다. 부호순으로 두면 판 종목이 목록 맨 끝으로 밀려
 #: 누적 기여율이 뜻을 잃는다 — 섹터를 움직인 건 산 쪽과 판 쪽 둘 다다.)
-NAME_SORTS = (("flow", "순매수"), ("part", "참여율"), ("a", "시총대비"),
+NAME_SORTS = (("flow", "순매수"), ("invtrt", "투신"), ("penfnd", "연기금"),
+              ("conc", "최근집중"), ("rrel", "상대수익"),
+              ("part", "참여율"), ("a", "시총대비"),
               ("cap", "시총"), ("tv", "거래대금"), ("name", "종목명"))
+
+#: 최근집중의 **분자가 되는 창**. 5 ⊂ 20 ⊂ 60 ⊂ 120 으로 겹치는 것이 여기선
+#: 자산이다 — 이미 실린 값의 비율일 뿐이라 페이로드가 한 바이트도 안 늘어난다.
+#: (종목별 일별 배열을 실으면 ~4MB 가 붙는다고 `scripts/sector_flow.py` 가 경고한다.)
+CONC_WIN = "5"
+#: 최근집중의 분모 하한(억). 이 아래면 비율을 안 낸다.
+#:
+#: 왜 하한이 필요한가: 5일 +40억 ÷ 20일 +0.2억 = 20,000% 다. 그건 "집중" 이
+#: 아니라 나눗셈 사고인데, 화면에 숫자로 나가면 읽는 사람은 뜻이 있다고 믿는다.
+#: 값이 1억이면 5일 순매수가 100억일 때 10,000% 까지 나올 수 있지만, 그 경우
+#: 부호가 같으면 "이 구간 순매수는 사실상 최근 5일이 전부" 라는 참말이다 —
+#: 표시 상한(:data:`CONC_CAP`)이 그 자릿수를 막는다.
+CONC_MIN_DEN = 1.0
+#: 최근집중 표시 상한(%). 넘으면 ``>999``·``<-999`` 로 적는다 — 자릿수가
+#: 열을 밀지 않게 하면서 "매우 크다" 는 사실은 남긴다.
+CONC_CAP = 999.0
+
+#: 투신·연기금을 **금액**으로 보일까 **기관 순매수 대비 몫**으로 보일까.
+#:
+#: ⚠️ 아직 결정 전이라 둔 **임시 스위치**다. 두 안을 같은 코드로 그려 비교하기
+#: 위한 것이고, 사용자가 고르면 진 쪽은 지운다. 기본은 A안(억원 절대값).
+#:   A안  ``투신 +13``  ``연기금 +7``      — 크기를 그대로 본다
+#:   B안  ``투신 80``   ``연기금 15`` [%]  — 기관 +14억 중 투신이 80% 임을 본다
+#: B안은 기관 총액이 0 근처거나 세부와 **부호가 갈릴 때** 뜻을 잃는다(실측:
+#: SK하이닉스 기관 −13,157억 · 투신 +1,549 → −11.8%, 이건 '몫' 이 아니다).
+DETAIL_SHARE = os.environ.get("KQ_INST_DETAIL", "").strip().lower() in ("share", "b", "%")
+_DT_UNIT = "%" if DETAIL_SHARE else "억"
+COL_INVTRT, COL_PENFND = f"투신[{_DT_UNIT}]", f"연기금[{_DT_UNIT}]"
+#: 기관 대비 몫(B안)의 분모 하한(억). 기관이 이 아래면 몫을 안 낸다.
+DETAIL_MIN_DEN = 1.0
 
 #: 누적 기여율의 가로줄을 그을 지점. 실측상 섹터 흐름의 80% 를 설명하는 종목이
 #: 평균 6.2개인데 종목행의 51% 가 +0(|순매수|<0.5억) 이다 — 어디까지가 "그 섹터를
@@ -77,6 +109,30 @@ def fmt_amt(v) -> str:
     if v is None:
         return "—"
     return ("+" if v >= 0 else "-") + f"{abs(v):,.0f}"
+
+
+def _share(v, den):
+    """B안(기관 순매수 대비 몫 %) 의 값. A안이면 금액을 그대로 돌려준다.
+
+    분모가 :data:`DETAIL_MIN_DEN` 미만이면 비운다 — 기관이 ±0 근처인데
+    투신이 큰 경우 몫이 수천 %로 튄다. 부호가 갈리는 경우는 음수로 남는다.
+    """
+    if v is None:
+        return None
+    if not DETAIL_SHARE:
+        return v
+    return None if den is None or abs(den) < DETAIL_MIN_DEN else v / den * 100.0
+
+
+def fmt_conc(v) -> str:
+    """최근집중 표시 — 자릿수가 열을 밀지 않게 ±999 에서 자른다."""
+    if v is None:
+        return "—"
+    if v > CONC_CAP:
+        return ">999"
+    if v < -CONC_CAP:
+        return "<-999"
+    return f"{v:.0f}"
 
 
 def fmt_pct(v, nd: int = 2) -> str:
@@ -389,6 +445,7 @@ class State:
         sec = r.get("sector")
         win = self.window if self.window != "종합" else "20"
         mkts = ([self.market] if self.market != "전체" else self.markets[1:])
+        sec_ret = self._sector_ret(r)
         out = []
         for code, nm in (self.d.get("names") or {}).items():
             if nm.get("sector") != sec or nm.get("market") not in mkts:
@@ -398,13 +455,31 @@ class State:
                 continue
             cap = nm.get("cap")
             v, tv = w.get(self.actor), w.get("tv")
+            # 옛 리포트에는 아래 세 값이 없다. `.get` 으로 받아 `—` 로 남긴다 —
+            # 새 열이 생겼다고 어제 만든 리포트로 화면이 깨지면 안 된다.
+            iv, pf, sr = w.get("invtrt"), w.get("penfnd_etc"), w.get("ret")
+            inst = w.get("inst")
             out.append({"code": code, "name": nm.get("name", "—"),
                         "flow": v, "tv": tv, "cap": cap,
                         # 참여율 — 그 종목 거래대금 중 이 주체의 순매수가 차지한 몫.
                         # 거래대금 자체는 "얼마나 붐볐나" 일 뿐이고, 판단에 직결되는
                         # 것은 "그 거래의 몇 %가 한 방향이었나" 다.
                         "part": (v / tv * 100) if (tv and v is not None) else None,
-                        "a": ((v or 0) / cap * 100) if cap else None})
+                        "a": ((v or 0) / cap * 100) if cap else None,
+                        # ── 자금 성격 ── 기관 총액이 같아도 투신·연금이 채운 것과
+                        # 금투(증권사 자기매매 — 헤지·차익이 섞여 방향성이 약하다)가
+                        # 채운 것은 다른 이야기인데 `기관` 한 덩어리에는 그게 없다.
+                        # 헤더가 제 이름을 달고 있으므로 선택 주체와 섞이지 않는다
+                        # (이름 없는 열이 다른 주체의 값을 조용히 이고 있던 사고와
+                        # 다른 자리다 — 그건 `가속` 이 늘 기관이던 경우다).
+                        "invtrt_amt": iv, "penfnd_amt": pf,
+                        "invtrt": _share(iv, inst), "penfnd": _share(pf, inst),
+                        # ── 지속성 ──
+                        "conc": self._conc(nm, v),
+                        # ── 가격 ── 섹터는 갔는데 이건 안 갔나.
+                        "ret": sr,
+                        "rrel": (sr - sec_ret) if (sr is not None
+                                                   and sec_ret is not None) else None})
         key = self.name_sort
         if key == "name":
             out.sort(key=lambda t: t["name"], reverse=self.nrev)
@@ -421,6 +496,46 @@ class State:
                                     if t.get(key) is not None else 0))
         self._attach_cum(out)
         return out
+
+    def _sector_ret(self, r: dict) -> "float | None":
+        """상대수익의 기준선 — 섹터 표의 `수익률[%]` 열과 **같은 값**.
+
+        같은 값이어야 하는 이유: 사용자가 표에서 본 "이 섹터는 +8% 갔다" 와
+        드릴다운의 뺄셈이 다른 수를 쓰면, 두 화면이 같은 이름으로 다른 것을
+        말하게 된다. 그래서 새로 계산하지 않고 그 행에서 꺼낸다.
+
+        종합 축은 창을 섞은 것이라 행에 `ret` 이 없다. 목록이 20일을 보므로
+        (:attr:`COMBINED_WIN`) 기준선도 20일 블록에서 꺼낸다 — 다른 창끼리
+        빼면 뺄셈이 뜻을 잃는다.
+        """
+        if self.window != "종합":
+            return r.get("ret")
+        b = (self.d.get("blocks") or {}).get(f"{self.COMBINED_WIN}|{self.market}")
+        for row in (b or {}).get("rows") or []:
+            if row.get("sector") == r.get("sector"):
+                return row.get("ret")
+        return None
+
+    def _conc(self, nm: dict, den) -> "float | None":
+        """최근집중 — 5일 순매수 ÷ **이 창**의 순매수 × 100 [%].
+
+        ≈100/창×5 면 고르게 분산(20일 화면에서 25% 근처), ≈100 이면 이 구간
+        순매수가 사실상 최근 5일에 몰린 것, >100 이면 앞에서는 팔다가 최근에
+        방향을 튼 것이다. 섹터 표의 `추이[8]` 스파크라인이 하는 일을 숫자
+        하나로 대신한다.
+
+        **뜻을 잃는 구간을 비운다.** (i) 가장 짧은 창(5일)에서는 분자와 분모가
+        같아 늘 100% 라 아무 말도 안 한다. (ii) 분모가 :data:`CONC_MIN_DEN`
+        미만이면 비율이 폭발한다. 부호가 갈리는 경우(5일 +100, 20일 −50)는
+        **음수로 남긴다** — 그건 사고가 아니라 "최근 5일이 구간 전체와 반대로
+        움직였다" 는 참말이고, 이 화면이 지속성을 묻는 이상 가장 알고 싶은
+        경우 중 하나다. 크기만 :data:`CONC_CAP` 에서 잘라 적는다.
+        """
+        win = self.window if self.window != "종합" else self.COMBINED_WIN
+        if win == CONC_WIN or den is None or abs(den) < CONC_MIN_DEN:
+            return None
+        num = ((nm.get("win") or {}).get(CONC_WIN) or {}).get(self.actor)
+        return None if num is None else num / den * 100.0
 
     def _attach_cum(self, rows: list[dict]) -> None:
         """누적 기여율 — |순매수| 의 화면 순서 누적 몫(%).
@@ -531,6 +646,8 @@ SORT_COL = {"G": "G[0~1]", "flow": "임펄스[억]", "accel": "가속[%p]",
             "x": "미실현[%p]", "U": "포텐셜[½kx²]", "P": "dW/dt[%p/일]",
             "xddot": "풀림[%p/일²]", "n_all": "종목[수]"}   # 거래대금·시총은 표에 열이 없어 하이라이트 대상이 아니다
 NAME_SORT_COL = {"flow": "순매수[억]", "part": "참여율[%]", "a": "시총대비[%p]",
+                 "invtrt": COL_INVTRT, "penfnd": COL_PENFND,
+                 "conc": "최근집중[%]", "rrel": "상대수익[%p]",
                  "cap": "시총[억]", "tv": "거래대금[억]", "name": "종목"}
 
 
@@ -686,6 +803,12 @@ _NAME_COLS = (
     Col("누적[%]", 8, True,
         lambda t, st: "—" if t.get("cum") is None else f"{t['cum']:.0f}"),
     Col("", 1, False, lambda t, st: "-" if t.get("cut") else ""),
+    Col(COL_INVTRT, 8, True, lambda t, st: fmt_amt(t.get("invtrt")) if not DETAIL_SHARE
+        else fmt_pct(t.get("invtrt"), 0)),
+    Col(COL_PENFND, 10, True, lambda t, st: fmt_amt(t.get("penfnd")) if not DETAIL_SHARE
+        else fmt_pct(t.get("penfnd"), 0)),
+    Col("상대수익[%p]", 12, True, lambda t, st: fmt_pct(t.get("rrel"), 1)),
+    Col("최근집중[%]", 11, True, lambda t, st: fmt_conc(t.get("conc"))),
     Col("참여율[%]", 9, True, lambda t, st: fmt_pct(t.get("part"), 1)),
     Col("시총대비[%p]", 12, True,
         lambda t, st: fmt_pct(t["a"]) if t.get("a") is not None else "—"),
@@ -938,6 +1061,28 @@ HELP = [
     ("", "        그 위가 이 섹터를 움직인 종목이고 아래는 사실상 0 이다."),
     ("", "        실측: 전기/전자 386종목 중 **7개**가 80% 를 설명한다."),
     ("", "        순매수 정렬에서만 채운다 — 시총·이름 순의 누적은 뜻이 없다."),
+    (COL_INVTRT, "그 구간 **투신**(자산운용) 순매수" + (" ÷ 기관 순매수 × 100 [%]."
+                                                      if DETAIL_SHARE else " [억원].")),
+    (COL_PENFND, "그 구간 **연기금**(국민연금 등) 순매수" + (" ÷ 기관 순매수 × 100 [%]."
+                                                        if DETAIL_SHARE else " [억원].")),
+    ("", "        왜 따로 보나: 기관 총액이 같아도 이 둘이 채운 것과 금투(증권사"),
+    ("", "        자기매매 — 헤지·차익이 섞여 방향성이 약하다)가 채운 것은 다른"),
+    ("", "        이야기인데, `기관` 한 덩어리에는 그 구분이 없다. 실측 20거래일:"),
+    ("", "        SK하이닉스 기관 −13,157억인데 투신 +1,549 · 연기금 +4,614 ·"),
+    ("", "        금투 −22,611 이다 — 총액만 보면 '판다' 지만 이 둘은 사고 있었다."),
+    ("", "        **선택 주체와 무관하게** 늘 기관 세부다(헤더가 제 이름을 단다)."),
+    ("상대수익[%p]", "종목 구간수익률 − **섹터** 구간수익률 [%p]. 섹터는 갔는데 이건"),
+    ("", "        안 갔나. 기준선은 표의 `수익률[%]` 열과 **같은 값**이다."),
+    ("", "        섹터의 미실현(x)을 종목에 내리지 않는다 — 그 k·b 는 27개 섹터"),
+    ("", "        횡단면에서 적합된 것이라 2,645종목 위에서는 적합된 적이 없다."),
+    ("", "        뺄셈은 회귀 없이 같은 질문에 답한다. 더 정직하고 더 간단하다."),
+    ("최근집중[%]", "5일 순매수 ÷ **이 창**의 순매수 × 100 [%]. 지속성이다."),
+    ("", "        20일 화면에서 ≈25 면 고르게 분산(꾸준히 담는 중) · ≈100 이면"),
+    ("", "        20일치가 최근 5일에 몰림(오늘 급하게 산 것) · >100 이면 앞에서는"),
+    ("", "        팔다 최근에 방향을 튼 것 · **음수면** 최근 5일이 구간 전체와"),
+    ("", "        반대 방향이다. 분모가 1억 미만이면 비율이 폭발해 비운다."),
+    ("", "        가장 짧은 창(5일)에서는 분자=분모라 늘 100 이므로 역시 비운다."),
+    ("", "        섹터 표의 `추이[8]` 가 하는 일을 숫자 하나로 대신한다."),
     ("참여율[%]", "순매수 ÷ 그 종목 거래대금 × 100 [%]. '얼마나 붐볐나' 가 아니라"),
     ("", "        '그 거래의 몇 %가 한 방향이었나' 다. 시총대비와 달리 분모가"),
     ("", "        유동성이라 **살 수 있는 종목인가** 를 같이 말해준다."),
@@ -952,6 +1097,13 @@ HELP = [
     ("", "· 값 0 은 '관망' 이 아니라 '0 또는 미보고' 다 — 수집기가 파싱 실패를"),
     ("", "  0 으로 준다."),
     ("", "· 코스닥 단독은 관계가 약하다(R² 0.00~0.25). 거래소가 전체를 끌고 간다."),
+    ("", "· **투신·연기금·개인은 키움에만 있다.** 그래서 페이로드가 소스를 키움으로"),
+    ("", "  좁히고(sources=(\"kiwoom\",)) 개인 생존편향을 허용한 채 만든다"),
+    ("", "  (allow_individual_survivorship=True, scripts/sector_flow.py)."),
+    ("", "  이 저장소가 알파 검증에서 엄격히 막는 생존편향이 **이 열들에는 남아**"),
+    ("", "  있다 — 상장폐지된 종목이 표본에서 빠져 있다. 관측용 화면이라 심사"),
+    ("", "  기준을 적용할 자리는 아니지만, 여기 적힌 숫자로 백테스트를 대신하면"),
+    ("", "  안 된다. 근거는 docs/GUARDRAILS.md."),
 ]
 
 
@@ -1011,6 +1163,12 @@ HINT_DESC = {
     "종목": "종목명 가나다순",
     "순매수[억]": "선택 주체의 구간 순매수 [억원], 절댓값 순",
     "누적[%]": "|순매수| 큰 순으로 훑을 때의 누적 기여율. - 가 80%",
+    COL_INVTRT: ("투신 순매수 ÷ 기관 순매수 × 100 [%]" if DETAIL_SHARE
+                 else "투신(자산운용)의 구간 순매수 [억원]"),
+    COL_PENFND: ("연기금 순매수 ÷ 기관 순매수 × 100 [%]" if DETAIL_SHARE
+                 else "연기금(국민연금 등)의 구간 순매수 [억원]"),
+    "상대수익[%p]": "종목 구간수익률 − 섹터 구간수익률 [%p]",
+    "최근집중[%]": "5일 순매수 ÷ 이 창의 순매수 × 100 [%]",
     "참여율[%]": "순매수 ÷ 그 종목 거래대금 × 100 [%]",
     "시총대비[%p]": "순매수 ÷ 그 종목 시총 × 100 [%p]",
     # 이 둘은 **두 화면이 같은 헤더를 쓴다** — 섹터 표에서는 섹터 합계고
