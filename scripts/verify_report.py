@@ -1,18 +1,33 @@
 #!/usr/bin/env python
 """일일 리포트 검증 — 수식·데이터·계산을 한 번에 점검한다.
 
-세 층을 나눠서 본다. 층마다 실패 원인이 다르고 대응도 다르기 때문이다.
+층을 나눠서 본다. 층마다 실패 원인이 다르고 대응도 다르기 때문이다.
 
   A. 수식   — 표에 실린 값들이 정의된 항등식을 만족하는가(전정밀도 재적합 기준)
   B. 데이터 — DB 에서 들어온 것이 온전한가(기준일·커버리지·항등식·중복·단위)
-  C. 계산   — 페이로드가 독립 재계산과 일치하는가, 표의 열이 정합한가
+  C. 계산   — 표의 구조(열 정의 = 셀 개수)와 값이 정합한가
+  D. 부류   — 계산에 들어가는 두 값이 같은 집합·시점·파라미터에서 나오는가
+  E. 화면   — **그려진 글자**가 열 정의가 내는 값과 같은가(폭 80·120·200)
+  F. 독립   — **DB 원자료에서 처음부터 다시 만든 값**과 페이로드가 같은가
+
+A~D 는 전부 *파일 안의 값끼리* 정합한지만 본다. 그래서 producer 가 임펄스를
+통째로 잘못 계산해도(수량을 금액으로 착각, `flu_rt` 의 bp 단위를 놓침 — 둘 다
+이 저장소에서 실제로 사고를 냈다) 전부 초록이다. 파생층이 그 틀린 값 위에서
+일관될 뿐이기 때문이다. **F 가 그 구멍을 막는다** — `scripts/` 의 함수를 하나도
+부르지 않고 SQL 로 다시 집계한다. 같은 버그를 두 번 통과시키지 않으려면 경로가
+달라야 한다. (E·F 는 두 번째 검증기를 만들지 않고 여기에 합쳤다 — 검증기가
+둘이면 배치가 하나만 돌리고 나머지는 조용히 썩는다. F 만 DB 를 요구한다.)
 
 ⚠️ **반올림된 값으로 검산하지 않는다.** payload 의 k 는 소수 3자리라, 그걸로
 U=½kx² 를 검산하면 1e-3 오차가 나서 멀쩡한 수식이 FAIL 로 뜬다(실제로 한 번
 밟았다). 원자료에서 전정밀도로 다시 적합해 비교한다.
 
+⚠️ **상대오차로 비교하지 않는다.** 섹터 합계가 0 근처인 칸(섬유/의류 20일
++2.0억)에서 상대오차는 무의미하게 커진다. 허용오차는 페이로드가 반올림하는
+자릿수에서 유도한 **절대값**이다(`TOL_FLOW`·`TOL_CAP`·`TOL_RET`).
+
 Run:  python scripts/verify_report.py --dir ~/Documents/kr-quant-reports/2026-08-27
-      python scripts/verify_report.py --dir <폴더> --db-check     # B 층까지
+      python scripts/verify_report.py --dir <폴더> --db-check     # B·F 층까지
 """
 
 from __future__ import annotations
@@ -77,14 +92,17 @@ def layer_a(D: dict) -> None:
         upd("예상Δv = k·a + b", max(r["exp"] - (k * r["a_idx"] + b) for r in rows))
         upd("x = 예상 − 실제", max(r["x"] - (r["exp"] - r["ret"]) for r in rows))
         upd("x = −(OLS 잔차)", max(r["x"] + (r["ret"] - (k * r["a_idx"] + b)) for r in rows))
-        upd("U = ½·k·x²", max(r["U"] - 0.5 * k * r["x"] ** 2 for r in rows))
+        # U 는 **k>0 인 블록에만** 실린다(k≤0 이면 |x| 의 순감소 변환이라 뜻을
+        # 잃는다 — `layer_a2` 가 그 규약을 따로 검사한다). 여기서는 실린 것만 본다.
+        if all(r["U"] is not None for r in rows):
+            upd("U = ½·k·x²", max(r["U"] - 0.5 * k * r["x"] ** 2 for r in rows))
         res = [y - (k * x + b) for x, y in zip(xs, ys)]
         upd("OLS: Σ잔차 = 0", sum(res) / len(res))
         upd("OLS: 잔차 ⊥ a", sum(r * x for r, x in zip(res, xs)) / max(1.0, sum(abs(v) for v in xs)))
         upd("k 반올림 편차(표시용)", k - B["k"])
 
         # U 의 부호 규약: k>0 이면 U≥0
-        if k > 0 and any(r["U"] < -TOL_EXACT for r in rows):
+        if k > 0 and any(r["U"] is not None and r["U"] < -TOL_EXACT for r in rows):
             chk("A", f"{key} k>0 인데 U<0", False)
 
         # G 는 0~1 순위평균, 통과는 세 부호의 논리곱
@@ -109,6 +127,172 @@ def layer_a(D: dict) -> None:
     f = [0.0, 1.0, 4.0]
     chk("A", "1차 중앙차분 (x=t², t=1 → 2)", abs((f[2] - f[0]) / 2 - 2) < TOL_EXACT)
     chk("A", "2차 중앙차분 (x=t² → 2)", abs((f[2] - 2 * f[1] + f[0]) - 2) < TOL_EXACT)
+
+    layer_a2(D)
+
+
+def _spearman(a: list, b: list) -> float:
+    def rk(v):
+        order = sorted(range(len(v)), key=lambda i: v[i])
+        r = [0.0] * len(v)
+        i = 0
+        while i < len(order):
+            j = i
+            while j + 1 < len(order) and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            for t in range(i, j + 1):
+                r[order[t]] = (i + j) / 2.0
+            i = j + 1
+        return r
+    ra, rb = rk(a), rk(b)
+    n = len(a)
+    ma, mb = sum(ra) / n, sum(rb) / n
+    num = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    da = math.sqrt(sum((x - ma) ** 2 for x in ra))
+    db_ = math.sqrt(sum((y - mb) ** 2 for y in rb))
+    return num / (da * db_) if da and db_ else float("nan")
+
+
+def layer_a2(D: dict) -> None:
+    """A 층 보강 — **원 검사가 안 보던 열들.**
+
+    A 층은 오래도록 `a·exp·x·U` 네 개의 항등식만 봤다. 그건 회귀 한 줄에서
+    파생되는 값들이라 서로 맞을 수밖에 없고, 실제로 화면에서 가장 많은 칸을
+    차지하는 `1년[%ile]`·`추이[8]`·`풀림`·`G`·`종합 G` 는 **한 번도 재계산되지
+    않았다.** 여기서 그 빈 곳을 메운다.
+    """
+    worst = {}
+
+    def upd(key, v):
+        worst[key] = max(worst.get(key, 0.0), abs(v))
+
+    # ① 포텐셜의 **부호 규약** — k ≤ 0 인 블록에서는 U 가 없어야 한다.
+    #
+    # U = ½kx² 의 뜻은 "|미실현| 이 클수록 크다" 하나인데, 그건 k>0 에서만
+    # 성립한다. k<0 이면 |x| 의 순**감소** 변환이라 화면이 "포텐셜 큰 순" 이라
+    # 말하면서 정확히 반대로 줄세운다(실측: 5일|코스닥 k=−0.587, 22개 섹터
+    # 전부 U<0, ρ(|x|,U) = −1.0000). 도움말이 "4개 구간 전부 Spearman 1.0000"
+    # 이라 적었던 것은 **시장=전체에서만 잰 값**이었다 — 실측 주장이 실측
+    # 범위를 넘어 일반화된 자리다.
+    bad_sign, bad_rho = [], []
+    for key, B in D["blocks"].items():
+        rows = [r for r in B["rows"] if r.get("x") is not None]
+        if len(rows) < 3:
+            continue
+        us = [r.get("U") for r in rows]
+        # k 는 표시용 반올림값이므로 부호 판정에만 쓴다(0 근처는 아래 ρ 로 잡힌다).
+        if B["k"] <= 0:
+            if any(u is not None for u in us):
+                bad_sign.append(f"{key} k={B['k']} 인데 U 가 있다")
+            continue
+        if any(u is None for u in us):
+            bad_sign.append(f"{key} k={B['k']}>0 인데 U 가 없다")
+            continue
+        if any(u < -TOL_EXACT for u in us):
+            bad_sign.append(f"{key} k>0 인데 U<0")
+        rho = _spearman([abs(r["x"]) for r in rows], us)
+        if not (rho > 0.9999):
+            bad_rho.append(f"{key} ρ(|x|,U)={rho:+.4f}")
+    chk("A", "포텐셜: k≤0 인 블록에는 U 가 없다", not bad_sign, "; ".join(bad_sign[:3]))
+    chk("A", "포텐셜: U 가 있는 블록은 |미실현| 과 Spearman +1",
+        not bad_rho, "; ".join(bad_rho[:3]))
+
+    # ② Σ미실현 = 0 — OLS 잔차의 부호 반전이므로 블록마다 정확히 0 이어야 한다.
+    bad = []
+    for key, B in D["blocks"].items():
+        xs = [r["x"] for r in B["rows"] if r.get("x") is not None]
+        if not xs:
+            continue
+        scale = max(abs(v) for v in xs) * len(xs)
+        upd("Σ미실현 = 0", sum(xs) / max(scale, 1e-12))
+        if abs(sum(xs)) > 1e-9 * max(scale, 1.0):
+            bad.append(f"{key} Σx={sum(xs):.3e}")
+    chk("A", "Σ미실현 = 0 (전 블록)", not bad, "; ".join(bad[:3]))
+
+    # ③ 1년 백분위 — 정의역 [0,100] 이고 **주체마다 다른 값**이어야 한다.
+    #    (한 행에 두 주체의 숫자가 섞이는 사고를 이 저장소가 이미 냈다.)
+    bad, same = [], 0
+    for key, B in D["blocks"].items():
+        for r in B["rows"]:
+            p = r.get("pct1y") or {}
+            for a, v in p.items():
+                if not (0.0 <= v <= 100.0):
+                    bad.append(f"{key}/{r['sector']}/{a}={v}")
+            if len(set(p.values())) == 1 and len(p) > 1:
+                same += 1
+    chk("A", "1년 백분위 ∈ [0,100]", not bad, "; ".join(bad[:3]))
+    chk("A", "1년 백분위가 주체마다 갈리는가", same < 0.5 * 27 * len(D["blocks"]),
+        f"4주체가 모두 같은 행 {same}개")
+
+    # ④ 추이[8] — **조각 합이 그 주체의 임펄스와 같다**는 약속. 스파크라인의
+    #    오른쪽 끝이 임펄스 열의 숫자로 이어진다는 말이 여기서 나온다.
+    bad = []
+    for key, B in D["blocks"].items():
+        win = int(key.split("|")[0])
+        segs = min(8, win)
+        for r in B["rows"]:
+            for a, arr in (r.get("spark") or {}).items():
+                if len(arr) != segs:
+                    bad.append(f"{key}/{r['sector']}/{a} 조각 {len(arr)} != {segs}")
+                    continue
+                # 조각은 0.1억으로 반올림된다 — 허용오차는 거기서 나온다.
+                d = abs(sum(arr) - (r.get(a) or 0.0))
+                upd("추이 Σ조각 − 임펄스 [억]", d)
+                if d > 0.05 * segs + 1e-6:
+                    bad.append(f"{key}/{r['sector']}/{a} Σ={sum(arr):.2f} vs {r.get(a)}")
+    chk("A", "추이[8]: 조각 수 = min(8,창) · Σ조각 = 임펄스", not bad, "; ".join(bad[:3]))
+
+    # ⑤ G — 세 순위의 평균이고, 각 순위는 pos/(N−1) 이다. 값이 [0,1] 인지만
+    #    보던 것을 **순위 자체를 다시 매겨** 대조한다.
+    bad = []
+    for key, B in D["blocks"].items():
+        scored = [r for r in B["rows"] if r.get("G") is not None]
+        if len(scored) < 2:
+            continue
+        def _rank(k2):
+            vals = [r[k2] for r in scored]
+            order = sorted(range(len(vals)), key=lambda i: vals[i])
+            o = [0.0] * len(vals)
+            for pos, i in enumerate(order):
+                o[i] = pos / (len(vals) - 1)
+            return o
+        ra, rx, rd = _rank("a_idx"), _rank("x"), _rank("xddot")
+        for r, A, X, Dd in zip(scored, ra, rx, rd):
+            d = abs(r["G"] - (A + X + Dd) / 3.0)
+            upd("G = 세 순위 평균", d)
+            if d > TOL_FIT:
+                bad.append(f"{key}/{r['sector']} G={r['G']} vs {(A+X+Dd)/3:.6f}")
+    chk("A", "G = rank(a)·rank(x)·rank(ẍ) 의 평균", not bad, "; ".join(bad[:3]))
+
+    # ⑥ 종합 G = 창별 G 의 **산술평균**, 통과[구간] = pass_n/seen.
+    bad = []
+    for mkey, C in (D.get("combined") or {}).items():
+        wins = C.get("windows") or []
+        for r in C["rows"]:
+            per = {str(k2): v for k2, v in (r.get("per") or {}).items()}
+            got = {}
+            for w in wins:
+                b = D["blocks"].get(f"{w}|{mkey}")
+                row = next((q for q in (b or {}).get("rows", [])
+                            if q["sector"] == r["sector"]), None)
+                if row and row.get("G") is not None:
+                    got[str(w)] = round(row["G"], 3)
+            if per != got:
+                bad.append(f"{mkey}/{r['sector']} per {per} vs {got}")
+                continue
+            if r.get("seen") != len(got):
+                bad.append(f"{mkey}/{r['sector']} seen {r.get('seen')} vs {len(got)}")
+            want = sum(got.values()) / len(got) if got else None
+            if (r.get("G") is None) != (want is None):
+                bad.append(f"{mkey}/{r['sector']} G {r.get('G')} vs {want}")
+            elif want is not None:
+                upd("종합 G = 창별 G 평균", r["G"] - want)
+                if abs(r["G"] - want) > TOL_FIT:
+                    bad.append(f"{mkey}/{r['sector']} G {r['G']} vs {want}")
+    chk("A", "종합 G = G 가 나온 창의 등가중 평균", not bad, "; ".join(bad[:3]))
+
+    for name, v in worst.items():
+        print(f"       · {name} 최대오차 {v:.2e}")
 
 
 # ─────────────────────────────────────────────── B. 데이터
@@ -291,6 +475,182 @@ def layer_d(D: dict, P: dict, html: str) -> None:
     chk("D", "창이 다르면 값도 다른가(파라미터가 계산에 도달하는가)", not same,
         ", ".join(same[:2]))
 
+    # ⑤ **개수의 집합**: 표가 적는 종목 수 = 그 줄에서 Enter 를 눌렀을 때 나오는
+    #    목록의 길이. 이 층은 "분자와 분모가 같은 집합인가" 를 오래 봤는데
+    #    **개수는 안 봤다.** 실측(수정 전): 표가 "전기/전자 387" 이라 적고 목록은
+    #    386 개였다 — 두 달 전 수급이 끊긴 종목이 `stocks` 에 남아 있어서다.
+    #    더 나쁜 건 `MIN_NAMES` 판정이 이 수로 이뤄져 **죽은 이름 하나가 얇은
+    #    섹터 경고를 지운다**는 것이다(코스닥/종이/목재 10 vs 실제 9).
+    names = D.get("names") or {}
+    mkts_all = P["markets"]
+    bad, flips = [], []
+    for bk, B in (D.get("blocks") or {}).items():
+        win, mk = bk.split("|")
+        sel = mkts_all if mk == "전체" else [mk]
+        listed: dict = {}
+        for nm in names.values():
+            if nm.get("market") in sel and (nm.get("win") or {}).get(win):
+                listed[nm.get("sector")] = listed.get(nm.get("sector"), 0) + 1
+        for r in B["rows"]:
+            got = listed.get(r["sector"], 0)
+            if got != r.get("n_all"):
+                bad.append(f"{bk}/{r['sector']} 표 {r.get('n_all')} vs 목록 {got}")
+                if (r.get("n_all", 0) < 10) != (got < 10):
+                    flips.append(f"{bk}/{r['sector']}")
+    chk("D", "표의 종목[수] = 드릴다운 목록 길이", not bad,
+        f"{len(bad)}건 · ~마커 뒤집힘 {len(flips)}건  " + "; ".join(bad[:2]))
+
+    # ⑥ **분자의 집합**: 구간말 시총이 없는(=상장이 끊긴) 종목의 순매수가
+    #    임펄스에 얼마나 섞였나. 분모(섹터 시총)에는 그들이 없으므로 가속도가
+    #    그만큼 오염된다. 실측(2026-08-28): 5·20일 창은 0.000%p, 60일 최대
+    #    0.029%p, 120일 최대 0.142%p — 작지만 0 은 아니다. 임펄스는 "실제로
+    #    흘러간 돈" 이라 빼지 않고, 대신 **오염 크기를 검사로 묶어둔다.**
+    dead = {c for c, nm in names.items() if nm.get("cap") is None}
+    worst_pol, where = 0.0, ""
+    for bk, B in (D.get("blocks") or {}).items():
+        win, mk = bk.split("|")
+        sel = mkts_all if mk == "전체" else [mk]
+        for r in B["rows"]:
+            if not r.get("cap_idx"):
+                continue
+            s = 0.0
+            for c in dead:
+                nm = names[c]
+                if nm.get("sector") != r["sector"] or nm.get("market") not in sel:
+                    continue
+                w = (nm.get("win") or {}).get(win)
+                if w:
+                    s += w.get("inst") or 0.0
+            pol = abs(s / r["cap_idx"] * 100)
+            if pol > worst_pol:
+                worst_pol, where = pol, f"{bk}/{r['sector']}"
+    chk("D", "상장이 끊긴 종목이 가속도를 오염시키는 폭 < 1%p", worst_pol < 1.0,
+        f"최대 {worst_pol:.5f}%p ({where}) · 해당 종목 {len(dead)}개")
+
+
+# ─────────────────────────────────────────────── E. 화면
+
+def layer_e(D: dict) -> None:
+    """E. **화면** — 페이로드가 맞아도 렌더가 틀릴 수 있다.
+
+    A~D 는 전부 파일 안의 숫자만 본다. 그런데 이 저장소가 실제로 낸 사고 중
+    여럿은 **그 숫자가 화면에 도달하는 길**에서 났다: 열 정의와 셀 개수가
+    어긋나 한 칸씩 밀리고, 한글이 두 칸인 걸 잊어 줄이 접히고, 검사는 폭 80
+    으로 묻는데 화면은 79 로 그렸다(`view_width` 가 그래서 생겼다).
+
+    그래서 렌더가 낸 **문자열을 다시 파싱해** 열 정의가 내는 값과 대조한다.
+    DB 가 없어도 돌고, 리포트 파일 하나만 있으면 된다.
+
+    ⚠️ 종목명·섹터명은 폭에 맞춰 `pad` 가 자른다(설계다). **숫자 열은 하나도
+    잘리면 안 된다** — `-1,360` 이 `-1` 로 보이는 것이 이 검사의 표적이다.
+    """
+    print("\nE. 화면 — 그려진 글자가 값과 같은가")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src"))
+    try:
+        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
+    except ImportError as e:                      # pragma: no cover
+        chk("E", "flow_view 를 읽을 수 있는가", False, str(e))
+        return
+
+    TEXT_COLS = {"섹터", "종목", "순매수상위[억]", "순매도상위[억]", ""}
+    bad_w, bad_v, seen = [], [], 0
+
+    def cells(line: str, widths: list[int], i: int) -> str:
+        a, w = FV.span_at(widths, i)
+        cur, buf = 0, []
+        for ch in line:
+            if a <= cur < a + w:
+                buf.append(ch)
+            cur += FV.cell_width(ch)
+        return "".join(buf).strip()
+
+    for term in (80, 120, 200):
+        width = FV.view_width(term)
+        for wi in range(len(FV.WINDOWS)):
+            for mi in range(3):
+                st = FV.State(D)
+                st.wi = wi
+                if mi >= len(st.markets):
+                    continue
+                st.mi = mi
+                seen += 1
+                lines, _thin, _nh = FV.table_lines(st, width, 50)
+                for ln in lines:
+                    if FV.cell_len(ln) != width:
+                        bad_w.append(f"표 {term}/{FV.WINDOWS[wi]}/{st.market} "
+                                     f"{FV.cell_len(ln)} != {width}")
+                cols = FV._fit(FV.table_cols(st, width), width)
+                widths = [c.width for c in cols]
+                for ln, r in zip(lines[1:], st.rows()):
+                    for i, c in enumerate(cols):
+                        want = c.fn(r, st).strip()
+                        if c.header in TEXT_COLS:
+                            continue
+                        if cells(ln, widths, i) != want:
+                            bad_v.append(f"{term}/{FV.WINDOWS[wi]}/{st.market} "
+                                         f"{c.header!r} {cells(ln, widths, i)!r} != {want!r}")
+                rows = st.rows()
+                for ri in ({0, len(rows) // 2, len(rows) - 1} if rows else set()):
+                    st.row = ri
+                    nl, _ = FV.names_lines(st, width)
+                    for ln in nl:
+                        if FV.cell_len(ln) != width:
+                            bad_w.append(f"종목 {term}/{FV.WINDOWS[wi]}/{st.market} "
+                                         f"{FV.cell_len(ln)} != {width}")
+                    ncols = FV._fit(FV.names_cols(), width)
+                    nwid = [c.width for c in ncols]
+                    for ln, t in zip(nl[2:], st.names()):
+                        for i, c in enumerate(ncols):
+                            if c.header in TEXT_COLS:
+                                continue
+                            want = c.fn(t, st).strip()
+                            if cells(ln, nwid, i) != want:
+                                bad_v.append(f"{term}/종목 {c.header!r} "
+                                             f"{cells(ln, nwid, i)!r} != {want!r}")
+                for ln in FV.header_lines(st, width) + FV.detail_lines(st, width):
+                    if FV.cell_len(ln) != width:
+                        bad_w.append(f"헤더/상세 {term} {FV.cell_len(ln)} != {width}")
+    chk("E", "모든 줄의 표시 폭 = view_width(터미널−1)", not bad_w,
+        f"{len(bad_w)}건  " + "; ".join(bad_w[:2]))
+    chk("E", "숫자 열: 그려진 글자 = 열 정의가 내는 값 (폭 80·120·200)", not bad_v,
+        f"{len(bad_v)}건  " + "; ".join(bad_v[:2]))
+    chk("E", "검사한 (폭,창,시장) 조합", seen >= 30, f"{seen}개")
+
+    # 종목 목록의 누적[%] — 단조증가하고 100 에서 끝난다.
+    bad = []
+    for wi in range(len(FV.WINDOWS)):
+        st = FV.State(D)
+        st.wi = wi
+        for ri in range(len(st.rows())):
+            st.row = ri
+            arr = [t["cum"] for t in st.names() if t.get("cum") is not None]
+            if not arr:
+                continue
+            if any(b < a - 1e-9 for a, b in zip(arr, arr[1:])):
+                bad.append(f"{FV.WINDOWS[wi]}/{ri} 단조증가 아님")
+            if abs(arr[-1] - 100.0) > 1e-6:
+                bad.append(f"{FV.WINDOWS[wi]}/{ri} 끝값 {arr[-1]}")
+    chk("E", "종목 누적[%] 이 단조증가하고 100 에서 끝나는가", not bad,
+        "; ".join(bad[:3]))
+
+    # 상대수익의 기준선이 **섹터 표의 그 수익률**과 같은 값인가.
+    bad = []
+    for wi, w in enumerate(FV.WINDOWS):
+        if w == "종합":
+            continue
+        st = FV.State(D)
+        st.wi = wi
+        for ri, r in enumerate(st.rows()):
+            st.row = ri
+            sret = r.get("ret")
+            for t in st.names()[:5]:
+                if t.get("rrel") is None or t.get("ret") is None:
+                    continue
+                if abs((t["ret"] - sret) - t["rrel"]) > TOL_EXACT:
+                    bad.append(f"{w}/{r['sector']}/{t['code']}")
+    chk("E", "상대수익 = 종목 수익률 − 섹터 표의 수익률", not bad, "; ".join(bad[:3]))
+
 
 def layer_c(D: dict, html: str) -> None:
     print("\nC. 계산 — 표의 구조와 값이 정합한가")
@@ -344,6 +704,225 @@ def layer_c(D: dict, html: str) -> None:
     chk("C", "전 블록 Inf/NaN 없음", not allbad, f"{len(allbad)}건")
 
 
+# ─────────────────────────────────────────────── F. 독립 재계산
+
+#: 페이로드가 반올림하는 자릿수에서 나오는 허용오차.
+#: 유량·거래대금은 0.01억(round(...,2)), 시총·가중은 0.1억, 수익률은 0.001%.
+#: **상대오차를 쓰지 않는다** — 섹터 합계가 0 근처인 칸(섬유/의류 +2.0억)에서
+#: 상대오차는 무의미하게 커진다. 반올림 폭에서 유도한 절대오차가 맞는 축이다.
+TOL_FLOW = 0.011
+TOL_CAP = 0.11
+TOL_RET = 0.0011
+
+
+def layer_f(P: dict, db: str | None) -> None:
+    """F. **독립 재계산** — DB 원자료에서 페이로드를 처음부터 다시 만든다.
+
+    A~E 는 전부 *페이로드 안의 값끼리* 정합한지를 본다. 그래서 `sector_flow.py`
+    가 임펄스를 통째로 잘못 계산해도(예: 수량을 금액으로 착각, `flu_rt` 의 bp
+    단위를 놓침 — 둘 다 이 저장소에서 실제로 사고를 낸 함정이다) A~E 는 전부
+    초록이다. 파생층이 그 틀린 값 위에서 일관될 뿐이기 때문이다.
+
+    그래서 여기서는 **`scripts/` 의 함수를 하나도 부르지 않고** SQL 로 다시
+    집계해 대조한다. 같은 버그를 두 번 통과시키지 않으려면 경로가 달라야 한다.
+
+    ⚠️ 두 함정을 재현 쪽에서도 명시한다.
+      · `supply_demand` 의 순매매는 **수량**이다 — 금액은 그날 종가를 곱해 만든다.
+      · `flu_rt` 는 **bp**(등락률×100)다 — 100 으로 나눠야 퍼센트다.
+    """
+    print("\nF. 독립 재계산 — DB 원자료에서 다시 만든 값과 같은가")
+    if not db:
+        print("       (--db-check 없음 — 건너뛴다)")
+        return
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src"))
+    from kr_quant.storage import connect  # noqa: PLC0415
+    con = connect(db)
+    pg = con.__class__.__module__.startswith("psycopg2")
+    ph = "%s" if pg else "?"
+    cur = con.cursor()
+    dates = P["dates"]
+    d0, d1 = dates[0], dates[-1]
+    n = len(dates)
+    SEC = "coalesce(nullif(st.sector,''),'(미분류)')"
+    SRC = f"s.source={ph} AND s.date BETWEEN {ph} AND {ph}"
+    args = ("kiwoom", d0, d1)
+
+    def cmp_abs(name, pairs, tol):
+        """(라벨, 페이로드값, 재계산값) 을 절대오차로 본다."""
+        bad, worst = [], 0.0
+        for label, x, y in pairs:
+            if x is None or y is None:
+                if (x is None) != (y is None):
+                    bad.append(f"{label} {x} vs {y}")
+                continue
+            worst = max(worst, abs(x - y))
+            if abs(x - y) > tol:
+                bad.append(f"{label} {x} vs {y}")
+        chk("F", name, not bad,
+            f"{len(bad)}/{len(pairs)} 불일치 · 최대오차 {worst:.3e}"
+            + ("  " + "; ".join(bad[:2]) if bad else ""))
+
+    # ── ① 유량 (시장,섹터,날짜) × 5값 ──
+    ACT = (("indiv", "individual"), ("forgn", "foreign_"),
+           ("inst", "institution"), ("etc", "etc_corp"))
+    sel = ", ".join([f"sum(s.{c} * 1.0 * abs(s.close))" for _k, c in ACT]
+                    + ["sum(s.acc_trde_qty * 1.0 * abs(s.close))"])
+    cur.execute(f"SELECT st.market, {SEC}, s.date, {sel} "  # noqa: S608
+                f"FROM supply_demand s JOIN stocks st ON st.code=s.code "
+                f"WHERE {SRC} GROUP BY 1,2,3", args)
+    keys = [k for k, _ in ACT] + ["tv"]
+    got = {}
+    for row in cur.fetchall():
+        for j, k in enumerate(keys):
+            got[(row[0], row[1], str(row[2]), k)] = float(row[3 + j]) / 1e8
+    pairs = []
+    for m in P["markets"]:
+        for s in P["sectors"]:
+            for k in keys:
+                arr = P["flows"][m][s][k]
+                for i, v in enumerate(arr):
+                    pairs.append((f"{m}/{s}/{k}/{dates[i]}", v,
+                                  got.get((m, s, dates[i], k), 0.0)))
+    cmp_abs("유량 일별 (시장×섹터×5값×거래일)", pairs, TOL_FLOW)
+
+    # ── ② 기관 세부 ──
+    det = sorted({k for m in P["detail"] for s in P["detail"][m]
+                  for k in P["detail"][m][s]})
+    if det:
+        sel = ", ".join(f"sum(s.{c} * 1.0 * abs(s.close))" for c in det)
+        cur.execute(f"SELECT st.market, {SEC}, s.date, {sel} "  # noqa: S608
+                    f"FROM supply_demand s JOIN stocks st ON st.code=s.code "
+                    f"WHERE {SRC} GROUP BY 1,2,3", args)
+        got = {}
+        for row in cur.fetchall():
+            for j, k in enumerate(det):
+                got[(row[0], row[1], str(row[2]), k)] = float(row[3 + j]) / 1e8
+        pairs = []
+        for m in P["markets"]:
+            for s in P["sectors"]:
+                for k in det:
+                    for i, v in enumerate(P["detail"][m][s][k]):
+                        pairs.append((f"{m}/{s}/{k}/{dates[i]}", v,
+                                      got.get((m, s, dates[i], k), 0.0)))
+        cmp_abs("기관 세부 일별", pairs, TOL_FLOW)
+
+    # ── ③ 섹터 시총(구간말) — daily_bars.close × 상장주식수(asof) ──
+    #    ⚠️ `supply_demand.close` 가 아니다. 이 DB 에서 둘은 같은 계열이 아니다
+    #    (storage.market_cap_asof_bulk 가 실측으로 확인한 함정).
+    CAP = ("b.close * 1.0 * (SELECT h.shares_outstanding "
+           "FROM shares_outstanding_history h "
+           "WHERE h.code=q.code AND h.date<=b.date ORDER BY h.date DESC LIMIT 1)")
+    cur.execute(f"SELECT st.market, {SEC}, sum({CAP}) "   # noqa: S608
+                f"FROM (SELECT DISTINCT s.code FROM supply_demand s "
+                f"      JOIN stocks st2 ON st2.code=s.code WHERE {SRC}) q "
+                f"JOIN stocks st ON st.code=q.code "
+                f"JOIN daily_bars b ON b.code=q.code AND b.date={ph} "
+                f"GROUP BY 1,2", (*args, d1))
+    got = {(r[0], r[1]): float(r[2]) / 1e8 for r in cur.fetchall()}
+    pairs = [(f"{m}/{s}", P["cap"].get(m, {}).get(s), got.get((m, s)))
+             for m in P["markets"] for s in P["sectors"]
+             if P["cap"].get(m, {}).get(s) is not None or (m, s) in got]
+    cmp_abs("섹터 시총 (구간말)", pairs, TOL_CAP)
+
+    # ── ④ 섹터 일별 수익률 — **전일** 시총 가중. flu_rt 는 bp 다. ──
+    lag = ("lag(cap) OVER (PARTITION BY code ORDER BY date)" if pg
+           else "lag(cap) OVER (PARTITION BY code ORDER BY date)")
+    cur.execute(f"""
+      WITH cd AS (
+        SELECT s.code, s.date, s.flu_rt,
+               b.close * (SELECT h.shares_outstanding
+                          FROM shares_outstanding_history h
+                          WHERE h.code=s.code AND h.date<=s.date
+                          ORDER BY h.date DESC LIMIT 1) AS cap
+        FROM supply_demand s
+        JOIN stocks st ON st.code=s.code
+        LEFT JOIN daily_bars b ON b.code=s.code AND b.date=s.date
+        WHERE {SRC}),
+           w AS (SELECT code, date, flu_rt, {lag} AS cap_lag FROM cd)
+      SELECT st.market, {SEC}, w.date,
+             sum(w.flu_rt/100.0 * w.cap_lag/1e8), sum(w.cap_lag/1e8)
+      FROM w JOIN stocks st ON st.code=w.code
+      WHERE w.cap_lag IS NOT NULL
+      GROUP BY 1,2,3""", args)  # noqa: S608
+    gr, gw = {}, {}
+    for m, s, dt, num, den in cur.fetchall():
+        gr[(m, s, str(dt))] = float(num) / float(den) if den else 0.0
+        gw[(m, s, str(dt))] = float(den)
+    pairs_r, pairs_w = [], []
+    for m in P["markets"]:
+        for s in P["sectors"]:
+            for i, d in enumerate(dates):
+                pairs_r.append((f"{m}/{s}/{d}", P["ret"][m][s][i], gr.get((m, s, d), 0.0)))
+                pairs_w.append((f"{m}/{s}/{d}", P["retw"][m][s][i], gw.get((m, s, d), 0.0)))
+    cmp_abs("섹터 일별 수익률 (전일 시총 가중)", pairs_r, TOL_RET)
+    cmp_abs("섹터 일별 가중합", pairs_w, TOL_CAP)
+
+    # ── ⑤ 종목 창별 집계 ──
+    wins = sorted({int(w) for r in P["names"].values() for w in (r.get("win") or {})})
+    WK = [("inst", "institution"), ("forgn", "foreign_"), ("indiv", "individual"),
+          ("etc", "etc_corp"), ("tv", "acc_trde_qty"),
+          ("invtrt", "invtrt"), ("penfnd_etc", "penfnd_etc")]
+    for win in wins:
+        if win > n:
+            continue
+        start = dates[n - win]
+        sel = ", ".join(f"sum(s.{c} * 1.0 * abs(s.close))" for _k, c in WK)
+        cur.execute(f"SELECT s.code, {sel} FROM supply_demand s "  # noqa: S608
+                    f"JOIN stocks st ON st.code=s.code WHERE {SRC} GROUP BY 1",
+                    ("kiwoom", start, d1))
+        got = {r[0]: [float(v) / 1e8 for v in r[1:]] for r in cur.fetchall()}
+        pairs = []
+        for c, r in P["names"].items():
+            w = (r.get("win") or {}).get(str(win))
+            if not w:
+                continue
+            g = got.get(c)
+            for j, (k, _col) in enumerate(WK):
+                pairs.append((f"{c}/{win}/{k}", w.get(k),
+                              None if g is None else g[j]))
+        cmp_abs(f"종목 {win}일 집계", pairs, TOL_CAP)
+
+    # 종목 구간 수익률 — 일별 등락률의 **기하** 누적(결측일은 0).
+    cur.execute(f"SELECT s.code, s.date, s.flu_rt FROM supply_demand s "  # noqa: S608
+                f"JOIN stocks st ON st.code=s.code WHERE {SRC}", args)
+    fr = {}
+    for c, dt, v in cur.fetchall():
+        fr[(c, str(dt))] = float(v) / 100.0
+    pairs = []
+    for win in wins:
+        if win > n:
+            continue
+        span = dates[n - win:]
+        for c, r in P["names"].items():
+            w = (r.get("win") or {}).get(str(win))
+            if not w or w.get("ret") is None:
+                continue
+            acc = 1.0
+            for d in span:
+                acc *= 1.0 + fr.get((c, d), 0.0) / 100.0
+            pairs.append((f"{c}/{win}/ret", w["ret"], (acc - 1.0) * 100.0))
+    cmp_abs("종목 구간 수익률 (기하누적)", pairs, 0.011)
+
+    # ── ⑥ 유니버스의 **폭** — 이 화면이 못 보는 종목이 몇 개인가. ──
+    #
+    # 이 리포트는 개인·기관세부가 키움 소스에만 있어 `sources=("kiwoom",)` 로
+    # 유니버스를 좁히고, `stocks`(현재 상장 마스터)와 INNER JOIN 한다. 그래서
+    # 구간 안에 거래가 있었지만 지금은 마스터에 없는 종목이 통째로 빠진다.
+    # 이건 심사 성적이 아니라 **관측 화면의 한계**라 실패로 만들지 않는다 —
+    # 다만 조용히 두지 않는다. `docs/GUARDRAILS.md` §4.1 이 다루는 생존편향의
+    # 거울상이고, 폭이 갑자기 커지면 수집 쪽에 문제가 생겼다는 신호다.
+    cur.execute(f"SELECT count(DISTINCT s.code) FROM supply_demand s "  # noqa: S608
+                f"WHERE s.date BETWEEN {ph} AND {ph} AND s.code NOT IN "
+                f"(SELECT code FROM stocks)", (d0, d1))
+    outside = cur.fetchone()[0]
+    inside = len(P["names"])
+    chk("F", "유니버스 밖(마스터에 없는) 종목 비중 < 20%",
+        outside < 0.2 * max(inside, 1),
+        f"밖 {outside}종목 / 안 {inside}종목 = {outside/max(inside,1)*100:.1f}%")
+    con.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="리포트 폴더(numbers.html·payload.json)")
@@ -363,6 +942,9 @@ def main() -> int:
     layer_b(payload, a.db if a.db_check else None)
     layer_c(D, html)
     layer_d(D, payload, html)
+    layer_e(D)
+    if a.db_check:
+        layer_f(payload, a.db)
 
     print(f"\n검사 {CHECKS}건 · 실패 {len(FAILS)}건")
     if FAILS:
