@@ -1892,3 +1892,35 @@ def test_a_quiet_day_is_not_called_an_old_report(data):
         for w in nmv["win"].values():
             w["invtrt"] = w["penfnd_etc"] = w["ret"] = 0.0
     assert not State(d).legacy_names
+
+
+def test_participation_is_never_shown_without_its_liquidity_partner():
+    """`참여율[%]` 이 보이면 `거래대금[억]` 도 보여야 한다 — 어느 폭에서도.
+
+    참여율은 순매수 ÷ 거래대금이라 **비율이다.** 혼자서는 "살 수 있는가" 를 못
+    답한다. 실측(2026-08-28, 20일): 참여율 11~14% 구간에 DB금융스팩12호(거래대금
+    3억)와 삼성SDI(43,543억)가 같이 있다 — 유동성이 14,000배 다른데 같은 칸에
+    비슷한 숫자가 뜬다. 짝이 없으면 살 수 없는 종목이 상단에 섞인다.
+
+    예전 순서는 참여율(102) → 시총대비(115) → 시총(129) → 거래대금(143) 이라
+    폭 120 터미널에서 참여율만 보이고 거래대금이 안 보였다.
+    """
+    from kr_quant.tui.flow_view import fit_names, view_width
+
+    for w in range(40, 220):
+        heads = [c.header for c in fit_names(view_width(w))]
+        if "참여율[%]" in heads:
+            assert "거래대금[억]" in heads, (
+                f"폭 {w}: 참여율은 보이는데 거래대금이 없다 — {heads}")
+
+
+def test_liquidity_pair_is_adjacent():
+    """참여율과 거래대금은 **붙어 있어야** 한 쌍으로 읽힌다.
+
+    사이에 다른 열이 끼면 눈이 둘을 짝으로 안 본다. 이 검사가 없으면 나중에
+    누가 열을 하나 끼워 넣어도 위 검사는 통과한다(둘 다 보이기는 하므로).
+    """
+    from kr_quant.tui.flow_view import names_cols
+
+    heads = [c.header for c in names_cols()]
+    assert heads.index("거래대금[억]") == heads.index("참여율[%]") + 1, heads

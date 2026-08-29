@@ -864,18 +864,54 @@ _NAME_COLS = (
     Col(COL_PENFND, 10, True, lambda t, st: fmt_amt(t.get("penfnd"))),
     Col("상대수익[%p]", 12, True, lambda t, st: fmt_pct(t.get("rrel"), 1)),
     Col("최근집중[%]", 11, True, lambda t, st: fmt_conc(t.get("conc"))),
+    # 참여율과 거래대금은 **붙어 있어야 한다.** 참여율은 비율이라 혼자서는
+    # "살 수 있는가" 를 못 답한다 — 실측: 참여율 11~14% 구간에 DB금융스팩12호
+    # (20일 거래대금 3억) 와 삼성SDI(43,543억) 가 같이 있다. 유동성이 14,000배
+    # 다른데 같은 칸에 같은 숫자가 뜬다. 참여율만 보고 "기관이 장악했다" 로 읽으면
+    # 살 수 없는 종목이 상단에 섞인다.
+    #
+    # 그래서 예전 순서(참여율 → 시총대비 → 시총 → 거래대금)에서 거래대금을
+    # 앞으로 당겼다. 시총대비는 섹터를 이미 고른 뒤에는 대체로 **작은 종목을 위로
+    # 올리는 재정렬**이라(상위 10 에 GS건설 옆으로 모비릭스 시총 329억이 온다)
+    # 뒤로 밀어도 잃는 것이 적다. 시총은 시총대비의 분모라 그 옆에 둔다.
     Col("참여율[%]", 9, True, lambda t, st: fmt_pct(t.get("part"), 1)),
+    Col("거래대금[억]", 13, True,
+        lambda t, st: fmt_amt(t.get("tv")).replace("+", "")),
     Col("시총대비[%p]", 12, True,
         lambda t, st: fmt_pct(t["a"]) if t.get("a") is not None else "—"),
     Col("시총[억]", 13, True,
         lambda t, st: fmt_amt(t["cap"]).replace("+", "") if t.get("cap") else "—"),
-    Col("거래대금[억]", 13, True,
-        lambda t, st: fmt_amt(t.get("tv")).replace("+", "")),
 )
 
 
 def names_cols() -> list[Col]:
     return list(_NAME_COLS)
+
+
+#: 혼자 남으면 **오해를 만드는** 열 → 그 열이 뜻을 가지려면 같이 있어야 하는 열.
+#: 폭이 모자라 짝이 떨어지면 앞의 것도 같이 뺀다.
+#:
+#: `참여율[%]` 은 순매수 ÷ 거래대금이라 비율이다. 분모를 못 보면 "기관이 이 종목
+#: 거래의 13% 를 먹었다" 가 살 수 있다는 뜻인지 알 수 없다 — 실측(2026-08-28,
+#: 20일): 참여율 11~14% 구간에 DB금융스팩12호(거래대금 3억)와 삼성SDI(43,543억)가
+#: 같이 있다. 유동성이 14,000배 다른데 화면에는 같은 숫자만 남는다.
+#:
+#: "덜 보여준다" 가 아니라 **틀리게 읽힐 칸을 안 만든다** 는 규칙이다. 이 저장소가
+#: 얇은 섹터·정렬 없는 화면·뜻을 잃은 비율에서 이미 같은 선택을 했다.
+COL_PAIRS = (("참여율[%]", "거래대금[억]"),)
+
+
+def fit_names(width: int) -> list[Col]:
+    """폭에 들어가는 종목 열 — :data:`COL_PAIRS` 의 짝은 통째로 남거나 통째로 빠진다.
+
+    ``width`` 는 **뷰 폭**이다(:func:`view_width` 를 이미 통과한 값). 앱이 한 번
+    빼고 여기서 또 빼면 한 칸씩 좁아진다 — 그 −1 이 두 곳에 있어서 난 버그를
+    방금 고쳤으므로 같은 실수를 반대 방향으로 만들지 않는다.
+    """
+    cols = _fit(names_cols(), width)
+    heads = [c.header for c in cols]
+    drop = {a for a, b in COL_PAIRS if a in heads and b not in heads}
+    return [c for c in cols if c.header not in drop]
 
 
 def name_sort_span(st: State) -> tuple[int, int] | None:
@@ -1008,7 +1044,7 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
         note = " · 옛 리포트(새 열 없음)"
         if cell_len(title + note) + 1 <= width:
             title += note
-    cols = _fit(names_cols(), width)
+    cols = fit_names(width)
     head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
     out = [pad(title, width), head]
     for t in names:
