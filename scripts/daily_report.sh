@@ -35,10 +35,30 @@ if [ -z "$ASOF" ]; then
 fi
 
 DEST="$OUT_ROOT/$ASOF"
-if [ -d "$DEST" ] && [ -f "$DEST/numbers.html" ]; then
+# 건너뛰기는 **데이터**가 그대로일 때를 위한 것이다(휴장일 재실행). 리포트에 실리는
+# 값이 늘어났을 때는 데이터가 같아도 다시 만들어야 하는데, 그럴 방법이 없었다 —
+# 열을 추가하고 나서 사용자 화면에 새 열이 통째로 비어 있었고, 원인은 코드가 아니라
+# 폴더가 이미 있어서 이 배치가 조용히 건너뛴 것이었다. 다음 거래일까지 그 상태로
+# 남는다. KR_QUANT_FORCE=1 로 그 문을 연다.
+if [ -d "$DEST" ] && [ -f "$DEST/numbers.html" ] && [ -z "${KR_QUANT_FORCE:-}" ]; then
   echo "[$(date '+%F %T')] $ASOF 리포트가 이미 있다 — 건너뛴다(휴장일이거나 재실행)."
+  echo "    리포트 형식이 바뀌어 다시 만들려면: KR_QUANT_FORCE=1 $0"
   exit 0
 fi
+
+# 강제 재생성은 **옆에 짓고 마지막에 바꿔 끼운다.** 제자리에 덮어쓰면 5분 남짓
+# 동안 폴더 안에 새 payload 와 옛 numbers.html 이 섞여 있고, 그 사이에 kq-flow 를
+# 띄운 사람은 어느 쪽도 아닌 화면을 본다. 실패하면 옛 리포트가 그대로 남는다.
+BUILD="$DEST"
+SWAP=""
+if [ -d "$DEST" ]; then
+  BUILD="$DEST.building.$$"
+  SWAP="1"
+  rm -rf "$BUILD"
+  echo "[$(date '+%F %T')] $ASOF 리포트를 **다시** 만든다(KR_QUANT_FORCE) — 옆에 짓고 바꿔 낀다"
+fi
+DEST_FINAL="$DEST"
+DEST="$BUILD"
 
 mkdir -p "$DEST"
 echo "[$(date '+%F %T')] 생성 시작 — 기준일 $ASOF, 구간 ${DAYS}거래일"
@@ -57,6 +77,15 @@ else
   cp "$DEST/VERIFY.txt" "$DEST/VERIFY_FAILED.txt"
   echo "[$(date '+%F %T')] ⚠️ 검증 실패 — $DEST/VERIFY_FAILED.txt 확인" >&2
   tail -5 "$DEST/VERIFY.txt" >&2
+fi
+
+if [ -n "$SWAP" ]; then
+  OLD="$DEST_FINAL.replaced.$$"
+  mv "$DEST_FINAL" "$OLD"
+  mv "$DEST" "$DEST_FINAL"
+  rm -rf "$OLD"
+  DEST="$DEST_FINAL"
+  echo "[$(date '+%F %T')] 바꿔 끼웠다 — $DEST"
 fi
 
 ln -sfn "$DEST" "$OUT_ROOT/latest"

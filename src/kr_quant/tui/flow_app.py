@@ -28,7 +28,8 @@ from kr_quant.tui.flow_view import (
     NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
     detail_lines, detail_title_span, footer_line, header_lines, help_lines,
     hint_desc, hint_line,
-    is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for)
+    is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for,
+    view_width)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -315,7 +316,9 @@ def hint_text(st: State, width: int = 200) -> str:
 def _draw(scr, st: State) -> None:
     scr.erase()
     h, w = scr.getmaxyx()
-    w = max(w - 1, 1)
+    # curses 는 오른쪽 아래 칸에 쓰면 스크롤을 유발해 터진다 — 마지막 칸은 비운다.
+    # 그 −1 은 뷰의 열 배치 검사도 알아야 하므로 규칙은 flow_view 에 하나만 둔다.
+    w = view_width(w)
 
     col = _COLORED
 

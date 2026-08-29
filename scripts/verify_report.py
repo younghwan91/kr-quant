@@ -149,9 +149,29 @@ def layer_b(payload: dict, db: str | None) -> None:
     # 종목은 일별 배열이 아니라 **구간별 집계**를 싣는다(전 종목을 실으면서 바뀜).
     wins = {w for r in nm.values() for w in (r.get("win") or {})}
     chk("B", "종목 구간 집계 존재", bool(wins), f"구간 {sorted(wins, key=int)}")
-    chk("B", "종목 집계에 5개 값이 다 있는가",
-        all(set(v) >= {"inst", "forgn", "indiv", "etc", "tv"}
-            for r in nm.values() for v in (r.get("win") or {}).values()))
+    # 화면이 그리는 종목 값 — **새 열을 추가하면 여기에 이름을 적어라.**
+    # producer 가 조용히 빠뜨리면 화면은 `—` 로 예쁘게 뜨고 아무도 모른다.
+    # `invtrt`·`penfnd_etc` 는 기관 세부(투신·연기금), `ret` 은 구간 수익률로
+    # 상대수익 열의 분자다.
+    NAME_WIN_KEYS = {"inst", "forgn", "indiv", "etc", "tv",
+                     "invtrt", "penfnd_etc", "ret"}
+    lack = sorted({k for r in nm.values() for v in (r.get("win") or {}).values()
+                   for k in NAME_WIN_KEYS - set(v)})
+    chk("B", "종목 집계에 화면이 그리는 값이 다 있는가", not lack, f"없는 키 {lack}")
+    # 투신·연기금이 **실제로 값을 갖는가.** 키만 있고 전부 0 이면 열이 두 줄
+    # 늘고 정보는 0 이다(`natn` 이 정확히 그 모양이라 INST_DETAIL 에서 뺐다).
+    for k in ("invtrt", "penfnd_etc"):
+        live = sum(1 for r in nm.values()
+                   if any((v.get(k) or 0) for v in (r.get("win") or {}).values()))
+        chk("B", f"{k} 가 0 이 아닌 종목 수", live >= len(nm) * 0.2,
+            f"{live}/{len(nm)}종목")
+    # 종목 수익률은 등락률의 기하누적이라 −100% 아래로 못 내려간다.
+    bad_ret = [f"{c}/{w}={(v or {}).get('ret'):.1f}"
+               for c, r in nm.items() for w, v in (r.get("win") or {}).items()
+               if (v or {}).get("ret") is not None
+               and not (-100.0 <= (v or {}).get("ret") < 1e6)]
+    chk("B", "종목 구간수익률이 −100% 아래로 안 내려가는가", not bad_ret,
+        "; ".join(bad_ret[:3]))
     # 섹터 종목 수가 n_by_sector 와 맞는가 — 전 종목을 싣는다는 주장의 검사다.
     from collections import Counter
     cnt = Counter((r["market"], r["sector"]) for r in nm.values())

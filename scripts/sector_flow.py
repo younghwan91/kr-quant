@@ -232,14 +232,36 @@ def build_payload(df: pd.DataFrame, dates: list[str], caps: pd.DataFrame,
             "cap": (round(float(ncap), 1) if ncap is not None and ncap == ncap else None),
             "win": {},
         }
+    # 창별 종목 집계에 실리는 값. 4주체·거래대금에 더해:
+    #
+    # * ``invtrt``·``penfnd_etc`` — 기관 세부 중 **투신·연기금**. 기관 총액이 같아도
+    #   이 둘이 채운 것과 금투(증권사 자기매매 — 헤지·차익이 섞여 방향성이 약하다)가
+    #   채운 것은 다른 이야기인데, `inst` 한 덩어리에는 그 구분이 없다. 실측(20거래일):
+    #   SK하이닉스 기관 −13,157억인데 투신 +1,549 · 연기금 +4,614 · 금투 −22,611 이다.
+    #   원본 `df` 에 이미 종목·일별로 실려 있고 `load()` 에서 종가 환산까지 끝났으므로
+    #   집계 대상에 이름만 더하면 된다. 2,645종목 × 4창 × 2값이라 크기는 미미하다.
+    # * ``ret`` — 그 구간의 종목 수익률(%). 화면의 `상대수익` 이 이것에서 섹터
+    #   수익률을 빼서 "섹터는 갔는데 이건 안 갔다" 를 직접 답한다.
+    _WIN_KEYS = ("inst", "forgn", "indiv", "etc", "tv", "invtrt", "penfnd_etc")
     for win in NAME_WINDOWS:
         if win > n:
             continue
         sub = df[df["date"] >= dates[n - win]]
-        agg = sub.groupby("code")[["inst", "forgn", "indiv", "etc", "tv"]].sum()
+        agg = sub.groupby("code")[list(_WIN_KEYS)].sum()
+        # **기하** 누적이다. 일별 등락률을 그냥 더하면 120일 구간에서 실제와 크게
+        # 벌어진다(+10% 와 −10% 를 더하면 0 이지만 실제는 −1%). 결측일은 0 으로
+        # 본다 — 그날 거래가 없었다는 뜻이고, 빼면 구간 길이가 종목마다 달라진다.
+        #
+        # ⚠️ `df["ret"]` 은 **퍼센트**다(flu_rt 가 bp 라 100 으로 나눈 결과). 분수로
+        # 착각해 1+ret 를 곱하면 하루 +2.5% 가 +250% 가 되어 20일 누적이 1e14 로
+        # 튄다 — 실제로 한 번 그렇게 냈고 verify_report 의 −100% 하한이 잡았다.
+        rr = (sub.assign(_r=1.0 + sub["ret"].fillna(0.0) / 100.0)
+                 .groupby("code")["_r"].prod() - 1.0) * 100.0
         for code, r in agg.iterrows():
-            names[code]["win"][str(win)] = {
-                k: round(float(r[k]), 1) for k in ("inst", "forgn", "indiv", "etc", "tv")}
+            w = {k: round(float(r[k]), 1) for k in _WIN_KEYS}
+            v = rr.get(code)
+            w["ret"] = round(float(v), 2) if v is not None and v == v else None
+            names[code]["win"][str(win)] = w
 
     # 참고용 자체 계산(전일 시총 가중). 화면의 수익률은 KRX 업종지수를 쓴다 —
     # 아래 값은 지수가 없는 섹터의 폴백이자 대조용이다.
