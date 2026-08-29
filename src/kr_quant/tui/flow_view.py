@@ -228,7 +228,7 @@ class State:
         """섹터 → 그 주체의 순매수/순매도 1위. 표의 견인주가 종목 목록과
         같은 집합에서 나오도록 `names` 에서 직접 뽑는다(페이로드의 top 은
         기관 전용이고 집계 대상도 미묘하게 달랐다)."""
-        win = self.window if self.window != "종합" else "20"
+        win = self.window if self.window != "종합" else self.COMBINED_WIN
         ck = (win, self.market, self.actor)
         if getattr(self, "_lead_ck", None) == ck:
             return self._lead_v
@@ -286,13 +286,55 @@ class State:
         self._rows_ck, self._rows_v = ck, out
         return out
 
+    #: 종합 화면이 4주체를 볼 때 쓰는 **대표 창**. 견인주(`_leads`)가 이미 같은
+    #: 선택을 하고 있고 드릴다운도 그렇다 — 한 화면 안에서 규칙이 하나여야 한다.
+    COMBINED_WIN = "20"
+
+    def _actor_sums(self) -> dict:
+        """섹터 → 4주체 순매수 합 [억]. **종합 화면 전용**이다.
+
+        종합 블록(`combined`)에는 주체별 값이 없다 — 5·20·60·120 을 G **순위**로
+        섞은 축이라 "그 구간의 순매수" 라는 것이 정의되지 않는다. 그래서 상세
+        패널의 4주체 줄이 종합에서만 `— — — —` 였다.
+
+        답을 페이로드에 새로 싣는 대신 **화면이 종목에서 더한다**. 이유가 셋이다.
+        (i) 이 화면의 견인주가 이미 그렇게 한다(`_leads`, 같은 `COMBINED_WIN`) —
+        같은 사실을 두 곳에서 다르게 구하면 갈라진다. (ii) 리포트 스키마를
+        안 건드리므로 **이미 만들어 둔 리포트가 그대로 고쳐진다.**
+        (iii) 실측으로 값이 맞는다 — 20일 블록의 주체값과 비교해 최대 차이가
+        1억 미만이고(종목별 반올림), 부호·자릿수는 전부 같다.
+
+        어느 창인지는 **화면에 적는다**(`_actors_line` 의 꼬리표). 안 적으면
+        "종합인데 왜 20일 값이냐" 를 물을 자리가 없다.
+        """
+        ck = (self.COMBINED_WIN, self.market)
+        if getattr(self, "_asum_ck", None) == ck:
+            return self._asum_v
+        mkts = [self.market] if self.market != "전체" else self.markets[1:]
+        out: dict = {}
+        for _code, nm in (self.d.get("names") or {}).items():
+            if nm.get("market") not in mkts:
+                continue
+            w = (nm.get("win") or {}).get(self.COMBINED_WIN)
+            if not w:
+                continue
+            a = out.setdefault(nm.get("sector"), {})
+            for key, _ko in ACTORS:
+                v = w.get(key)
+                if v is not None:
+                    a[key] = a.get(key, 0.0) + v
+        self._asum_ck, self._asum_v = ck, out
+        return out
+
     def _rows_uncached(self) -> list[dict]:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
             if not c:
                 return []
             leads = self._leads()
-            return [dict(r, top=leads.get(r.get("sector"))) for r in c["rows"]]
+            sums = self._actor_sums()
+            return [dict(r, top=leads.get(r.get("sector")),
+                         **sums.get(r.get("sector"), {})) for r in c["rows"]]
         b = self.d["blocks"].get(f"{self.window}|{self.market}")
         if not b:
             return []
@@ -667,8 +709,12 @@ def detail_lines(st: State, width: int) -> list[str]:
     # 도 `x` 가 아니라 `|x|` 와의 순위상관이고 k>0 인 한에서만 성립한다.
     # 그런데 이 화면의 논지는 방향이 핵심이라(`G_pass` 가 x>0 을 요구한다),
     # 방향을 지운 값이 무슨 질문에 답하는지가 불분명하다. 정렬 열로는 남는다.
+    # 종합은 창을 섞은 축이라 4주체가 **대표 창(20일)** 값이다 — 그 사실을 줄에
+    # 적는다. 안 적으면 위 표(종합)와 이 줄(20일)이 다른 것을 말하는데 화면은
+    # 같은 것처럼 보인다.
+    note = " · 20일 기준" if st.window == "종합" else ""
     return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
-            pad(_actors_line(r, width), width),
+            pad(_actors_line(r, width, note), width),
             pad(side("buy", "순매수 상위"), width),
             pad(side("sell", "순매도 상위"), width)]
 
@@ -682,7 +728,7 @@ _ACTORS_TIERS = (
 _ACTOR_KEY = dict((ko, k) for k, ko in ACTORS)
 
 
-def _actors_line(r: dict, width: int) -> str:
+def _actors_line(r: dict, width: int, note: str = "") -> str:
     """선택 섹터의 **4주체 순매수 분해**를 한 줄에 — 표에 없는 나머지 셋까지.
 
     화면이 한 번에 한 주체만 보여주므로 "기관이 팔았다" 까지는 알아도
@@ -705,9 +751,11 @@ def _actors_line(r: dict, width: int) -> str:
             v = r.get(_ACTOR_KEY[ko])
             parts.append(f"{ko} {fmt_amt(v)}" if v is not None else f"{ko} —")
         # 앞의 공백 한 칸은 다른 패널 줄과 들여쓰기를 맞추는 것이다.
-        line = " " + " · ".join(parts) + " [억]"
+        line = " " + " · ".join(parts) + " [억]" + note
         if cell_len(line) + 1 <= width:
             return line
+    # 꼬리표는 값이 하나라도 보이는 동안 안 뗀다 — 그건 장식이 아니라 **어느 창의
+    # 값인가** 다. 반대로 값이 하나도 안 보이면 꼬리표도 뜻이 없다.
     return " —"
 
 
@@ -722,7 +770,10 @@ def names_lines(st: State, width: int) -> tuple[list[str], int]:
     if not r:
         return [pad(" (섹터를 고르라)", width)], 1
     names = st.names()
-    title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {st.window}일 기준"
+    # 종합에서 Enter 를 누르면 나오는 목록은 **20일** 이다(`State.names`). 예전엔
+    # 제목이 `종합일 기준` 이라고 적어서, 화면이 스스로 없는 구간을 말했다.
+    win_note = ("20일 기준(종합)" if st.window == "종합" else f"{st.window}일 기준")
+    title = (f" {r.get('sector','—')} · 종목 {len(names)}개 · {win_note}"
              f" · 정렬[{NAME_SORTS[st.nsi][1]}]")
     cols = _fit(names_cols(), width)
     head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
