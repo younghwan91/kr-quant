@@ -525,3 +525,315 @@ def test_no_screen_shows_markdown_asterisks(data):
                 assert lines, "화면이 비었다 — 검사가 헛돈다"
                 assert "**" not in "".join(lines), (
                     f"화면{vi}·폭{width} 에 마크다운 강조가 나온다")
+
+
+# ---------------------------------------------------------------- 도움말 · 힌트
+
+def _help_raw(entry) -> str:
+    """도움말 한 줄을 **자르기 전** 원문으로 조립한다.
+
+    ⚠️ `help_body` 의 출력으로는 잘림을 못 잡는다 — `pad` 가 넘치면 자르고
+    모자라면 채워서 **모든 줄이 정확히 width 칸**이 되기 때문이다. flow 쪽
+    `test_help_body_is_not_truncated_at_the_default_ssh_width` 와 같은 수법이다.
+    """
+    from kr_quant.tui.flow_view import pad
+    from kr_quant.tui.ledger_view import HELP_LABEL_W
+
+    name, desc = entry
+    body = desc.replace("**", "")               # 렌더가 떼는 강조 표기
+    return ((pad(name, HELP_LABEL_W, right=True) + "  " + body) if name
+            else ("   " + body))
+
+
+def test_ledger_help_body_is_not_truncated_at_the_default_ssh_width():
+    """도움말은 **읽으러 연 화면**이다. 폭 80(SSH 기본)에서 문장이 끊기면
+    고칠 곳이 화면에 안 보인다.
+
+    주입: LEDGER_HELP 의 아무 설명에나 몇 글자를 붙이거나 HELP_LABEL_W 를 키우면
+    원문이 80칸을 넘어 실패한다.
+    """
+    from kr_quant.tui.ledger_view import HELP_LABEL_W, LEDGER_HELP
+
+    over = [(_cw(_help_raw(e)), _help_raw(e)) for e in LEDGER_HELP
+            if _cw(_help_raw(e)) > 80]
+    assert not over, "폭 80 에서 잘리는 도움말 줄: " + repr(over)
+    # 라벨도 잘리면 안 된다 — flow 는 지금 `순매수상위[억]` 이 `순매수상위` 로
+    # 잘려 있다(라벨 폭 10). 원장은 그걸 반복하지 않는다.
+    long_labels = [n for n, _ in LEDGER_HELP if _cw(n) > HELP_LABEL_W]
+    assert not long_labels, f"라벨이 {HELP_LABEL_W}칸을 넘어 잘린다: {long_labels}"
+
+
+def test_help_explains_every_column_the_screens_draw():
+    """화면에 보이는 열은 **전부** 도움말에 있어야 한다.
+
+    기대값을 도움말에서 가져오면 동어반복이다. 그래서 열 이름을 **화면을 그리는
+    코드**(`ledger_cols`)와 전개 화면의 열에서 뽑는다.
+
+    주입: `LEDGER_HELP` 에서 `최대1일[%]` 항목을 지우면 실패한다. 열을 새로
+    추가하고 설명을 안 써도 실패한다 — 그게 이 검사의 목적이다.
+    """
+    from kr_quant.tui.ledger_view import _SORT_HELP, LEDGER_HELP
+
+    named = {n for n, _ in LEDGER_HELP if n}
+    cols = [c[0] for c in ledger_cols() if c[0]]
+    cols += ["누적[억]", "진폭[억]"]          # 전개 화면의 열
+    missing = [c for c in cols if c not in named]
+    assert not missing, f"열이 화면에 있는데 도움말에 없다: {missing}"
+    # 얇은 섹터 마커는 이름이 없는 1칸 열이라 위 목록에 안 잡힌다. flow 도움말에는
+    # 있는데 원장에는 없었다 — 같은 글자, 같은 제품, 한쪽만 설명하면 안 된다.
+    assert "~" in named, "~ 마커 설명이 없다"
+    # 정렬 키도 전부 — `절대크기` 는 열이 없어서 특히 빠지기 쉽다.
+    for key, _ko in SORTS:
+        if key in _SORT_HELP:
+            assert _SORT_HELP[key] in named, f"정렬 {key} 의 설명이 없다"
+
+
+def test_help_documents_every_key_the_app_handles():
+    """앱이 처리하는 글자 키는 전부 도움말에 적혀 있어야 한다.
+
+    기대 목록을 손으로 적으면 키를 늘렸을 때 검사가 조용히 뒤처진다. 그래서
+    `ledger_app._key` 의 **소스에서** `ord("x")` 를 긁어 온다.
+
+    주입: `_key` 에 새 키 분기를 넣고 도움말에 안 적으면 실패한다.
+    """
+    import inspect
+    import re
+
+    from kr_quant.tui import ledger_app
+    from kr_quant.tui.ledger_view import LEDGER_HELP
+
+    src = inspect.getsource(ledger_app._key)
+    keys = {m for m in re.findall(r'ord\("(.)"\)', src)} - {" "}
+    assert len(keys) >= 10, f"키를 못 긁었다 — 검사가 헛돈다: {keys}"
+    text = "\n".join(f"{n} {d}" for n, d in LEDGER_HELP)
+    missing = [k for k in sorted(keys) if k not in text]
+    assert not missing, f"앱이 처리하는데 도움말에 없는 키: {missing}"
+
+
+def test_question_mark_opens_help_and_q_closes_it_without_quitting(data):
+    """`?` 는 도움말이고, 거기서 `q` 는 **닫기**지 종료가 아니다.
+
+    키를 배우러 연 화면에서 확인 없이 앱이 끝나면 안 된다 — `kq-flow` 와 같은
+    규칙이라야 두 앱에서 다른 손버릇을 안 배운다.
+
+    주입: `_key` 의 `?` 를 예전처럼 `mo.vi = _LIMITS_VI` 로 되돌리면 첫 단언에서,
+    도움말 안의 `q` 를 종료로 두면 둘째 단언에서 실패한다.
+    """
+    from kr_quant.tui.ledger_app import _key
+
+    mo = Model(data)
+    assert _key(mo, ord("?"), 10) is True
+    assert mo.help, "? 가 도움말을 안 열었다"
+    assert mo.view != "limits", "? 가 아직 한계 화면으로 간다"
+    # 닫는 키 넷 — flow 와 같은 집합이다(q·Esc·?·Enter).
+    for ch in (ord("q"), 27, ord("?"), 10):
+        mo.help, mo.help_row = True, 3
+        assert _key(mo, ch, 10) is True, f"{ch!r} 이 앱을 끝냈다"
+        assert not mo.help, f"{ch!r} 로 도움말이 안 닫혔다"
+    # 닫힌 뒤의 q 는 종료다.
+    assert _key(mo, ord("q"), 10) is False
+    # 도움말 안에서는 화면 키가 **먹지 않는다** — 뒤에서 화면이 몰래 바뀌면
+    # 닫았을 때 다른 곳에 서 있다.
+    mo.help, before = True, (mo.vi, mo.wi)
+    _key(mo, ord("v"), 10)
+    _key(mo, ord("w"), 10)
+    assert (mo.vi, mo.wi) == before, "도움말 뒤에서 화면이 바뀌었다"
+    # 한계는 지워지지 않았다 — v 로 여전히 도달한다.
+    mo.help = False
+    for _ in range(len(VIEWS)):
+        mo.cycle("v")
+        if mo.view == "limits":
+            break
+    assert mo.view == "limits", "한계 화면이 없어졌다"
+
+
+def test_help_scrolls_and_never_runs_past_the_end(data):
+    """도움말은 스크롤된다. 하한을 넘겨 화면 아래가 비면 안 된다.
+
+    주입: 하한을 `help_total()` 로 두면(마지막 한 줄만 남는 자리) 실패한다.
+    """
+    import curses
+
+    from kr_quant.tui.ledger_app import _key
+    from kr_quant.tui.ledger_view import help_total
+
+    mo = Model(data)
+    mo.help = True
+    for _ in range(500):
+        _key(mo, curses.KEY_DOWN, 10)
+    assert mo.help_row == help_total() - 10, f"스크롤 하한이 어긋난다: {mo.help_row}"
+    bottom = screen(mo, 100, 24)["lines"]
+    assert len(bottom) == 24
+    _key(mo, curses.KEY_HOME, 10)
+    assert mo.help_row == 0
+    first = screen(mo, 100, 24)["lines"]
+    assert first != bottom, "스크롤해도 화면이 같다 — 검사가 헛돈다"
+    assert any("── 키 ──" in ln for ln in first), "맨 위가 키 절이 아니다"
+
+
+def test_help_screen_fits_any_width_and_shows_the_closing_keys(data):
+    """폭 1 에서도 안 죽고, 넓으면 **닫는 법**이 적혀 있다.
+
+    flow 에서 폭 6 이하가 `StopIteration` 으로 TUI 를 통째로 죽인 적이 있다.
+
+    주입: `help_screen` 의 푸터를 `tier_for` 없이 한 줄 고정으로 두면 좁은 폭에서
+    폭 단언이 깨진다.
+    """
+    mo = Model(data)
+    mo.help = True
+    for width in list(range(1, 20)) + [40, 60, 80, 100, 200]:
+        s = screen(mo, width, 24)
+        assert len(s["lines"]) == 24, width
+        for ln in s["lines"]:
+            assert _cw(ln) == width, f"폭{width}: {ln!r}"
+    wide = screen(mo, 120, 24)["lines"]
+    assert "닫기" in wide[-1] and "종료" in wide[-1], wide[-1]
+    assert "q·Esc·?·Enter" in wide[0] or "q·Esc·?·Enter" in wide[-1], wide[0]
+    # 푸터도 **잘리면 안 된다.** 폭에 맞는 단계를 고르지 않고 한 줄로 고정하면
+    # pad 가 잘라내는데, 모든 줄이 정확히 width 칸이라 폭 검사로는 안 잡힌다.
+    from kr_quant.tui.ledger_view import HELP_FOOT_TIERS
+
+    for width in (30, 40, 60, 80, 120, 200):
+        foot = screen(mo, width, 24)["lines"][-1].rstrip()
+        assert any(foot.startswith(t) for t in HELP_FOOT_TIERS), (
+            f"폭{width} 도움말 푸터가 잘렸다: {foot!r}")
+
+
+def test_hint_bar_names_the_column_you_sorted_by(data):
+    """푸터 위 한 줄은 **지금 줄세운 열**의 뜻을 말한다.
+
+    `?` 가 전면 모달이라, 숫자를 보면서 답을 읽으려면 이 줄이 필요하다.
+
+    주입: `hint_text` 가 정렬과 무관하게 한 문장을 돌려주게 만들면 실패한다.
+    """
+    from kr_quant.tui.ledger_view import hint_text
+
+    mo = Model(data)
+    seen = set()
+    for _ in range(len(SORTS)):
+        seen.add(hint_text(mo, 200))
+        mo.cycle("s")
+    assert len(seen) == len(SORTS), f"정렬을 바꿔도 힌트가 그대로다: {seen}"
+    # 설명이 있어야 힌트다 — 열 이름만 되풀이하면 아무 도움이 안 된다.
+    mo.si = [k for k, _ in SORTS].index("spike")
+    line = hint_text(mo, 200)
+    assert "최대1일[%]" in line and "하루가 차지한 비중" in line, line
+    # 주체를 바꾸면 그 주체의 열을 가리킨다.
+    mo.si = [k for k, _ in SORTS].index("actor")
+    mo.ai = 1
+    assert ACTORS[1][1] in hint_text(mo, 200)
+    # 정렬이 없는 화면은 **없는 정렬을 있는 척하지 않는다.**
+    mo.vi = [v for v, _ in VIEWS].index("comove")
+    assert "정렬" not in hint_text(mo, 200)
+    assert "이동이 아니다" in hint_text(mo, 200)
+
+
+def test_hint_bar_is_on_every_screen_and_fits_the_width(data):
+    """힌트바는 모든 화면에 있고 폭을 정확히 채운다. 폭 1 에서도 안 죽는다.
+
+    주입: `screen()` 에서 힌트 줄을 빼면 `hint_y` 자리에 상태줄이 와 실패한다.
+    """
+    from kr_quant.tui.flow_view import pad
+    from kr_quant.tui.ledger_view import hint_text
+
+    mo = Model(data)
+    for vi in range(len(VIEWS)):
+        mo.vi = vi
+        for width in (1, 5, 12, 40, 80, 120, 200):
+            s = screen(mo, width, 24)
+            assert s["hint_y"] == s["status_y"] - 1 == s["banner_y"] - 2
+            line = s["lines"][s["hint_y"]]
+            assert _cw(line) == width
+            assert line == pad(hint_text(mo, width), width), (vi, width)
+
+
+def test_bottom_line_keeps_both_the_banner_and_the_keys():
+    """회귀 — 폭 80(SSH 기본)에서 **키가 통째로 사라져 있었다.**
+
+    앱이 `(" " + BANNER + "   " + FOOTER)[:w]` 로 문자 슬라이스해 붙였는데 그
+    문자열은 표시폭 137 이라, 폭 80 에서는 배너만 남고 `?` 조차 화면에 없었다.
+    도움말이 아무리 좋아도 닿을 수 없으면 없는 것과 같다.
+
+    `--dump` 는 상태줄·푸터를 안 찍으므로 이 부류는 **`screen()` 을 봐야** 잡힌다.
+
+    주입: `banner_footer` 를 `" " + BANNER + "   " + FOOTER` 로 되돌리면 폭 80
+    에서 `?` 가 없어 실패한다.
+    """
+    from kr_quant.tui.ledger_view import banner_footer
+
+    # 폭 34 미만에서는 가장 짧은 배너와 가장 짧은 푸터가 같이 못 들어간다.
+    # 그때는 배너가 이긴다(이 화면이 존재하는 이유가 그 경고다).
+    for width in range(34, 202, 2):
+        line = banner_footer(width)
+        assert _cw(line) == width, f"폭{width}: {_cw(line)}칸"
+        assert "미관측" in line, f"폭{width} 에서 경고가 사라졌다: {line!r}"
+        assert "?" in line and "q" in line, f"폭{width} 에서 키가 사라졌다: {line!r}"
+
+
+def test_the_app_does_not_rebuild_the_bottom_lines(data):
+    """`screen()` 이 만든 마지막 세 줄을 앱이 **다시 만들지 않는다.**
+
+    예전엔 앱이 `h - 1` 을 넘겨 놓고 하단을 스스로 그렸다 — 그래서 순수 함수
+    검사도, 렌더 스모크 14,800 조합도 그 줄을 한 번도 본 적이 없다.
+
+    주입: `_draw` 가 하단을 다시 조립하게 되돌리면 여기 단언이 깨진다.
+    """
+    import inspect
+
+    from kr_quant.tui import ledger_app
+
+    src = inspect.getsource(ledger_app._draw)
+    assert "screen(mo, w, h)" in src, "앱이 화면 높이를 줄여 넘긴다"
+    assert "BANNER" not in src and "FOOTER" not in src, (
+        "앱이 하단 줄을 스스로 조립한다 — screen() 과 갈라진다")
+    for name in ("hint_y", "status_y", "banner_y"):
+        assert f's["{name}"]' in src, f"{name} 을 안 쓴다"
+
+
+def test_help_and_hint_never_show_markdown_asterisks(data):
+    """도움말·힌트는 `screen()` 을 거치는 **새 경로**다. 강조 표기를 여기서도 뗀다.
+
+    주입: `help_lines` 의 `desc.replace("**", "")` 를 지우면 실패한다.
+    """
+    from kr_quant.tui.ledger_view import LEDGER_HELP
+
+    assert any("**" in d for _n, d in LEDGER_HELP), "소스에 강조가 없다 — 검사가 헛돈다"
+    mo = Model(data)
+    mo.help = True
+    for width in (40, 80, 120):
+        for row in (0, 20, 60):
+            mo.help_row = row
+            lines = screen(mo, width, 24)["lines"]
+            assert lines and "**" not in "".join(lines), (width, row)
+    mo.help = False
+    assert "**" not in render_text(mo, 100)
+    assert "── 키 ──" in render_text(mo, 100), "평문 덤프에 도움말이 없다"
+
+
+def test_narrow_notices_are_never_truncated(data):
+    """좁아서 표를 못 그릴 때의 "왜 안 그리나" 안내는 **어떤 폭에서도 온전해야**
+    한다.
+
+    예전엔 한 줄 고정이라 `pad` 가 잘랐고, 하필 전개 안내는 **어떤 폭에서도**
+    온전히 못 나왔다 — 54칸이 필요한 문장인데 폭 48 미만에서만 뜬다. 검사가
+    아슬아슬 들어가는 폭만 표본으로 골라서 몰랐다.
+
+    주입: `_too_narrow`·`tier_for` 를 예전 f-string 한 줄로 되돌리면, 잘린 줄이
+    문장 끝 글자로 안 끝나 실패한다.
+    """
+    from kr_quant.tui.ledger_view import (
+        LEDGER_NARROW_TIERS, TIMELINE_NARROW_TIERS, timeline_lines)
+
+    mo = Model(data)
+    ends = ("칸.", "칸)", "칸", "좁다", "넓혀라")
+    for width in range(5, LEDGER_MIN_W):
+        lines, _thin, nh = ledger_lines(mo, width)
+        assert nh == 2 and len(lines) == 2, width
+        assert lines[0].rstrip().endswith(ends), (width, lines[0].rstrip())
+        assert lines[1].rstrip() in LEDGER_NARROW_TIERS, (width, lines[1].rstrip())
+        for ln in lines:
+            assert _cw(ln) == width
+    for width in range(5, TIMELINE_MIN_W):
+        lines, _thin, nh = timeline_lines(mo, width)
+        assert lines[0].rstrip().endswith(ends), (width, lines[0].rstrip())
+        assert lines[1].rstrip() in TIMELINE_NARROW_TIERS, (width, lines[1].rstrip())

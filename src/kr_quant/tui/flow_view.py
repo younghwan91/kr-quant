@@ -761,22 +761,67 @@ HELP_TITLE_TIERS = (
 )
 
 
-def help_lines(width: int, offset: int, height: int) -> tuple[list[str], int]:
-    """도움말 화면 — (행, 전체 줄 수). offset 부터 height 줄을 낸다."""
+def help_desc(entries: list[tuple[str, str]], name: str) -> str:
+    """도움말 목록에서 항목 하나의 설명. 없으면 빈 문자열.
+
+    ``**강조**`` 는 소스 표기라 여기서 뗀다 — 한 줄 힌트로 쓰는 쪽은 별표를
+    통과 마커(``*``)와 헷갈리기만 한다.
+    """
+    for n, desc in entries:
+        if n == name:
+            return desc.strip().replace("**", "")
+    return ""
+
+
+def hint_line(head: str, desc: str, width: int) -> str:
+    """항상 보이는 한 줄 힌트 — ``head · desc`` 를 폭에 **맞춰서** 낸다.
+
+    설명이 자리를 못 채우면 열 이름만 남긴다. 한두 글자로 잘린 설명은 설명이
+    아니다. ``kq-flow`` 와 ``kq-ledger`` 가 같은 자리에 같은 줄을 그리므로
+    자르기 규칙도 한 곳에 둔다 — 예전에 flow 쪽만 폭을 안 봐서 폭 40 에서
+    78칸짜리 줄이 나갔고, 그 실수를 원장에서 다시 하지 않으려면 함수가 하나여야 한다.
+    """
+    room = width - cell_len(head) - 4          # " · " 세 칸 + 여유 한 칸
+    if room < 2:
+        return pad(head, width)
+    if cell_len(desc) > room:
+        cut, used = "", 0
+        for ch in desc:
+            w2 = cell_width(ch)
+            if used + w2 > room - 1:
+                break
+            cut += ch
+            used += w2
+        desc = cut.rstrip() + "…"
+    return head + " · " + desc
+
+
+def help_lines(width: int, offset: int, height: int,
+               entries: list[tuple[str, str]] | None = None,
+               title_tiers: tuple[str, ...] = HELP_TITLE_TIERS,
+               label_w: int = 10) -> tuple[list[str], int]:
+    """도움말 화면 — (행, 전체 줄 수). offset 부터 height 줄을 낸다.
+
+    ``entries`` 와 ``title_tiers`` 를 받는 이유: **원장도 같은 도움말이 필요하다.**
+    ``kq-flow`` 와 ``kq-ledger`` 는 같은 제품이고, 도움말이 두 벌이면 렌더 규칙
+    (라벨 폭 · 이어쓰기 들여쓰기 · ``**`` 떼기 · 스크롤 하한)이 반드시 갈라진다.
+    이 저장소는 오늘 폭 단계 고르기가 네 벌로 갈라져 있던 걸 :func:`tier_for`
+    하나로 합쳤다 — 같은 실수를 도움말에서 반복하지 않는다. **내용만** 다르다.
+    """
     # 제목도 푸터처럼 **폭에 맞춰 단계별로** 줄인다. 한 줄 고정이면 85칸짜리
     # 문장이 80칸(SSH 기본)에서 단어 중간에 잘린다 — 푸터에 단계를 만든 바로
     # 그 이유가 이 줄에도 그대로 적용된다.
-    title = tier_for(HELP_TITLE_TIERS, width - 1)      # 앞의 공백 한 칸
+    title = tier_for(title_tiers, width - 1)      # 앞의 공백 한 칸
     out = [pad(" " + title, width)]
     body = []
-    for name, desc in HELP:
+    for name, desc in (HELP if entries is None else entries):
         # ⚠️ f"{name:>9}" 는 **문자 폭**이라 한글 라벨(임펄스=6칸)과 ASCII(G=1칸)가
         # 어긋난다. pad 는 표시 칸으로 맞춘다 — 이 저장소가 세 번 밟은 함정이다.
         #
         # **강조** 는 소스에서 눈에 띄라고 쓴 표기지 화면에 나갈 글자가 아니다.
         # 힌트바는 떼는데 여기는 안 떼서 `**닫기만**` 이 그대로 보였다.
         desc = desc.replace("**", "")
-        body.append(pad((pad(name, 10, right=True) + "  " + desc) if name
+        body.append(pad((pad(name, label_w, right=True) + "  " + desc) if name
                         else ("   " + desc), width))
     view = body[offset:offset + max(height - 1, 1)]
     return out + view, len(body)

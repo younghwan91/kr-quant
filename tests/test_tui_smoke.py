@@ -582,7 +582,8 @@ def test_ledger_app_starts_and_quits_in_a_pty():
 def test_ledger_survives_small_and_large_terminals(lines, cols):
     """좁은 터미널에서도 죽지 않는가. 폭 40 은 원장이 표를 안 그리는 구간이다."""
     with tempfile.TemporaryDirectory() as d:
-        rc, _screen, err = _run_tui(_ledger_dir(d), b"vvvvwmasd?q",
+        # `?` 뒤의 첫 q 는 **도움말 닫기**다(종료 아님) — 그래서 q 가 둘이다.
+        rc, _screen, err = _run_tui(_ledger_dir(d), b"vvvvwmasd?qq",
                                     lines=lines, cols=cols, app="ledger_app")
         assert rc == 0, err[-1500:]
 
@@ -596,8 +597,8 @@ def test_ledger_lone_escape_does_not_quit():
     같은 이유로 뺐고, 원장도 처음엔 `ch in (ord("q"), 27)` 이었다.
     """
     with tempfile.TemporaryDirectory() as d:
-        # ESC 로 끝나버리면 그 뒤의 `?` 가 안 닿아 한계 화면 전용 문구가 안 나온다.
-        rc, screen, err = _run_tui(_ledger_dir(d), b"\x1b\x1b\x1b" b"?" b"q",
+        # ESC 로 끝나버리면 그 뒤의 `vvv` 가 안 닿아 한계 화면 문구가 안 나온다.
+        rc, screen, err = _run_tui(_ledger_dir(d), b"\x1b\x1b\x1b" b"vvv" b"q",
                                    cols="120", app="ledger_app")
         assert rc == 0, err[-1500:]
         assert "돈에 꼬리표가 없다" in screen, (
@@ -632,13 +633,34 @@ def test_ledger_exits_when_the_terminal_disappears():
             pytest.fail(f"터미널이 사라졌는데 원장이 계속 돈다 — CPU 좀비 ({ticks} 틱)")
 
 
+def _payload_without(key: str) -> str:
+    """키 하나가 빠진 페이로드. **문 앞 검사가 대괄호 접근과 같은 목록인가**를 본다."""
+    return json.dumps({k: v for k, v in LEDGER_MINIMAL.items() if k != key},
+                      ensure_ascii=False)
+
+
+def _payload_with_orphan_market() -> str:
+    d = json.loads(json.dumps(LEDGER_MINIMAL, ensure_ascii=False))
+    d["markets"] = list(d["markets"]) + ["없는시장"]
+    return json.dumps(d, ensure_ascii=False)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
 @pytest.mark.parametrize("payload,expect", [
     ('{"dates": []}', "flows"),        # 스키마가 다름
     ("{nope}", "JSON"),                # JSON 이 깨짐
+    # 아래 셋은 예전엔 **생 트레이스백**이었다. 문 앞 검사가 네 키만 봤는데
+    # `cap`·`n_by_sector` 와 `flows[market]` 은 뒤에서 대괄호로 집힌다.
+    (_payload_without("cap"), "cap"),
+    (_payload_without("n_by_sector"), "n_by_sector"),
+    (_payload_with_orphan_market(), "없는시장"),
 ])
 def test_ledger_broken_payload_says_what_is_wrong(payload, expect):
-    """회귀 — 형식이 바뀐 페이로드가 curses 안에서 생 트레이스백으로 터지면 안 된다."""
+    """회귀 — 형식이 바뀐 페이로드가 curses 안에서 생 트레이스백으로 터지면 안 된다.
+
+    주입: `load()` 의 필수 키 목록에서 `cap` 을 빼면 그 파라미터가 트레이스백을
+    내며 실패한다(예전 상태다).
+    """
     with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "payload.json"), "w", encoding="utf-8") as f:
             f.write(payload)
@@ -665,3 +687,36 @@ def test_ledger_dump_is_pipeable():
         assert "### 원장" in r.stdout and "### 한계" in r.stdout
         assert "미관측" in r.stdout
         assert "~" in r.stdout, "얇은 섹터 표시가 평문에서 사라졌다"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_shows_the_keys_at_the_default_ssh_width():
+    """회귀 — 폭 80(SSH 기본)에서 하단 줄에 **키가 하나도 없었다.**
+
+    `_draw` 가 `(" " + BANNER + "   " + FOOTER)[:w]` 로 붙였는데 그 문자열은
+    표시폭 137 이라 배너만 남았다. 도움말이 아무리 좋아도 `?` 가 화면에 없으면
+    닿을 수 없다. `--dump` 는 하단 두 줄을 아예 안 찍으므로 이 부류는
+    **진짜 터미널을 봐야** 잡힌다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        rc, screen, err = _run_tui(_ledger_dir(d), b"q", cols="80",
+                                   app="ledger_app")
+        assert rc == 0, err[-1500:]
+        assert "미관측" in screen, "폭 80 에서 경고가 사라졌다"
+        assert "도움말" in screen and "종료" in screen, (
+            "폭 80 하단에 키가 없다 — ? 를 알 길이 없다")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_ledger_question_mark_shows_keys_and_columns():
+    """`?` 는 **키와 열의 뜻**이다(예전엔 한계 화면이었다). 그리고 거기서 q 는
+    닫기지 종료가 아니라, 종료하려면 q 를 한 번 더 눌러야 한다."""
+    with tempfile.TemporaryDirectory() as d:
+        # 스페이스 두 번은 한 화면씩 아래로 — 열 사전이 그 아래에 있다.
+        rc, screen, err = _run_tui(_ledger_dir(d), b"?  qq", cols="100",
+                                   app="ledger_app")
+        assert rc == 0, err[-1500:]
+        assert "키와 열의 뜻" in screen, "? 가 도움말을 안 띄웠다"
+        assert "── 키 ──" in screen, "키 목록이 없다"
+        assert "오차가 아니라" in screen, "스크롤해도 열 사전이 안 나온다"
+        assert "닫기" in screen

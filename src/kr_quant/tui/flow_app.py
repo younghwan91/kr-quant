@@ -23,10 +23,9 @@ import os
 import re
 
 from kr_quant.tui.flow_view import (
-    HELP, NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, cell_len,
-    cell_width, color_spans, detail_lines, footer_line, header_lines,
-    help_lines, name_sort_span, names_lines, pad, sort_span, table_lines,
-    tier_for)
+    HELP, NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
+    detail_lines, footer_line, header_lines, help_desc, help_lines, hint_line,
+    name_sort_span, names_lines, sort_span, table_lines, tier_for)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -176,12 +175,9 @@ _EXTRA_COL = {"tv": "거래대금[억]", "cap_idx": "시총[억]"}
 
 
 def _help_desc(header: str) -> str:
-    for name, desc in HELP:
-        if name == header:
-            # HELP 의 **강조** 표시는 모달용이다. 한 줄 힌트에서는 별표가
-            # 통과 마커(*)와 헷갈리기만 한다.
-            return desc.strip().replace("**", "")
-    return ""
+    """이 화면의 HELP 에서 열 설명 한 줄. 찾기는 ``flow_view.help_desc`` 가 한다
+    — 원장 힌트바도 같은 함수를 쓴다(``**`` 떼기가 두 벌이면 갈라진다)."""
+    return help_desc(HELP, header)
 
 
 #: 종합 화면의 힌트바 — 넓은 것부터. 이 화면은 정렬이 **없어서** 열 설명 대신
@@ -219,26 +215,8 @@ def hint_text(st: State, width: int = 200) -> str:
     order = "오름차순" if arrow == "▲" else "내림차순"
     # 좁은 화면에서는 방향 풀이를 접는다 — 잘려나갈 자리는 열 설명에 준다.
     tag = f"({order}, r 로 뒤집기)" if width >= 90 else ""
-    head = f" 정렬 {header}{arrow}{tag}"
-    # 설명도 폭에 맞춰 줄인다. 예전엔 head 만 폭을 보고 desc 는 안 봐서,
-    # 폭 40 에서 78칸짜리 문장이 나와 pad 가 **단어 중간에서** 잘랐다.
-    # 푸터에는 단계를 만들어 놓고 정작 새로 만든 힌트바에는 안 쓴 셈이었다.
-    room = width - cell_len(head) - 4          # " · " 세 칸 + 여유 한 칸
-    if room < 2:
-        # 설명을 넣을 자리가 없다 — 열 이름만 남긴다. 한두 글자로 잘린 설명은
-        # 설명이 아니다. 예전엔 여기서 `room > 4` 조건이 자르기를 통째로 건너뛰어,
-        # 폭 27 이하에서 88칸짜리 줄이 그대로 나갔다(실측).
-        return pad(head, width)
-    if cell_len(desc) > room:
-        cut, used = "", 0
-        for ch in desc:
-            w2 = cell_width(ch)
-            if used + w2 > room - 1:
-                break
-            cut += ch
-            used += w2
-        desc = cut.rstrip() + "…"
-    return head + " · " + desc
+    # 자르기는 `flow_view.hint_line` 하나가 한다 — 원장 힌트바도 같은 함수다.
+    return hint_line(f" 정렬 {header}{arrow}{tag}", desc, width)
 
 
 def _draw(scr, st: State) -> None:
