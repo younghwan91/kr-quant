@@ -1643,7 +1643,7 @@ def test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there(data):
     said = " ".join(f"{n} {d}" for n, d in LEDGER_HELP)
     assert "옛 문장" not in said, "도움말이 사실이 아닌 상태 보고를 남겼다"
     limits = " ".join(LIMITS)
-    for num in ("0.195%", "0.046%", "0.152%"):
+    for num in ("0.195%", "0.041%", "0.151%", "0.203%"):
         assert num in limits and num in said, f"{num} 이 두 화면 중 하나에 없다"
 
 

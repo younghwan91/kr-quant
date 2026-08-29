@@ -1261,6 +1261,37 @@ def layer_f(P: dict, db: str | None) -> None:
                                       for m in mkts)))
         # 페이로드가 일별로 0.01억까지 반올림하므로 W 일을 더하면 그만큼 쌓인다.
         cmp_abs(f"원장 {W}일 구간 합계 (시장×섹터×주체)", pairs, TOL_FLOW * W)
+
+    # ── ⑧ 한계 §7(생존편향)이 주장하는 **모양**이 오늘도 참인가 ──
+    #
+    # §7 은 세 가지를 말한다: 빠진 폭이 작다 · **거래소가 코스닥보다 크다** ·
+    # 종목 수는 코스닥이 많다. 퍼센트 자체는 날마다 바뀌므로 검사하지 않고
+    # (그러면 매일 빨개진다) **뒤집히면 안 되는 것**만 본다. 값은 detail 로 남긴다.
+    # 시장은 `stocks` 에 없는 종목이라 `delisted_stocks` 에서 가져온다.
+    cur.execute(f"""SELECT d.market, count(DISTINCT s.code),
+          sum(s.acc_trde_qty*1.0*abs(s.close)), sum(abs(s.institution*1.0*abs(s.close)))
+        FROM supply_demand s LEFT JOIN delisted_stocks d ON d.code=s.code
+        WHERE s.date BETWEEN {ph} AND {ph}
+          AND s.code NOT IN (SELECT code FROM stocks) GROUP BY 1""", (d0, d1))
+    out = {("거래소" if r[0] == "유가증권" else r[0]):
+           (int(r[1]), float(r[2] or 0), float(r[3] or 0)) for r in cur.fetchall()}
+    cur.execute(f"SELECT st.market, sum(s.acc_trde_qty*1.0*abs(s.close)), "  # noqa: S608
+                f"sum(abs(s.institution*1.0*abs(s.close))) "
+                f"FROM supply_demand s JOIN stocks st ON st.code=s.code "
+                f"WHERE s.source={ph} AND s.date BETWEEN {ph} AND {ph} GROUP BY 1", args)
+    ins = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall()}
+    share = {m: out[m][1] / ins[m][0] * 100 for m in out if m in ins}
+    tot_tv = sum(v[1] for v in out.values()) / sum(v[0] for v in ins.values()) * 100
+    tot_inst = sum(v[2] for v in out.values()) / sum(v[1] for v in ins.values()) * 100
+    detail = (f"빠진 거래대금 {tot_tv:.3f}% · 기관 gross {tot_inst:.3f}% · "
+              + " · ".join(f"{m} {share[m]:.3f}%({out[m][0]}종목)" for m in sorted(share)))
+    chk("F", "한계 §7: 빠진 거래대금 비중이 1% 미만인가", tot_tv < 1.0, detail)
+    chk("F", "한계 §7: 빠진 금액은 코스닥이 아니라 거래소에서 큰가",
+        share.get("거래소", 0) > share.get("코스닥", 0),
+        f"거래소 {share.get('거래소', 0):.3f}% vs 코스닥 {share.get('코스닥', 0):.3f}%")
+    chk("F", "한계 §7: 빠진 **종목 수**는 코스닥이 많은가",
+        out.get("코스닥", (0,))[0] > out.get("거래소", (0,))[0],
+        f"코스닥 {out.get('코스닥', (0,))[0]}종목 vs 거래소 {out.get('거래소', (0,))[0]}종목")
     con.close()
 
 
