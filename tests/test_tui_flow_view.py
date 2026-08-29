@@ -1338,6 +1338,35 @@ def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
     assert span_at([5, 5, 5], 2) == (12, 5)
 
 
+def test_detail_panel_does_not_repeat_what_the_table_already_shows(data):
+    """상세 패널 첫 줄이 표에 있는 값을 한 번 더 적고 있었다.
+
+    ``· 미실현 +2.9%p(포텐셜 60)`` 은 미실현이 **발산 막대**였던 시절 "도형은
+    순서를, 숫자는 크기를" 이라며 붙인 것이다. 막대를 숫자로 되돌리면서
+    (`Col("미실현[%p]", …, _num("x", 1))`) 이쪽을 안 지워 같은 값이 두 자리에
+    남았다. 포텐셜은 x 를 제곱해 **부호를 지운 값**이라 방향이 핵심인 이
+    화면에서 무슨 질문에 답하는지도 불분명하다.
+
+    주입: 첫 줄에 `f" · 미실현 {fmt_pct(x, 1)}%p"` 를 되살리면 실패한다.
+    """
+    from kr_quant.tui.flow_view import detail_lines, table_cols
+
+    st = State(data)
+    # `섹터`·`종목`(수) 는 이 줄이 지고 있는 일 자체다 — 무슨 섹터의 몇 종목인가.
+    headers = {c.header.split("[")[0] for c in table_cols(st, 200)
+               if c.header} - {"섹터", "종목"}
+    assert "미실현" in headers, "표에 미실현 열이 없다 — 이 검사가 헛돈다"
+    for row in range(min(5, len(st.rows()))):
+        st.row = row
+        first = detail_lines(st, 200)[0]
+        for h in headers:
+            assert h not in first, (
+                f"패널 첫 줄이 표의 {h!r} 열을 또 적는다: {first.strip()!r}")
+        assert "포텐셜" not in first, f"부호를 지운 값이 남았다: {first.strip()!r}"
+        # 대신 이 줄이 지고 있는 일 — 무슨 섹터인지·몇 종목인지·어떻게 여는지.
+        assert "Enter" in first and "종목" in first, first
+
+
 def test_detail_panel_answers_who_took_the_other_side(data):
     """회귀 — "기관이 팔았다" 다음 질문은 **"그럼 누가 받았지"** 다.
 
