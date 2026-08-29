@@ -746,3 +746,29 @@ guards = ["tests/test_tui_ledger_view.py::test_the_help_does_not_claim_a_stale_s
 file = "src/kr_quant/tui/ledger_view.py"
 find = "    (\"\", \"  빠진 **금액**은 거래소가 4배다. v 로 한계 화면 7번에 더 적었다.\"),"
 replace = "    (\"\", \"  빠진 **금액**은 거래소가 4배다. 한계 화면 7번은 아직 옛 문장이다.\"),"
+
+[[mutation]]
+id = "ledger-evidence-script-measures-differently"
+why = """근거 스크립트가 상관을 자기 식으로 재면(분산 0 에서 `0.0`) 잴 수 없는 쌍이
+"음수가 아닌 쌍" 으로 세어져 음수쌍 비율이 조용히 낮아진다. 화면이 인용하는
+실측치를 만드는 곳이라, 근거와 주장이 다른 자로 재게 된다."""
+guards = ["tests/test_tui_ledger_view.py::test_the_evidence_script_measures_the_same_way_the_screen_does"]
+file = "scripts/ledger_numbers.py"
+find = "from kr_quant.tui.ledger_view import ACTOR_KEYS, _corr, load, neg_frac"
+replace = """import math
+
+from kr_quant.tui.ledger_view import ACTOR_KEYS, load
+
+
+def _corr(a, b) -> float:
+    n = len(a)
+    ma, mb = sum(a) / n, sum(b) / n
+    va = sum((x - ma) ** 2 for x in a)
+    vb = sum((y - mb) ** 2 for y in b)
+    if va <= 0 or vb <= 0:
+        return 0.0
+    return sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / math.sqrt(va * vb)
+
+
+def neg_frac(v):
+    return sum(1 for c in v if c < 0) / len(v)"""

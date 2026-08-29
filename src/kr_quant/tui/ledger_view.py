@@ -245,6 +245,21 @@ def _corr(a: list[float], b: list[float]) -> float:
     return sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / math.sqrt(va * vb)
 
 
+def neg_frac(values) -> float | None:
+    """**음의 상관 쌍**의 비율 — `nan` 은 분자에서도 분모에서도 뺀다.
+
+    `nan` 은 분산 0 이라 **잴 수 없는** 쌍이다. `nan < 0` 은 False 라 그냥 두면
+    "음수가 아닌 쌍" 으로 세어져 비율이 조용히 낮아진다 — 그리고 이 비율은
+    "로테이션은 우연보다 드물다" 는 판정의 분자다.
+
+    관측(`obs_neg_frac`)·널(`null_neg_frac`)·근거 스크립트(`scripts/ledger_numbers.py`)
+    가 **같은 함수**를 봐야 한다. 스크립트는 화면이 인용하는 실측치를 만드는
+    곳이라, 다른 자로 재면 근거와 주장이 다른 수가 된다.
+    """
+    vals = [v for v in values if v == v]
+    return sum(1 for v in vals if v < 0) / len(vals) if vals else None
+
+
 class Model:
     """화면 상태 + 페이로드에서 뽑은 파생 계열."""
 
@@ -522,21 +537,17 @@ class Model:
             self._null_cache[key] = None
             return None
         rnd = random.Random(11)
-        neg = tot = 0
+        vals = []
         for _ in range(_NULL_SHIFTS):
             sh = {}
             for s in keys:
                 t = rnd.randrange(n)
                 sh[s] = ser[s][t:] + ser[s][:t]
-            for i, a in enumerate(keys):
-                for b in keys[i + 1:]:
-                    c = _corr(sh[a], sh[b])
-                    if c != c:
-                        continue          # 잴 수 없는 쌍은 관측 쪽과 같이 뺀다
-                    tot += 1
-                    if c < 0:
-                        neg += 1
-        out = neg / tot if tot else None
+            vals += [_corr(sh[a], sh[b])
+                     for i, a in enumerate(keys) for b in keys[i + 1:]]
+        # 잴 수 없는 쌍(nan)을 빼는 것은 `neg_frac` 한 곳이 한다 — 관측 쪽과
+        # 근거 스크립트가 같은 함수를 본다.
+        out = neg_frac(vals)
         self._null_cache[key] = out
         return out
 
@@ -546,11 +557,8 @@ class Model:
         keys, m = self.corr_matrix()
         if len(keys) < 2:
             return None
-        # nan(분산 0 이라 **잴 수 없는** 쌍)은 분모에서도 뺀다. `nan < 0` 은 False
-        # 라서 그냥 두면 "음수가 아닌 쌍"으로 세어져 비율이 조용히 낮아진다.
-        vals = [m[i][j] for i in range(len(keys)) for j in range(i + 1, len(keys))
-                if m[i][j] == m[i][j]]
-        return sum(1 for v in vals if v < 0) / len(vals) if vals else None
+        return neg_frac(m[i][j] for i in range(len(keys))
+                        for j in range(i + 1, len(keys)))
 
 
 # ---------------------------------------------------------------- 렌더

@@ -1679,3 +1679,30 @@ def test_a_short_screen_gives_up_the_header_before_the_last_row(data):
     # 한 줄만 남길 때는 날짜 줄이 남는다.
     six = screen(mo, 120, 6)["lines"]
     assert "자금 원장" in six[0], six[0]
+
+
+def test_the_evidence_script_measures_the_same_way_the_screen_does():
+    """`scripts/ledger_numbers.py` 는 이 화면의 **근거**다(설계 §3.3 의 널 대조).
+    그런데 상관을 재는 방법이 화면과 갈라져 있었다 — 스크립트의 `_corr` 은 분산 0
+    에서 `0.0`(=무상관)을 돌려주고 화면은 `nan`(=**잴 수 없음**)을 돌려준다.
+
+    `nan < 0` 은 False 라 그냥 두면 잴 수 없는 쌍이 "음수가 아닌 쌍" 으로 세어져
+    음수쌍 비율이 조용히 낮아진다 — 화면이 이미 고친 그 함정이다. 근거와 주장이
+    다른 자로 재면, 화면이 인용하는 실측치(널 50% vs 관측 17~34%)가 화면에서
+    나오는 값과 다른 수가 된다.
+
+    주입: 스크립트가 자기 `_corr` 을 다시 정의하면 첫 단언이, 비율에서 nan 을
+    안 빼면 둘째가 실패한다.
+    """
+    import scripts.ledger_numbers as ln
+    from kr_quant.tui.ledger_view import _corr, neg_frac
+
+    assert ln._corr is _corr, "스크립트가 상관을 자기 식으로 다시 잰다"
+    assert ln.neg_frac is neg_frac, "음수쌍 비율을 두 곳이 각자 센다"
+    nan = float("nan")
+    assert neg_frac([1.0, -0.5]) == 0.5
+    assert neg_frac([1.0, -0.5, nan]) == 0.5, "잴 수 없는 쌍이 분모에 남았다"
+    assert neg_frac([nan]) is None and neg_frac([]) is None
+    # 그리고 분산 0 에서 `nan` 을 내는 쪽이 스크립트에도 들어가야 한다.
+    assert _corr([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]) != _corr([1.0, 1.0, 1.0],
+                                                            [1.0, 2.0, 3.0])

@@ -12,24 +12,18 @@ Run:  python scripts/ledger_numbers.py
 from __future__ import annotations
 
 import argparse
-import math
 import random
 import statistics as st
 
-from kr_quant.tui.ledger_view import ACTOR_KEYS, load
+# ⚠️ 상관과 음수쌍 비율은 **화면과 같은 함수**를 쓴다. 이 스크립트는 화면이
+# 인용하는 실측치(널 50% vs 관측 17~34%)를 만드는 곳이라, 다른 자로 재면 근거와
+# 주장이 다른 수가 된다. 여기 있던 `_corr` 은 분산 0 에서 `0.0`(=무상관)을
+# 돌려줬는데 화면은 `nan`(=**잴 수 없음**)을 돌려준다 — `nan < 0` 은 False 라
+# 그냥 세면 잴 수 없는 쌍이 "음수가 아닌 쌍" 으로 들어가 비율이 조용히 낮아진다.
+from kr_quant.tui.ledger_view import ACTOR_KEYS, _corr, load, neg_frac
 
 NULL_SHIFTS = 20
 SEED = 11
-
-
-def _corr(a, b) -> float:
-    n = len(a)
-    ma, mb = sum(a) / n, sum(b) / n
-    va = sum((x - ma) ** 2 for x in a)
-    vb = sum((y - mb) ** 2 for y in b)
-    if va <= 0 or vb <= 0:
-        return 0.0
-    return sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / math.sqrt(va * vb)
 
 
 def _beta_resid(y, x):
@@ -116,9 +110,11 @@ def comovement(d) -> None:
                 t = rnd.randrange(n)
                 sh[s] = res[s][t:] + res[s][:t]
             nul += [_corr(sh[a], sh[b]) for i, a in enumerate(nz) for b in nz[i + 1:]]
-        f = lambda v: sum(1 for c in v if c < 0) / len(v)   # noqa: E731
-        print(f"  {k:<8}{st.mean(raw):>+10.3f}{f(raw):>8.2f}"
-              f"{st.mean(dt):>+10.3f}{f(dt):>8.2f}{f(nul):>10.2f}")
+        # 평균도 잴 수 있는 쌍만 본다 — 비율에서 뺀 것을 평균에 남기면 두 수가
+        # 다른 모집단을 말한다.
+        ok = lambda v: [c for c in v if c == c]             # noqa: E731
+        print(f"  {k:<8}{st.mean(ok(raw)):>+10.3f}{neg_frac(raw):>8.2f}"
+              f"{st.mean(ok(dt)):>+10.3f}{neg_frac(dt):>8.2f}{neg_frac(nul):>10.2f}")
     print("  → 널은 0.50. 관측이 그보다 낮으면 로테이션은 우연보다 드물다.")
     print()
 
