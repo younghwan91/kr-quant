@@ -39,14 +39,7 @@ id = "truncate-line-instead-of-dropping-column"
 why = "폭 초과 열을 떨어뜨리지 않고 줄을 자르면 -1,360 이 -1 로 보인다"
 guards = ["tests/test_tui_flow_view.py::test_numbers_are_never_cut_mid_value_in_narrow_terminals"]
 file = "src/kr_quant/tui/flow_view.py"
-find = """    out, used = [], 0
-    for c in cols:
-        need = c.width + (1 if out else 0)
-        if out and used + need > width:
-            break
-        out.append(c)
-        used += need
-    return out"""
+find = "    return cols[:fit_widths([c.width for c in cols], width)]"
 replace = "    return cols"
 
 [[mutation]]
@@ -211,8 +204,8 @@ why = """소스의 **강조** 는 화면에 나갈 글자가 아니다. 도움�
 guards = ["tests/test_tui_ledger_view.py::test_help_and_hint_never_show_markdown_asterisks"]
 file = "src/kr_quant/tui/flow_view.py"
 find = """        desc = desc.replace("**", "")
-        body.append"""
-replace = """        body.append"""
+        if not name:"""
+replace = """        if not name:"""
 
 [[mutation]]
 id = "ledger-narrow-notice-truncated"
@@ -311,3 +304,55 @@ find = """    elif ch == ord("d"):
         mo.detrend = not mo.detrend"""
 replace = """    elif ch == ord("z"):
         mo.detrend = not mo.detrend"""
+
+[[mutation]]
+id = "fit-widths-forgets-the-column-gap"
+why = """열 사이 공백 1칸을 안 세면 마지막 열이 폭을 한 칸 넘어 줄이 접힌다.
+`_fit` 두 벌을 `fit_widths` 한 곳으로 합쳤으므로, 규칙이 사는 자리도 여기다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap",
+          "tests/test_tui_flow_view.py::test_numbers_are_never_cut_mid_value_in_narrow_terminals"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "        need = w + (1 if n else 0)"
+replace = "        need = w"
+
+[[mutation]]
+id = "fit-widths-drops-the-first-column"
+why = """첫 열까지 떨어뜨리면 좁은 터미널에서 표가 통째로 사라진다 — 잘린 섹터
+이름은 뜻이 남지만 없는 표는 아무 뜻도 없다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "        if n and used + need > total:"
+replace = "        if used + need > total:"
+
+[[mutation]]
+id = "ledger-fit-diverges-from-flow-fit"
+why = """원장 화면이 흐름 화면과 **다른 규칙으로** 열을 자른다. 예전엔 같은 로직이
+두 벌이라 이 버그가 리팩터 실수 한 번으로 나올 수 있었고, 둘을 잇는 검사가 하나도
+없어 전부 초록이었다. 합친 지금은 호출부가 갈라지는 형태로만 남는다."""
+guards = ["tests/test_tui_flow_view.py::test_both_screens_cut_columns_by_the_same_rule"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    return cols[:fit_widths([c[1] for c in cols], width)]"
+replace = "    return cols[:fit_widths([c[1] for c in cols], width) + 1]"
+
+[[mutation]]
+id = "cell-width-ignores-ambiguous-wide"
+why = """'A'(Ambiguous) 글자를 2칸으로 그리는 터미널(한국어권에서 흔한
+ambiguous=wide 설정)에서 1칸으로 세면, 폭에 딱 맞춘 줄이 넘쳐 접히고 화면
+전체가 어긋난다. 이 화면들은 'A' 글자를 31종·440여 곳에서 쓴다."""
+guards = ["tests/test_tui_flow_view.py::test_ambiguous_wide_mode_is_off_by_default_and_counts_A_as_two_when_on",
+          "tests/test_tui_flow_view.py::test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide",
+          "tests/test_tui_ledger_view.py::test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "    return 2 if (AMBIGUOUS_WIDE and eaw == \"A\") else 1"
+replace = "    return 1"
+
+[[mutation]]
+id = "span-at-forgets-the-column-gap"
+why = """열 시작 칸을 공백 없이 세면 색칠·하이라이트가 열 하나만큼 왼쪽으로 밀려
+엉뚱한 열을 칠한다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap",
+          "tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers",
+          "tests/test_tui_ledger_view.py::test_numeric_columns_start_at_the_same_display_cell"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "    return sum(w + 1 for w in widths[:i]), widths[i]"
+replace = "    return sum(w for w in widths[:i]), widths[i]"
