@@ -147,9 +147,10 @@ def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
                 den += wt
                 any_ = True
         acc *= 1 + (num / den if den else 0.0) / 100.0
-    n_all = sum(P.get("n_by_sector", {}).get(m, {}).get(sec, 0) for m in markets)
+    # ⚠️ 종목 수(`n_all`·`thin`)는 여기서 안 낸다 — `build()` 가 **창별로** 센다.
+    # `agg` 는 반쪽 구간(dW/dt·풀림)에서도 불리므로 창을 모른다.
     return {
-        "sector": sec, "n_all": n_all, "thin": n_all < MIN_NAMES,
+        "sector": sec,
         "inst": inst, "forgn": s("forgn"), "indiv": s("indiv"),
         "etc": s("etc"), "tv": s("tv"), "cap": cap,
         "accel": (inst / cap * 100) if cap else 0.0,
@@ -160,7 +161,12 @@ def agg(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> dict:
 
 def drivers(P: dict, markets: list[str], sec: str, i0: int, i1: int,
             win: int | None = None, k: int = 3):
-    """섹터의 종목 — 시총 대비 순매수(%p) 순. **전 종목**이 대상이다.
+    """섹터의 종목 — **순매수 금액** 순. **전 종목**이 대상이다.
+
+    (예전 판본은 시총 대비(%p)로 줄세웠고 이 줄에도 그렇게 적혀 있었다. 실제
+    정렬은 ``-x["inst"]`` 이라 **문서와 계산이 갈려 있었다**. 금액이 맞다 —
+    섹터 합계가 금액의 합이므로 기여도는 금액으로만 정의된다. ``a``(시총대비)는
+    참고 열로 남는다.)
 
     페이로드가 프리셋 구간별 집계를 싣는다(``names[code]["win"]["20"]``). 이전처럼
     미리 뽑은 12개가 아니라 그 섹터 전 종목을 그 구간 기준으로 줄세운다.
@@ -240,6 +246,31 @@ def release(P: dict, markets: list[str], sec: str, i0: int, i1: int) -> tuple:
 MIN_NAMES = 10
 
 
+def names_count(P: dict, markets: list[str], sec: str, win: int) -> int:
+    """표의 `종목[수]` — **드릴다운 목록이 세는 것과 같은 집합**이다.
+
+    예전엔 `n_by_sector`(페이로드 260일 창에서 한 번이라도 거래된 종목)를 썼다.
+    그런데 드릴다운은 `names[code]["win"][창]` 이 있는 종목만 그린다. 두 수가
+    갈렸다 — 실측(2026-08-28 리포트): 표는 "전기/전자 387종목" 이라 적고 그 줄에서
+    Enter 를 누르면 386개가 나왔다. 46개 (블록,섹터) 중 49건이 어긋났고, 원인은
+    **두 달 전 수급 보고가 끊긴 종목이 `stocks` 에 남아 있어서**다
+    (일정실업·더존비즈온·현대홈쇼핑 등 17종목, 마지막 수급일 2026-06~07).
+
+    나쁜 쪽은 세는 것으로 끝나지 않았다. `MIN_NAMES` 판정이 이 수로 이뤄지므로
+    **죽은 이름 하나가 얇은 섹터 경고를 지웠다** — 코스닥/종이/목재가 5일·20일
+    창에서 10 으로 세어져 `~` 를 못 받았고(실제 거래 종목 9), 그래서 G 순위
+    산정에도 들어가 나머지 섹터의 순위를 밀었다.
+
+    "상장 종목 수" 라는 옛 이름은 버린다. 벤더 마스터(`stocks`)에 남아 있는 것과
+    실제로 상장·거래 중인 것이 다르고, 그 차이를 이 화면이 알 방법이 없다.
+    화면이 셀 수 있는 것은 **이 구간에 거래된 종목 수**뿐이고, 그게 목록의
+    길이와 정확히 같다.
+    """
+    return sum(1 for nm in (P.get("names") or {}).values()
+               if nm.get("sector") == sec and nm.get("market") in markets
+               and (nm.get("win") or {}).get(str(win)))
+
+
 def build(P: dict) -> dict:
     N = len(P["dates"])
     # 종목도 함께 싣는다 — TUI 가 이 파일 하나만 읽으므로, 안 실으면 Enter 를 눌러도
@@ -255,6 +286,12 @@ def build(P: dict) -> dict:
         for mkey, markets in (("전체", P["markets"]),
                               *[(m, [m]) for m in P["markets"]]):
             rows = [agg(P, markets, s, i0, i1) for s in P["sectors"]]
+            # 종목 수는 **이 창에서** 센다 — 표의 수와 드릴다운 목록의 길이가
+            # 같아야 한다(:func:`names_count`). `thin` 이 여기서 정해지고,
+            # 아래 G 순위 산정이 그것을 읽으므로 순서를 바꾸면 안 된다.
+            for r in rows:
+                r["n_all"] = names_count(P, markets, r["sector"], win)
+                r["thin"] = r["n_all"] < MIN_NAMES
             # 1년 백분위와 구간 모양 — **주체별로** 따로 싣는다. 화면이 주체를
             # 바꾸면 이 두 열도 같이 바뀌어야 한다(한 행에 두 주체의 숫자가
             # 섞이는 사고를 이미 한 번 냈다).
@@ -319,7 +356,24 @@ def build(P: dict) -> dict:
                     r["a_idx"] = a
                     r["exp"] = slope * a + icpt          # 예상 Δv (%)
                     r["x"] = r["exp"] - r["ret"]         # 미실현 변위 (%p)
-                    r["U"] = 0.5 * slope * r["x"] ** 2   # 포텐셜 에너지 ½kx²
+                    # 포텐셜 에너지 ½kx². **k ≤ 0 이면 내지 않는다.**
+                    #
+                    # U 의 뜻은 "|미실현| 이 클수록 크다" 하나뿐이다(k 가 블록당
+                    # 상수라 |x| 의 단조 변환이다). 그런데 그게 성립하려면 k>0
+                    # 이어야 한다 — k<0 이면 ½kx² 는 |x| 의 **순감소** 변환이라
+                    # 전 섹터가 음수가 되고, 화면이 "포텐셜 큰 순" 이라 말하면서
+                    # 실제로는 |미실현| 이 **작은 순**으로 줄세운다.
+                    #
+                    # 실측(2026-08-28 리포트, 12블록 전수): 5|코스닥 k=−0.587
+                    # (t=−0.24, 기울기가 0 과 구별되지 않는다) 에서 22개 섹터
+                    # 전부 U<0 이고 ρ(|x|,U) = −1.0000 이었다. 나머지 11블록은
+                    # k>0 이고 ρ = +1.0000 이다.
+                    #
+                    # 처방은 ½|k|x² 가 아니라 **결측**이다. 이름이 `½kx²` 인데
+                    # |k| 로 계산하면 라벨과 계산이 갈리고(이 저장소가 D 계층으로
+                    # 막는 부류), 결측이면 정렬에서도 맨 뒤로 가 화면의 다른
+                    # 결측과 같은 규칙을 따른다("값이 없는 것은 작은 값이 아니다").
+                    r["U"] = 0.5 * slope * r["x"] ** 2 if slope > 0 else None
                 else:
                     r["a_idx"] = r["exp"] = r["x"] = r["U"] = None
                 r["P"] = power(P, markets, r["sector"], i0, i1)

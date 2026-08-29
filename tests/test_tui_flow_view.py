@@ -1892,3 +1892,115 @@ def test_a_quiet_day_is_not_called_an_old_report(data):
         for w in nmv["win"].values():
             w["invtrt"] = w["penfnd_etc"] = w["ret"] = 0.0
     assert not State(d).legacy_names
+
+
+# ── 합성 페이로드로 만드는 쪽을 잠근다 ─────────────────────────────────
+#
+# 아래 두 검사는 **실데이터에 기대지 않는다.** k ≤ 0 인 블록도, 표의 종목수와
+# 목록 길이가 갈리는 상황도 어느 날 리포트에는 있고 어느 날에는 없다 — 그런
+# 검사는 CI 에서 조용히 무력해진다. 원하는 상황을 직접 만들어 걸어 둔다.
+
+
+def _synth_payload(k_sign: float = 1.0, live_by_sector=None, n_days: int = 130):
+    """가속도와 수익률의 횡단면 기울기가 정확히 ``k_sign`` 인 페이로드.
+
+    자금흐름도 수익률도 **마지막 날 하루에만** 싣는다. 그러면 어느 창을 잡아도
+    같은 (가속도, 수익률) 이 나와 블록마다 k 가 같고, 검사가 창 선택에 안 흔들린다.
+    """
+    mkt = "거래소"
+    secs = [f"S{i:02d}" for i in range(12)]
+    dates = [f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(n_days)]
+    n = len(dates)
+    live_by_sector = live_by_sector or {}
+    flows, ret, retw, cap, names, n_by = {mkt: {}}, {mkt: {}}, {mkt: {}}, {mkt: {}}, {}, {mkt: {}}
+    for i, s in enumerate(secs):
+        z = [0.0] * n
+        inst = list(z)
+        inst[-1] = i * 100.0                 # 가속도 = inst/cap*100 = i
+        flows[mkt][s] = {"inst": inst, "forgn": list(z), "indiv": list(z),
+                         "etc": list(z), "tv": [1000.0] * n}
+        r = list(z)
+        r[-1] = k_sign * i                   # 수익률 = k_sign · 가속도
+        w = list(z)
+        w[-1] = 1.0
+        ret[mkt][s] = r
+        retw[mkt][s] = w
+        cap[mkt][s] = 10000.0
+        live = live_by_sector.get(s, 12)
+        n_by[mkt][s] = 12                    # 마스터에는 12개가 남아 있다
+        for j in range(12):
+            code = f"{i:02d}{j:04d}"
+            win = {}
+            if j < live:                     # 그중 `live` 개만 이 구간에 거래됐다
+                for wkey in ("5", "20", "60", "120"):
+                    win[wkey] = {"inst": 0.0, "forgn": 0.0, "indiv": 0.0,
+                                 "etc": 0.0, "tv": 1.0, "invtrt": 0.0,
+                                 "penfnd_etc": 0.0, "ret": 0.0}
+            names[code] = {"name": f"N{code}", "sector": s, "market": mkt,
+                           "cap": 100.0, "win": win}
+    return {"dates": dates, "sectors": secs, "markets": [mkt], "flows": flows,
+            "detail": {mkt: {s: {} for s in secs}}, "ret": ret, "retw": retw,
+            "iret": {mkt: {s: None for s in secs}}, "cap": cap, "cap_by_month": {},
+            "names": names, "n_by_sector": n_by, "n_names": len(names),
+            "finalized": True, "detail_labels": {}}
+
+
+def test_potential_is_withheld_where_the_stiffness_is_not_positive():
+    """회귀 — `U = ½kx²` 는 **k>0 에서만** |미실현| 의 순증가 변환이다.
+
+    k<0 인 블록에서는 전 섹터의 U 가 음수가 되고, 화면이 "포텐셜 큰 순" 이라
+    말하면서 |미실현| 이 **작은 순**으로 줄세운다. 실측(2026-08-28 리포트):
+    5일|코스닥 k=−0.587(t=−0.24) 에서 22개 섹터 전부 U<0, ρ(|x|,U) = −1.0000.
+    도움말은 "4개 구간 전부 Spearman 1.0000" 이라 적었는데 그건 시장=전체에서만
+    잰 값이었다 — 실측 주장이 실측 범위를 넘어 일반화돼 있었다.
+    """
+    m = _producer()
+    pos = m.build(_synth_payload(k_sign=+1.0))
+    neg = m.build(_synth_payload(k_sign=-1.0))
+    for key, B in pos["blocks"].items():
+        assert B["k"] > 0, (key, B["k"])
+        us = [r["U"] for r in B["rows"] if r["x"] is not None]
+        assert us and all(u is not None and u >= 0 for u in us), key
+        # k>0 이면 |미실현| 이 클수록 U 가 크다 — 순위가 정확히 같아야 한다
+        pairs = sorted((abs(r["x"]), r["U"]) for r in B["rows"] if r["x"] is not None)
+        assert [p[1] for p in pairs] == sorted(p[1] for p in pairs), key
+    for key, B in neg["blocks"].items():
+        assert B["k"] < 0, (key, B["k"])
+        assert all(r["U"] is None for r in B["rows"]), key
+        # 미실현은 남는다 — 뜻을 잃은 것은 U 뿐이다
+        assert any(r["x"] is not None for r in B["rows"]), key
+
+
+def test_missing_potential_sorts_last_not_first():
+    """결측은 '작은 값' 이 아니다 — 포텐셜이 없는 블록에서 U 로 정렬하면
+    화면은 정렬 대체(`effective_sort`)로 내려가고, 그 사실을 헤더에 적는다."""
+    m = _producer()
+    st = State(m.build(_synth_payload(k_sign=-1.0)))
+    st.si = [k for k, _ in SORTS].index("U")
+    key, fell = st.effective_sort(st.rows())
+    assert fell and key != "U"
+    assert "값이 없다" in header_lines(st, 200)[1]
+
+
+def test_the_table_counts_the_same_stocks_the_drilldown_lists():
+    """회귀 — 표가 "387종목" 이라 적고 그 줄에서 Enter 를 누르면 386개가 나왔다.
+
+    원인은 `n_by_sector`(260일 창에 한 번이라도 거래된 종목)로 세면서 드릴다운은
+    그 창의 집계가 있는 종목만 그렸기 때문이다. 벤더 마스터(`stocks`)에는 수급
+    보고가 두 달 전에 끊긴 이름이 남아 있다(실측 17종목). 더 나쁜 건 `MIN_NAMES`
+    판정이 이 수로 이뤄져 **죽은 이름 하나가 얇은 섹터 경고를 지웠다**는 것이다.
+    """
+    m = _producer()
+    d = m.build(_synth_payload(live_by_sector={"S03": 7, "S07": 9}))
+    for bk, B in d["blocks"].items():
+        st = State(d)
+        st.wi = WINDOWS.index(bk.split("|")[0])
+        st.mi = st.markets.index(bk.split("|")[1])
+        for ri, r in enumerate(st.rows()):
+            st.row = ri
+            assert r["n_all"] == len(st.names()), (bk, r["sector"])
+        # 마스터에는 12개가 남아 있지만 거래된 것은 7·9 개다
+        got = {r["sector"]: (r["n_all"], r["thin"]) for r in B["rows"]}
+        assert got["S03"] == (7, True), got["S03"]
+        assert got["S07"] == (9, True), got["S07"]
+        assert got["S00"] == (12, False), got["S00"]
