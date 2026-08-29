@@ -634,7 +634,7 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
         st.row = 0
     elif k in (ord("G"), curses.KEY_END):
         st.row = n - 1
-    elif k == ord("r"):
+    elif k == ord("r") and st.sortable:
         # 역순이 없어서 "누가 털렸나"(순매도 상위)로 가는 유일한 길이 G 였다.
         _keep_selection(st, lambda: _toggle_rev(st))
     elif k in (ord("w"), ord("W")):
@@ -643,7 +643,11 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
         st.cycle("m", 1 if k == ord("m") else -1)
     elif k in (ord("a"), ord("A")):
         st.cycle("a", 1 if k == ord("a") else -1)
-    elif k in (ord("s"), ord("S")):
+    elif k in (ord("s"), ord("S")) and st.sortable:
+        # 종합에서는 **아무 일도 안 한다.** 예전엔 `si` 를 돌려서 헤더 라벨과
+        # 힌트바가 따라 움직였는데 표는 그대로였다 — 라벨이 바뀌는 것을 보고
+        # 정렬이 됐다고 믿게 만드는 쪽이, 키가 안 듣는 것보다 나쁘다.
+        # 화면은 그 사실을 늘 적고 있다(헤더 `정렬없음[G 순]` · 힌트바 한 줄).
         st.cycle("s", 1 if k == ord("s") else -1)
     return True
 

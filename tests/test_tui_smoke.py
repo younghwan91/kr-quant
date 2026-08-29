@@ -542,6 +542,16 @@ def test_the_screen_never_prints_the_hangul_keys():
         assert jamo not in text, f"화면에 자모 {jamo!r} 가 적혀 있다"
 
 
+def test_normal_windows_still_sort():
+    """회귀 — 종합만 막는 것이지 정렬을 없애는 게 아니다."""
+    st = _st()
+    order = [r.get("sector") for r in st.rows()]
+    handle_key(st, ord("s"))
+    assert st.si != 0 and st.sortable
+    handle_key(st, ord("r"))
+    assert st.rev and [r.get("sector") for r in st.rows()] != order
+
+
 def test_footer_grows_and_shrinks_with_the_width():
     """푸터가 한 줄 고정이라 넓은 화면에서 절반이 비고 좁은 화면에서 잘렸다."""
     from kr_quant.tui.flow_view import cell_len as _w, footer_line

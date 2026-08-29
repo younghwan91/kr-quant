@@ -1398,6 +1398,49 @@ def test_the_panel_marks_the_sector_name_and_the_view_gives_the_coordinates(data
     assert detail_lines(st, 200)[0].strip().startswith(st.rows()[st.row]["sector"])
 
 
+def test_the_combined_screen_neither_sorts_nor_claims_to(data):
+    """종합에서 `s`·`r` 은 눌리는데 표는 안 바뀌었다 — 그런데 헤더 라벨은 바뀌어서
+    정렬이 된 것처럼 보였다.
+
+    이 저장소가 리포트 쪽에서 CI 로 막아 온 부류다(README §7 D 계층: "파라미터를
+    바꿨는데 계산은 동일"). 화살표를 안 그리기로 한 판단(`header_lines` 주석)을
+    열 이름까지 밀고 간다 — 새 동작을 만드는 게 아니라 이미 내린 판단을 끝까지
+    적용하는 일이다.
+
+    주입: `handle_key` 의 `and st.sortable` 을 지우면 상태가 바뀌어 실패하고,
+    헤더가 `정렬[…]` 을 다시 적으면 마지막 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_app import handle_key, hint_text
+    from kr_quant.tui.flow_view import State, header_lines
+
+    st = State(data)
+    st.wi = WINDOWS.index("종합")
+    if not st.rows():
+        pytest.skip("이 픽스처에 종합 블록이 없다")
+    before = (st.si, st.rev, st.nsi, st.nrev, st.row, st.wi, st.mi, st.ai)
+    order = [r.get("sector") for r in st.rows()]
+    for key in (ord("s"), ord("S"), ord("r")):
+        assert handle_key(st, key) is True
+        assert (st.si, st.rev, st.nsi, st.nrev, st.row, st.wi, st.mi,
+                st.ai) == before, f"{chr(key)!r} 가 종합에서 상태를 바꿨다"
+        assert [r.get("sector") for r in st.rows()] == order
+    # 그리고 화면이 그 사실을 말한다 — 키가 조용히 안 듣기만 하면 그것도 거짓말이다.
+    head = header_lines(st, 200)[1]
+    assert "정렬[" not in head, f"없는 정렬을 헤더가 말한다: {head.strip()!r}"
+    assert "정렬" in head and "없" in head, f"정렬이 없다는 사실이 없다: {head.strip()!r}"
+    assert "정렬" in hint_text(st, 200) and "없다" in hint_text(st, 200)
+
+    # 드릴다운은 **실제로** 정렬한다 — 종합에서 들어가도 그렇다.
+    handle_key(st, ord("l"))
+    assert st.drill and st.sortable
+    codes = [t.get("code") for t in st.names()]
+    handle_key(st, ord("s"))
+    assert st.nsi != 0, "드릴다운에서 s 까지 죽였다"
+    handle_key(st, ord("r"))
+    assert st.nrev, "드릴다운에서 r 까지 죽였다"
+    assert codes, "픽스처에 종목이 없다 — 이 검사가 헛돈다"
+
+
 def test_combined_screen_shows_the_four_actors_and_says_which_window(data):
     """종합 구간에서만 4주체가 `— · — · — · —` 였다.
 

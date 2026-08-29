@@ -255,6 +255,23 @@ class State:
     #: 정렬키가 그 블록에서 전멸했을 때 대신 쓸 키 — 앞에서부터 값이 있는 것.
     SORT_FALLBACK = ("accel", "flow", "ret")
 
+    @property
+    def sortable(self) -> bool:
+        """이 화면에 **정렬이 있는가.**
+
+        종합 축은 5·20·60·120 을 G **순위**로 섞은 것이라 페이로드 순서를 그대로
+        쓴다 — 줄세울 키가 없다. 그런데 `s`·`r` 은 눌리기는 해서 헤더 라벨과
+        힌트바가 따라 움직였고, 표는 그대로였다. 사용자는 라벨이 바뀌는 것을
+        보고 정렬이 됐다고 믿는다 — 이 저장소가 리포트 쪽에서 CI 로 막아 온
+        부류다(README §7 D 계층: "파라미터를 바꿨는데 계산은 동일").
+
+        판정을 여기 한 곳에 둔다. 키를 받는 쪽(`handle_key`)과 화면에 적는 쪽
+        (`header_lines`)이 다른 답을 내면 그 순간 다시 거짓말이 된다.
+
+        드릴다운은 **실제로** 정렬한다(`NAME_SORTS`) — 종합에서 들어가도 그렇다.
+        """
+        return self.drill or self.window != "종합"
+
     def effective_sort(self, rows: list[dict]) -> tuple[str, bool]:
         """실제로 줄세우는 데 쓸 키와, 그게 폴백인지.
 
@@ -431,15 +448,20 @@ def header_lines(st: State, width: int) -> list[str]:
     chip = "확정" if d.get("finalized") else "장중·미확정"
     l1 = f" 섹터 자금 흐름 · {d['asof']} {chip}"
     label, note = SORTS[st.si][1], ""
-    if st.window != "종합":
+    # 종합 화면은 **정렬 자체가 없다**(페이로드 순서). 예전엔 방향 화살표만 빼고
+    # 열 이름은 남겼는데, `s` 를 누르면 그 이름이 바뀌어서 정렬이 된 것처럼
+    # 보였다 — 화살표를 지운 판단을 열 이름까지 밀고 간다. 이 화면이 무엇으로
+    # 줄세워졌는지는 첫 열(G) 이 말한다.
+    if st.sortable:
         key, fell = st.effective_sort(st.rows())
         if fell:
             note = f"  ※ 이 구간에 {label} 값이 없다"
             label = dict(SORTS).get(key, key)
-    # 종합 화면은 정렬 자체가 없다(페이로드 순서) — 없는 방향을 표시하면 또 거짓말이다.
-    arrow = "" if st.window == "종합" else ("▲" if st.rev else "▼")
+        sort_chip = f" 정렬[{label}{'▲' if st.rev else '▼'}]"
+    else:
+        sort_chip = " 정렬없음[G 순]"
     l2 = (f" 구간[{st.window}] 시장[{st.market}] 주체[{ACTORS[st.ai][1]}]"
-          f" 정렬[{label}{arrow}]{note}")
+          f"{sort_chip}{note}")
     if st.actor != "inst" and st.window != "종합":
         l2 += "  ※ 미실현·포텐셜·dW/dt·풀림·G 는 기관 기준"
     return [pad(l1, width), pad(l2 + "  " + st.block_meta(), width)]
