@@ -26,7 +26,8 @@ from collections import namedtuple
 
 from kr_quant.tui.flow_view import (
     NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
-    detail_lines, footer_line, header_lines, help_lines, hint_desc, hint_line,
+    detail_lines, detail_title_span, footer_line, header_lines, help_lines,
+    hint_desc, hint_line,
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
@@ -181,16 +182,25 @@ def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) ->
             pass
 
 
-def _hl_sort(scr, y: int, span, col: bool) -> None:
-    """정렬 중인 열 헤더를 덧칠한다 — 어떤 기준으로 줄세웠는지 한눈에 보이게."""
+def _hl_span(scr, y: int, span, attr) -> None:
+    """뷰가 낸 (시작 표시칸, 폭) 구간에 속성을 덧칠한다.
+
+    좌표를 **여기서 계산하지 않는다** — 어느 칸이 무엇인지는 문자열을 만든
+    쪽만 안다(`col_span`·`name_sort_span`·`detail_title_span`).
+    """
     if not span:
         return
     start, width = span
-    attr = (curses.color_pair(C_SORT) if col else curses.A_UNDERLINE) | curses.A_BOLD
     try:
         scr.chgat(y, start, width, attr)
     except curses.error:
         pass
+
+
+def _hl_sort(scr, y: int, span, col: bool) -> None:
+    """정렬 중인 열 헤더를 덧칠한다 — 어떤 기준으로 줄세웠는지 한눈에 보이게."""
+    _hl_span(scr, y, span,
+             (curses.color_pair(C_SORT) if col else curses.A_UNDERLINE) | curses.A_BOLD)
 
 
 # --- 세로 배치 -------------------------------------------------------------
@@ -394,9 +404,14 @@ def _draw(scr, st: State) -> None:
     if dh:
         dtop = min(top + 1 + shown + gap, (hint_y if hint_y >= 0 else foot_y) - dh)
         for i, line in enumerate(detail_lines(st, w)[:dh]):
-            base = (curses.color_pair(C_AMBER) | curses.A_BOLD if col and i == 0
-                    else (curses.color_pair(C_BODY) if col else curses.A_NORMAL))
+            base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
             _put(scr, dtop + i, line, base, col and i > 0)
+        # 첫 줄에서 **섹터 이름만** 앰버로 세운다 — 그 줄에서 "지금 무엇을 보고
+        # 있는가" 를 말하는 건 이름 하나뿐인데 부속 정보에 묻혀 있었다. 좌표는
+        # 뷰가 낸다(`detail_title_span`) — 앱이 문구를 다시 뜯으면 어긋난다.
+        # 무색 터미널에서는 굵게만 — 글자는 안 바꾸므로 정보가 사라지지 않는다.
+        _hl_span(scr, dtop, detail_title_span(st, w),
+                 (curses.color_pair(C_AMBER) if col else 0) | curses.A_BOLD)
     _draw_hint_and_footer(scr, st, w, hint_y, foot_y, col)
     scr.refresh()
 

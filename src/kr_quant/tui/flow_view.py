@@ -684,6 +684,31 @@ def name_sort_span(st: State) -> tuple[int, int] | None:
     return col_span(names_cols(), header) if header else None
 
 
+#: 상세 패널 첫 줄의 들여쓰기. :func:`detail_lines` 와 :func:`detail_title_span`
+#: 이 **같은 상수**를 봐야 색이 글자와 어긋나지 않는다.
+DETAIL_INDENT = " "
+
+
+def detail_title_span(st: State, width: int) -> tuple[int, int] | None:
+    """상세 패널 첫 줄에서 **섹터 이름**의 (시작 표시칸, 폭). 없으면 None.
+
+    이 줄에서 "지금 무엇을 보고 있는가" 를 말하는 건 섹터 이름 하나뿐인데,
+    줄 전체가 한 색이라 부속 정보(`종목 56개`·`Enter 로 전체`)에 묻혀 있었다.
+
+    좌표를 **뷰가 낸다.** 앱이 문자열을 다시 뜯어 이름 길이를 추측하면 문구를
+    고칠 때 색이 조용히 어긋난다 — 이 저장소는 표 헤더와 셀, 히트맵과 색에서
+    이미 두 번 밟았다(`col_span`·`name_sort_span`·`is_section` 이 같은 관용구다).
+    한글이 두 칸이라 문자 인덱스가 아니라 **표시 칸**을 낸다.
+    """
+    rows = st.rows()
+    if not rows:
+        return None
+    name = rows[min(st.row, len(rows) - 1)].get("sector") or "—"
+    start = cell_len(DETAIL_INDENT)
+    w = min(cell_len(name), max(width - start, 0))
+    return (start, w) if w > 0 else None
+
+
 def detail_lines(st: State, width: int) -> list[str]:
     rows = st.rows()
     if not rows:
@@ -713,7 +738,8 @@ def detail_lines(st: State, width: int) -> list[str]:
     # 적는다. 안 적으면 위 표(종합)와 이 줄(20일)이 다른 것을 말하는데 화면은
     # 같은 것처럼 보인다.
     note = " · 20일 기준" if st.window == "종합" else ""
-    return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체", width),
+    return [pad(f"{DETAIL_INDENT}{r.get('sector','—')}"
+                f" · 종목 {n}개 · Enter 로 전체", width),
             pad(_actors_line(r, width, note), width),
             pad(side("buy", "순매수 상위"), width),
             pad(side("sell", "순매도 상위"), width)]

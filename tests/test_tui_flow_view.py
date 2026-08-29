@@ -1361,6 +1361,43 @@ def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
     assert span_at([5, 5, 5], 2) == (12, 5)
 
 
+def test_the_panel_marks_the_sector_name_and_the_view_gives_the_coordinates(data):
+    """패널 첫 줄은 줄 전체가 한 색이라 섹터 이름이 부속 정보에 묻혔다.
+
+    그 줄에서 "지금 무엇을 보고 있는가" 를 말하는 건 이름 하나뿐이다. 좌표는
+    **뷰가 낸다** — 앱이 문자열을 다시 뜯어 길이를 추측하면 문구를 고칠 때 색이
+    조용히 어긋난다(`col_span`·`name_sort_span`·`is_section` 과 같은 관용구).
+
+    주입: `detail_title_span` 이 문자 수(`len`)로 폭을 내면 한글 섹터에서
+    칠하는 칸이 절반으로 어긋나 실패한다.
+    """
+    from kr_quant.tui.flow_view import cell_len, detail_lines, detail_title_span
+
+    st = State(data)
+    for row in range(min(5, len(st.rows()))):
+        st.row = row
+        sector = st.rows()[row].get("sector")
+        for width in (40, 80, 120, 200):
+            line = detail_lines(st, width)[0]
+            span = detail_title_span(st, width)
+            assert span, f"폭{width} 에서 강조할 자리를 못 냈다"
+            start, w = span
+            # 칠하는 칸이 **섹터 이름 위**여야 한다 — 한글이 두 칸이라 문자
+            # 인덱스로 세면 절반씩 어긋난다. 표시 칸으로 되짚어 확인한다.
+            cells = []
+            for ch in line:
+                cells.append(ch)
+                cells += [""] * (cell_width(ch) - 1)
+            painted = "".join(cells[start:start + w])
+            assert sector.startswith(painted.rstrip()) and painted.strip(), (
+                f"폭{width}: 칠하는 자리가 이름이 아니다 {painted!r} vs {sector!r}")
+            assert start + w <= width, f"폭{width} 를 넘겨 칠한다: {span}"
+            if width >= cell_len(sector) + 2:
+                assert w == cell_len(sector), f"이름 전체를 안 덮는다: {span}"
+    # 색이 없어도 줄은 그대로다 — 강조는 속성일 뿐 글자를 바꾸지 않는다.
+    assert detail_lines(st, 200)[0].strip().startswith(st.rows()[st.row]["sector"])
+
+
 def test_combined_screen_shows_the_four_actors_and_says_which_window(data):
     """종합 구간에서만 4주체가 `— · — · — · —` 였다.
 
