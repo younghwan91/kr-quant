@@ -726,6 +726,20 @@ def table_cols(st: State, width: int) -> list[Col]:
     return cols
 
 
+def view_width(term_width: int) -> int:
+    """터미널 폭에서 **뷰가 실제로 쓸 수 있는 폭**.
+
+    curses 는 오른쪽 아래 칸에 글자를 쓰면 스크롤을 유발해 예외를 낸다. 그래서
+    앱은 늘 마지막 칸을 비워 두고 그린다 — "80칸 터미널" 은 뷰에게 79칸이다.
+
+    그 −1 이 앱에만 있었다. 그래서 "폭 80 에서 이 열이 보이는가" 를 묻는 검사는
+    80 으로 물었고, 열 합계가 정확히 80 인 배치를 통과시켰다. 실제 80칸 터미널에서
+    그 열은 안 보인다 — 검사와 화면이 한 칸 어긋나 있었고, 실제로 `상대수익[%p]`
+    이 그렇게 잘렸다. 규칙을 한 곳에 둔다.
+    """
+    return max(term_width - 1, 1)
+
+
 def fit_widths(widths: list[int], total: int) -> int:
     """``total`` 칸에 **온전히** 들어가는 열 **개수**. 열 사이 공백 1칸을 센다.
 
@@ -798,7 +812,9 @@ def sort_span(st: State, width: int) -> tuple[int, int] | None:
 #: 가로 마커가 선다 — 그 위가 "이 섹터를 움직인 종목", 아래는 스크롤할 0 이다.
 _NAME_COLS = (
     Col("종목", 14, False, lambda t, st: t.get("name", "—")),
-    Col("코드", 7, False, lambda t, st: t.get("code", "")),
+    # 코드는 6자리고 헤더 `코드` 는 4칸이라 6이면 충분하다. 7이던 시절 그 한 칸이
+    # 폭 79(=80칸 터미널)에서 `상대수익[%p]` 을 통째로 밀어냈다.
+    Col("코드", 6, False, lambda t, st: t.get("code", "")),
     Col("순매수[억]", 13, True, lambda t, st: fmt_amt(t.get("flow"))),
     Col("누적[%]", 8, True,
         lambda t, st: "—" if t.get("cum") is None else f"{t['cum']:.0f}"),

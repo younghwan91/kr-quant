@@ -1618,10 +1618,16 @@ def test_the_new_axes_survive_at_eighty_columns(data):
     `_fit` 은 앞에서부터 자르므로 순서가 곧 우선순위다. 새 축을 오른쪽 끝에
     붙이면 이 화면을 실제로 보는 폭에서 통째로 사라진다 — 그러면 만든 적이
     없는 것과 같다.
-    """
-    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, _fit, names_cols
 
-    heads = [c.header for c in _fit(names_cols(), 80)]
+    ⚠️ **80 이 아니라 `view_width(80)` 로 묻는다.** curses 가 마지막 칸을 못 쓰므로
+    80칸 터미널은 뷰에게 79칸이다. 80 으로 물으면 합계가 정확히 80 인 배치가
+    통과하는데 실제 화면에서는 마지막 열이 안 보인다 — 실측으로 그렇게 한 번
+    어긋났다(`상대수익[%p]` 이 80칸 캡처에서 사라졌다).
+    """
+    from kr_quant.tui.flow_view import (
+        COL_INVTRT, COL_PENFND, _fit, names_cols, view_width)
+
+    heads = [c.header for c in _fit(names_cols(), view_width(80))]
     for h in (COL_INVTRT, COL_PENFND, "상대수익[%p]"):
         assert h in heads, f"폭 80 에서 '{h}' 가 잘려 나갔다: {heads}"
 
@@ -1758,3 +1764,24 @@ def test_a_report_without_the_new_fields_still_renders(data):
             assert len(lines) - nhead == len(names)
             for ln in lines:
                 assert _w(ln) == width, (width, repr(ln))
+
+
+def test_the_curses_last_cell_rule_lives_in_one_place():
+    """회귀 — curses 는 오른쪽 아래 칸에 쓰면 터지므로 앱은 늘 마지막 칸을 비운다.
+
+    그 −1 이 앱 안에만 있으면 "폭 80 에서 이 열이 보이는가" 를 묻는 검사는 80 으로
+    묻고 화면은 79 로 그린다. 열 합계가 정확히 80 인 배치가 통과하는데 실제 80칸
+    터미널에서는 마지막 열이 안 보인다 — `상대수익[%p]` 이 실측 캡처에서 그렇게
+    사라졌다. 규칙은 :func:`view_width` 하나이고, 앱은 그것을 부른다.
+    """
+    import inspect
+    import re
+
+    from kr_quant.tui import flow_app
+    from kr_quant.tui.flow_view import view_width
+
+    assert view_width(80) == 79
+    assert view_width(1) == 1                      # 폭 0 으로 내려가지 않는다
+    src = inspect.getsource(flow_app._draw)
+    assert "view_width(" in src, "앱이 폭 규칙을 안 부른다"
+    assert not re.search(r"\bw\s*-\s*1\b", src), "앱에 −1 이 다시 나타났다"
