@@ -8,9 +8,10 @@
 주변합(marginal)은 쌍별 흐름을 결정하지 않는다. 4주체의 주변합 4개(독립 3개)로는
 C(4,2)=6개의 쌍별 이전량이 3차원만큼 남는다.
 
-``flow_view`` 와 나란히 산다. 폭 계산(``cell_width``·``pad``)과 시장 순서
-(``MARKET_ORDER``)는 거기 것을 **재사용**한다 — 한글 2칸·U+2212 1칸을, 그리고
-"m 두 번 = 코스닥" 을 두 화면이 각자 정의하면 반드시 갈라진다.
+``flow_view`` 와 나란히 산다. 폭 계산(``cell_width``·``cell_len``·``pad``)과
+폭 단계 고르기(``tier_for``), 시장 순서(``MARKET_ORDER``)는 거기 것을
+**재사용**한다 — 한글 2칸·U+2212 1칸을, 그리고 "m 두 번 = 코스닥" 을 두 화면이
+각자 정의하면 반드시 갈라진다.
 
 ``flow_view`` 가 고친 세 가지(줄을 통째로 잘라 숫자가 자릿수 중간에서 끊김 ·
 얇은 섹터 경고를 색에만 실음 · 터미널이 사라지면 100% CPU 좀비)는 이 화면에도
@@ -29,7 +30,8 @@ import math
 import os
 import random
 
-from kr_quant.tui.flow_view import MARKET_ORDER, cell_width, fmt_amt, pad
+from kr_quant.tui.flow_view import (
+    MARKET_ORDER, cell_len, cell_width, fmt_amt, pad, tier_for)
 
 ACTORS = (("indiv", "개인"), ("forgn", "외국인"), ("inst", "기관"), ("etc", "기타법인"))
 ACTOR_KEYS = tuple(k for k, _ in ACTORS)
@@ -52,11 +54,8 @@ BANNER = BANNER_TIERS[0]
 
 
 def banner_for(width: int) -> str:
-    """그 폭에 온전히 들어가는 가장 긴 배너."""
-    for t in BANNER_TIERS:
-        if sum(cell_width(c) for c in t) + 1 <= width:
-            return t
-    return BANNER_TIERS[-1]
+    """그 폭에 온전히 들어가는 가장 긴 배너. 앞에 공백 한 칸이 붙는다."""
+    return tier_for(BANNER_TIERS, width - 1)
 
 SPARK = "▁▂▃▄▅▆▇█"
 #: 반칸 블록. 양수는 오른쪽으로 자라며 꼬리가 `▌`(칸의 왼쪽 절반), 음수는 왼쪽으로
@@ -69,10 +68,6 @@ BLOCK_FULL, BLOCK_L, BLOCK_R = "█", "▌", "▐"
 THIN_N = 10
 _MIN_CORR_N = 20        # 이보다 짧은 구간에서는 상관을 내지 않는다
 _NULL_SHIFTS = 20       # 순환이동 널의 반복 수
-
-
-def _w(text: str) -> int:
-    return sum(cell_width(c) for c in text)
 
 
 # ---------------------------------------------------------------- 데이터 로딩
@@ -415,7 +410,7 @@ def _col(name: str, want: int, right: bool = True) -> tuple[str, int, bool]:
     이 저장소는 잘린 헤더를 한 번 겪었고(`test_headers_are_not_truncated_...`),
     폭을 손으로 세는 대신 여기서 계산한다.
     """
-    return (name, max(want, _w(name)), right)
+    return (name, max(want, cell_len(name)), right)
 
 
 #: 원장의 최소 폭. 4주체 + 잔여가 **한 덩어리**라 이보다 좁으면 표를 안 그린다.
@@ -493,6 +488,15 @@ def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     return out, thin, 1
 
 
+#: 스파크라인의 세로 눈금 경고 — 넓은 것부터. :func:`tier_for` 가 폭에 맞춰 고른다.
+TIMELINE_NOTE_TIERS = (
+    " ↑ 세로 눈금은 행마다 다르다(각 행의 최저~최고를 8단계에 편다)."
+    " 행 사이 크기 비교는 진폭 열로 하라.",
+    " ↑ 세로 눈금은 행마다 다르다 — 크기 비교는 진폭 열로.",
+    " ↑ 눈금은 행마다 다르다",
+)
+
+
 def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     """섹터별 **누적** 순매수 스파크라인 — 회전을 보여주되 화살표는 없다.
 
@@ -516,21 +520,12 @@ def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     sw = min(mo.window, width - used)
     head = " ".join(pad(c[0], c[1], c[2]) for c in cols)
     # 헤더가 자기 열 폭보다 길면 잘린다("누적추이[" 처럼). 짧은 이름을 **고른다**.
-    sh = next((t for t in (f"누적추이[{sw}점]", f"추이[{sw}]", "추이", "")
-               if _w(t) <= sw), "")
+    sh = tier_for((f"누적추이[{sw}점]", f"추이[{sw}]", "추이", ""), sw)
     head += " " + pad(sh, sw)
-    # 경고는 **둘째 헤더 줄**로 뺀다. 스파크라인 열 폭(구간 길이)에 밀어 넣으면
-    # 짧은 구간에서 잘려 사라지는데, 하필 그때 가장 필요한 문장이다.
     # 경고는 **둘째 헤더 줄**이다. 스파크라인 열 폭(구간 길이)에 밀어 넣으면 짧은
     # 구간에서 잘려 사라지는데, 하필 그때 가장 필요한 문장이다. 줄로 빼도 폭이
     # 좁으면 또 잘리므로 폭에 맞는 표현을 **고른다** — 잘린 경고는 경고가 아니다.
-    note = (" ↑ 세로 눈금은 행마다 다르다(각 행의 최저~최고를 8단계에 편다)."
-            " 행 사이 크기 비교는 진폭 열로 하라.")
-    if _w(note) > width:
-        note = " ↑ 세로 눈금은 행마다 다르다 — 크기 비교는 진폭 열로."
-    if _w(note) > width:
-        note = " ↑ 눈금은 행마다 다르다"
-    out = [pad(head, width), pad(note, width)]
+    out = [pad(head, width), pad(tier_for(TIMELINE_NOTE_TIERS, width), width)]
     thin = [False, False]
     for r in mo.rows():
         v = mo.daily(r["sector"], mo.actor)[-mo.window:]

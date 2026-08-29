@@ -478,7 +478,7 @@ def test_hint_bar_explains_the_column_being_sorted():
 
 def test_footer_grows_and_shrinks_with_the_width():
     """푸터가 한 줄 고정이라 넓은 화면에서 절반이 비고 좁은 화면에서 잘렸다."""
-    from kr_quant.tui.flow_view import _w, footer_line
+    from kr_quant.tui.flow_view import cell_len as _w, footer_line
     for drill in (False, True):
         wide, narrow = footer_line(200, drill), footer_line(40, drill)
         assert _w(wide) > _w(narrow), "폭이 넓어도 푸터가 안 늘어난다"

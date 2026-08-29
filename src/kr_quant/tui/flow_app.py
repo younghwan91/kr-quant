@@ -25,7 +25,8 @@ import re
 from kr_quant.tui.flow_view import (
     HELP, NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, cell_len,
     cell_width, color_spans, detail_lines, footer_line, header_lines,
-    help_lines, name_sort_span, names_lines, sort_span, table_lines)
+    help_lines, name_sort_span, names_lines, pad, sort_span, table_lines,
+    tier_for)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -183,6 +184,18 @@ def _help_desc(header: str) -> str:
     return ""
 
 
+#: 종합 화면의 힌트바 — 넓은 것부터. 이 화면은 정렬이 **없어서** 열 설명 대신
+#: "여기엔 정렬이 없다" 를 말한다. 어느 단계에서도 ``?`` 는 남긴다 — 줄어든 안내가
+#: "여기가 전부" 로 읽히면 안 되기 때문이다(푸터와 같은 규칙).
+HINT_COMBINED_TIERS = (
+    " 종합 화면은 구간별 G 를 나란히 볼 뿐, 정렬·역순이 없다 · ? 로 열 설명",
+    " 종합은 구간별 G 를 나란히 본다. 정렬·역순이 없다 · ? 로 설명",
+    " 종합 — 구간별 G. 정렬·역순 없다 · ? 로 설명",
+    " 종합 — 정렬·역순 없다 · ? 로 설명",
+    " 종합 · 정렬 없다 ?",
+)
+
+
 def hint_text(st: State, width: int = 200) -> str:
     """푸터 위 **항상 보이는 한 줄** — 지금 정렬 중인 열의 뜻.
 
@@ -196,22 +209,27 @@ def hint_text(st: State, width: int = 200) -> str:
         arrow = "▲" if st.nrev else "▼"
     elif st.window == "종합":
         # 종합은 페이로드 순서 그대로다 — 없는 정렬을 있는 척하지 않는다.
-        return " 종합 화면은 구간별 G 를 나란히 볼 뿐, 정렬·역순이 없다 · ? 로 열 설명"
+        return tier_for(HINT_COMBINED_TIERS, width)
     else:
         key, _fell = st.effective_sort(st.rows())
         header = (SORT_COL.get(key) or _EXTRA_COL.get(key)
                   or dict(SORTS).get(key, key))
         arrow = "▲" if st.rev else "▼"
-    desc = _help_desc(header)
+    desc = _help_desc(header) or "? 로 설명"
     order = "오름차순" if arrow == "▲" else "내림차순"
     # 좁은 화면에서는 방향 풀이를 접는다 — 잘려나갈 자리는 열 설명에 준다.
     tag = f"({order}, r 로 뒤집기)" if width >= 90 else ""
-    head = f" 정렬 {header}{arrow}{tag} · "
+    head = f" 정렬 {header}{arrow}{tag}"
     # 설명도 폭에 맞춰 줄인다. 예전엔 head 만 폭을 보고 desc 는 안 봐서,
     # 폭 40 에서 78칸짜리 문장이 나와 pad 가 **단어 중간에서** 잘랐다.
     # 푸터에는 단계를 만들어 놓고 정작 새로 만든 힌트바에는 안 쓴 셈이었다.
-    room = width - cell_len(head) - 1
-    if room > 4 and cell_len(desc) > room:
+    room = width - cell_len(head) - 4          # " · " 세 칸 + 여유 한 칸
+    if room < 2:
+        # 설명을 넣을 자리가 없다 — 열 이름만 남긴다. 한두 글자로 잘린 설명은
+        # 설명이 아니다. 예전엔 여기서 `room > 4` 조건이 자르기를 통째로 건너뛰어,
+        # 폭 27 이하에서 88칸짜리 줄이 그대로 나갔다(실측).
+        return pad(head, width)
+    if cell_len(desc) > room:
         cut, used = "", 0
         for ch in desc:
             w2 = cell_width(ch)
@@ -220,7 +238,7 @@ def hint_text(st: State, width: int = 200) -> str:
             cut += ch
             used += w2
         desc = cut.rstrip() + "…"
-    return head + (desc or "? 로 설명")
+    return head + " · " + desc
 
 
 def _draw(scr, st: State) -> None:
