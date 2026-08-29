@@ -410,7 +410,8 @@ def test_table_and_detail_show_the_same_top_names(data):
     width = 170
     lines, _thin, nhead = table_lines(st, width, 20)
     row_line = lines[nhead + st.row]
-    detail = detail_lines(st, width)[1]        # '순매수 상위' 줄
+    # 줄 번호로 집으면 패널에 줄이 하나 늘 때 무관한 이유로 깨진다(실제로 깨졌다).
+    detail = next(ln for ln in detail_lines(st, width) if "순매수 상위" in ln)
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
     # 표는 1위만, 하단 패널은 상위 3을 보여준다 — 1위는 반드시 일치해야 한다.
     assert top, "상위 종목이 비었다"
@@ -427,7 +428,7 @@ def test_detail_panel_shows_the_value_it_sorts_by(data):
     """
     st = State(data)
     st.row = 0
-    line = detail_lines(st, 132)[1]
+    line = next(ln for ln in detail_lines(st, 132) if "순매수 상위" in ln)
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
     shown = [x for x in top[:3]]
     if len(shown) < 2:
@@ -1124,3 +1125,152 @@ def test_help_labels_are_never_truncated():
         assert all(cell_len(ln) <= width for ln in lines)
         for name in long:
             assert name in lines, f"폭{width} 에서 {name!r} 라벨이 잘렸다"
+
+
+# ── ambiguous 폭 · 열 자르기 규칙 ────────────────────────────────────────────
+
+def _wide_w(text: str) -> int:
+    """``cell_width`` 를 **안 쓰는** 참조 구현 — 'A' 를 2칸으로 그리는 터미널.
+
+    검사가 `cell_len` 으로 재면 구현과 같은 규칙을 두 번 적어 놓고 대조하는
+    꼴이라 늘 초록이다(동어반복). 그래서 여기서 따로 센다.
+    """
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F", "A") else 1
+               for c in text)
+
+
+def test_ambiguous_wide_mode_is_off_by_default_and_counts_A_as_two_when_on(monkeypatch):
+    """'A' 글자의 폭은 터미널이 정한다 — 그걸 셀 수 있어야 한다."""
+    import unicodedata
+
+    from kr_quant.tui import flow_view
+
+    amb = [c for c in "·—↑↓→←×÷²½ΔΣβ▲▼※≠…─"
+           if unicodedata.east_asian_width(c) == "A"]
+    assert len(amb) >= 15, "이 검사가 겨냥한 글자들이 'A' 가 아니게 됐다"
+
+    # 기본값은 예전 그대로 — 켜지 않으면 한 글자도 다르게 세지 않는다.
+    monkeypatch.setattr(flow_view, "AMBIGUOUS_WIDE", False)
+    assert all(flow_view.cell_width(c) == 1 for c in amb)
+    assert flow_view.cell_width("가") == 2 and flow_view.cell_width("a") == 1
+
+    monkeypatch.setattr(flow_view, "AMBIGUOUS_WIDE", True)
+    assert all(flow_view.cell_width(c) == 2 for c in amb), \
+        "ambiguous=wide 모드인데 'A' 를 1칸으로 센다"
+    # 'A' 아닌 것은 모드와 무관하다 — 브라유 스파크라인이 여기 걸리면 안 된다.
+    assert flow_view.cell_width("가") == 2 and flow_view.cell_width("a") == 1
+    assert all(flow_view.cell_width(c) == 1 for c in flow_view.SPARK)
+
+
+def test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide(data, monkeypatch):
+    """⚠️ 이 화면들은 'A'(Ambiguous) 글자를 31종·440여 곳에서 쓴다.
+
+    `·` `—` `↑` `→` `×` `²` `Σ` … 의 폭은 유니코드가 **정하지 않았고** 터미널이
+    정한다. 한국어권에서 흔한 "ambiguous=wide" 설정(PuTTY·iTerm2·mintty)에서는
+    2칸으로 그려지는데, 1칸으로 세면 `pad(..., width)` 로 폭에 딱 맞춘 줄이
+    넘쳐서 다음 줄로 접히고 **화면 전체가 어긋난다.**
+
+    그래서 모드를 켠 채 모든 표시면을 그려 보고, `cell_width` 를 쓰지 않는
+    참조 구현(`_wide_w`)으로 재서 폭을 넘는 줄이 하나도 없어야 한다고 본다.
+    """
+    from kr_quant.tui import flow_view
+    from kr_quant.tui.flow_view import (
+        detail_lines, footer_line, header_lines, help_lines, names_lines, table_lines,
+    )
+
+    monkeypatch.setattr(flow_view, "AMBIGUOUS_WIDE", True)
+    st = State(data)
+    bad = []
+    for width in (40, 72, 80, 100, 132, 170):
+        surfaces = [[footer_line(width)], [footer_line(width, drill=True)],
+                    help_lines(width, 0, 10 ** 6)[0]]
+        for wi in range(len(WINDOWS)):
+            for ai in range(len(ACTORS)):
+                st.wi, st.ai = wi, ai
+                surfaces += [header_lines(st, width), detail_lines(st, width),
+                             table_lines(st, width, 20)[0], names_lines(st, width)[0]]
+        for lines in surfaces:
+            for line in lines:
+                if _wide_w(line) > width:
+                    bad.append((width, _wide_w(line), line))
+    assert not bad, f"폭을 넘는 줄 {len(bad)}개 — 예: {bad[:3]}"
+
+
+def test_both_screens_cut_columns_by_the_same_rule():
+    """흐름 화면과 원장 화면이 **같은 규칙으로** 열을 떨어뜨린다.
+
+    두 `_fit` 은 열 표현만 다른(``Col`` 대 3-튜플) 같은 로직이 두 벌이었고,
+    **둘을 잇는 검사가 하나도 없었다.** 한쪽만 고치면 같은 앱의 두 화면이 열을
+    다르게 잘라도 전부 초록이다. 이제 규칙은 `fit_widths` 한 곳에 있고, 이
+    검사가 두 호출부를 그 한 곳에 묶어 둔다.
+    """
+    import random
+
+    from kr_quant.tui.flow_view import Col, _fit as flow_fit, fit_widths
+    from kr_quant.tui.ledger_view import _fit as ledger_fit
+
+    rng = random.Random(20260829)
+    for _ in range(2000):
+        widths = [rng.randint(0, 30) for _ in range(rng.randint(0, 14))]
+        total = rng.randint(-5, 200)
+        k = fit_widths(widths, total)
+        fcols = [Col(f"h{i}", w, False, None) for i, w in enumerate(widths)]
+        lcols = [(f"h{i}", w, False) for i, w in enumerate(widths)]
+        assert flow_fit(fcols, total) == fcols[:k], (widths, total)
+        assert ledger_fit(lcols, total) == lcols[:k], (widths, total)
+
+
+def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
+    """규칙 자체 — 첫 열은 잘려도 남기고, 열 사이 공백 1칸을 센다.
+
+    첫 열을 떨어뜨리면 좁은 터미널에서 표가 통째로 사라지고, 공백을 안 세면
+    마지막 열이 한 칸 넘쳐 줄이 접힌다.
+    """
+    from kr_quant.tui.flow_view import fit_widths, span_at
+
+    assert fit_widths([], 80) == 0
+    assert fit_widths([100], 10) == 1          # 첫 열은 잘려도 남는다
+    assert fit_widths([5, 5], 10) == 1         # 5+1+5=11 > 10
+    assert fit_widths([5, 5], 11) == 2
+    assert fit_widths([5, 5, 5], 17) == 3
+    assert fit_widths([5, 5, 5], 16) == 2
+    assert span_at([5, 5, 5], 0) == (0, 5)
+    assert span_at([5, 5, 5], 2) == (12, 5)
+
+
+def test_detail_panel_answers_who_took_the_other_side(data):
+    """회귀 — "기관이 팔았다" 다음 질문은 **"그럼 누가 받았지"** 다.
+
+    화면이 한 번에 한 주체만 보여주므로 그 답은 앱을 바꿔야(`kq-ledger`)
+    알 수 있었다. 주식은 누가 사면 누가 판 것이고 4주체 합은 0 에 닫히므로,
+    답은 같은 페이로드 안에 이미 있다 — 화면을 바꿀 이유가 없다.
+    """
+    from kr_quant.tui.flow_view import ACTORS, cell_len, detail_lines
+
+    st = State(data)
+    raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
+    for row in range(min(3, len(st.rows()))):
+        st.row = row
+        line = next(ln for ln in detail_lines(st, 170) if "반대편" in ln)
+        src = raw[st.rows()[row]["sector"]]
+        for key, ko in ACTORS:
+            assert ko in line, f"{ko} 가 반대편 줄에 없다"
+            assert fmt_amt(src[key]) in line, (
+                f"{ko} 금액이 원본과 다르다 — 기대 {fmt_amt(src[key])}, 줄: {line!r}")
+        # 네 주체가 서로 다른 값이어야 이 검사가 헛돌지 않는다.
+        assert len({src[k] for k, _ko in ACTORS}) > 1, "픽스처가 4주체를 같게 뒀다"
+
+    # 좁아지면 단계를 내려 줄인다. **자르기 전 원문**을 재야 한다 —
+    # `detail_lines` 가 `pad` 로 감싸므로 출력으로는 넘침이 원리상 안 보인다
+    # (이 저장소가 오늘만 세 번 밟은 함정이다).
+    from kr_quant.tui.flow_view import _actors_line
+
+    st.row = 0
+    r = st.rows()[0]
+    for width in range(24, 180, 3):
+        raw_line = _actors_line(r, width)
+        assert cell_len(raw_line) + 1 <= width or raw_line == " 반대편: —", (
+            f"폭{width} 에서 {cell_len(raw_line)}칸: {raw_line!r}")
+        if width >= 90:
+            assert "기타법인" in raw_line, f"폭{width} 인데 주체가 빠졌다"

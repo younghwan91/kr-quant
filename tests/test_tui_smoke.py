@@ -526,7 +526,10 @@ def test_detail_panel_folds_on_short_screens_so_the_table_survives():
         _head, rows, detail, _hint, _foot = layout(h)
         assert detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
         assert rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
-    assert layout(24)[2] == 3, "정상 높이에서는 상세 패널이 있어야 한다"
+    # 줄 수를 박으면 패널에 줄이 늘 때 무관한 이유로 깨진다 — 있고,
+    # 좁아지면 줄어들고, 더 좁아지면 접힌다는 **성질**만 본다.
+    assert layout(24)[2] >= 3, "정상 높이에서는 상세 패널이 있어야 한다"
+    assert layout(24)[2] >= layout(11)[2] >= 3, "높이가 줄면 패널도 줄어야 한다"
 
 
 def test_tall_screens_give_the_extra_height_to_the_table():

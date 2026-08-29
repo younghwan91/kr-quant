@@ -39,14 +39,7 @@ id = "truncate-line-instead-of-dropping-column"
 why = "폭 초과 열을 떨어뜨리지 않고 줄을 자르면 -1,360 이 -1 로 보인다"
 guards = ["tests/test_tui_flow_view.py::test_numbers_are_never_cut_mid_value_in_narrow_terminals"]
 file = "src/kr_quant/tui/flow_view.py"
-find = """    out, used = [], 0
-    for c in cols:
-        need = c.width + (1 if out else 0)
-        if out and used + need > width:
-            break
-        out.append(c)
-        used += need
-    return out"""
+find = "    return cols[:fit_widths([c.width for c in cols], width)]"
 replace = "    return cols"
 
 [[mutation]]
@@ -201,8 +194,8 @@ why = """화면에 있는 열을 도움말에서 빼면 사용자가 '이 숫자
 없어진다. 특히 최대1일[%]·~ 마커는 이름만으로 아무것도 안 잡힌다."""
 guards = ["tests/test_tui_ledger_view.py::test_help_explains_every_column_the_screens_draw"]
 file = "src/kr_quant/tui/ledger_view.py"
-find = """    ("최대1일[%]", "그 구간 총량 중 **하루가 차지한 비중** = max|일별| ÷ Σ|일별| × 100."),"""
-replace = """    ("최대1일", "그 구간 총량 중 **하루가 차지한 비중**."),"""
+find = """    ("최대일몫[%]", "그 구간 총량 중 **하루가 차지한 몫** = max|일별| ÷ Σ|일별| × 100."),"""
+replace = """    ("최대일몫", "그 구간 총량 중 **하루가 차지한 몫**."),"""
 
 [[mutation]]
 id = "ledger-help-shows-markdown"
@@ -211,8 +204,8 @@ why = """소스의 **강조** 는 화면에 나갈 글자가 아니다. 도움�
 guards = ["tests/test_tui_ledger_view.py::test_help_and_hint_never_show_markdown_asterisks"]
 file = "src/kr_quant/tui/flow_view.py"
 find = """        desc = desc.replace("**", "")
-        body.append"""
-replace = """        body.append"""
+        if not name:"""
+replace = """        if not name:"""
 
 [[mutation]]
 id = "ledger-narrow-notice-truncated"
@@ -221,12 +214,14 @@ why = """"왜 안 그리나" 안내를 한 줄 고정으로 두면 pad 가 자�
 guards = ["tests/test_tui_ledger_view.py::test_narrow_notices_are_never_truncated"]
 file = "src/kr_quant/tui/ledger_view.py"
 find = """        return ([pad(_too_narrow("전개를", width, TIMELINE_MIN_W), width),
-                 pad(tier_for(TIMELINE_NARROW_TIERS, width), width)],
-                [False, False], 2)"""
+                 pad(tier_for(TIMELINE_NARROW_TIERS, width), width),
+                 pad(narrow_also(width), width)],
+                [False, False, False], 3)"""
 replace = """        return ([pad(f" 폭이 {width}칸이라 전개를 안 그린다 — 최소 {TIMELINE_MIN_W}칸.",
                      width),
-                 pad(" 스파크라인이 잘리면 구간의 일부를 전부인 척 보여준다.", width)],
-                [False, False], 2)"""
+                 pad(" 스파크라인이 잘리면 구간의 일부를 전부인 척 보여준다.", width),
+                 pad(narrow_also(width), width)],
+                [False, False, False], 3)"""
 
 [[mutation]]
 id = "ledger-load-guard-narrower-than-bracket-access"
@@ -311,3 +306,298 @@ find = """    elif ch == ord("d"):
         mo.detrend = not mo.detrend"""
 replace = """    elif ch == ord("z"):
         mo.detrend = not mo.detrend"""
+
+[[mutation]]
+id = "fit-widths-forgets-the-column-gap"
+why = """열 사이 공백 1칸을 안 세면 마지막 열이 폭을 한 칸 넘어 줄이 접힌다.
+`_fit` 두 벌을 `fit_widths` 한 곳으로 합쳤으므로, 규칙이 사는 자리도 여기다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap",
+          "tests/test_tui_flow_view.py::test_numbers_are_never_cut_mid_value_in_narrow_terminals"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "        need = w + (1 if n else 0)"
+replace = "        need = w"
+
+[[mutation]]
+id = "fit-widths-drops-the-first-column"
+why = """첫 열까지 떨어뜨리면 좁은 터미널에서 표가 통째로 사라진다 — 잘린 섹터
+이름은 뜻이 남지만 없는 표는 아무 뜻도 없다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "        if n and used + need > total:"
+replace = "        if used + need > total:"
+
+[[mutation]]
+id = "ledger-fit-diverges-from-flow-fit"
+why = """원장 화면이 흐름 화면과 **다른 규칙으로** 열을 자른다. 예전엔 같은 로직이
+두 벌이라 이 버그가 리팩터 실수 한 번으로 나올 수 있었고, 둘을 잇는 검사가 하나도
+없어 전부 초록이었다. 합친 지금은 호출부가 갈라지는 형태로만 남는다."""
+guards = ["tests/test_tui_flow_view.py::test_both_screens_cut_columns_by_the_same_rule"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    return cols[:fit_widths([c[1] for c in cols], width)]"
+replace = "    return cols[:fit_widths([c[1] for c in cols], width) + 1]"
+
+[[mutation]]
+id = "cell-width-ignores-ambiguous-wide"
+why = """'A'(Ambiguous) 글자를 2칸으로 그리는 터미널(한국어권에서 흔한
+ambiguous=wide 설정)에서 1칸으로 세면, 폭에 딱 맞춘 줄이 넘쳐 접히고 화면
+전체가 어긋난다. 이 화면들은 'A' 글자를 31종·440여 곳에서 쓴다."""
+guards = ["tests/test_tui_flow_view.py::test_ambiguous_wide_mode_is_off_by_default_and_counts_A_as_two_when_on",
+          "tests/test_tui_flow_view.py::test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide",
+          "tests/test_tui_ledger_view.py::test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "    return 2 if (AMBIGUOUS_WIDE and eaw == \"A\") else 1"
+replace = "    return 1"
+
+[[mutation]]
+id = "span-at-forgets-the-column-gap"
+why = """열 시작 칸을 공백 없이 세면 색칠·하이라이트가 열 하나만큼 왼쪽으로 밀려
+엉뚱한 열을 칠한다."""
+guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap",
+          "tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers",
+          "tests/test_tui_ledger_view.py::test_numeric_columns_start_at_the_same_display_cell"]
+file = "src/kr_quant/tui/flow_view.py"
+find = "    return sum(w + 1 for w in widths[:i]), widths[i]"
+replace = "    return sum(w for w in widths[:i]), widths[i]"
+
+# ── 자금 원장 · 정보 설계(tui-infodesign) ────────────────────────────────
+# 아래 열두 개는 독립 리뷰가 **실측으로** 잡아낸 오독들이다. 전부 "통과했지만
+# 아무것도 안 보던" 자리 옆에 있었다 — 그래서 검사를 새로 쓰고 그 검사가
+# 정말 무는지 여기에 선언한다.
+
+[[mutation]]
+id = "ledger-comove-alphabetical-order"
+why = """27×27 을 가나다순으로 늘어놓으면 무늬가 없다. 섹터 이름의 첫 글자와
+상관 사이에는 아무 관계가 없으니 당연하다 — 그런데 화면은 그 순서로 그리면서
+"이 무늬를 읽어라" 라고 말한다. 평균상관 내림차순이라야 이 화면이 답해야 할
+질문("어느 섹터가 시장 공통요인과 따로 노는가")이 그림에 나온다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_rows_are_ordered_by_mean_correlation_not_by_name"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """        keys.sort(key=lambda s: (mean[s] != mean[s], -mean[s]
+                                 if mean[s] == mean[s] else 0.0, s))"""
+replace = "        pass"
+
+[[mutation]]
+id = "ledger-comove-verdict-fixed-width"
+why = """폭 80(SSH 기본)에서 판정줄이 `→ 관측이 널보다 낮다 → 로테이션` 에서
+끊겨 **뜻이 뒤집혔다**. 원문은 "로테이션은 우연보다 드물다" 다. 이 저장소는
+배너·푸터·도움말 제목에 전부 폭 단계를 깔아 뒀는데 가장 결론적인 이 줄에만
+없었다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_verdict_is_never_truncated_into_its_opposite"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "    lines = [pad(tier_for(comove_verdict_tiers(obs, nul), width), width)]"
+replace = "    lines = [pad(comove_verdict_tiers(obs, nul)[0], width)]"
+
+[[mutation]]
+id = "ledger-comove-mean-column-gone"
+why = """그림을 못 보는 사람(폭이 좁거나 스크롤 아래거나 평문 덤프)에게 결론이
+안 남는다. 히트맵의 결론은 한 줄로 쓸 수 있는 것이고("전기/전자·통신·부동산·
+보험이 나머지와 따로 논다"), 그러면 글자로도 남겨야 한다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_prints_the_mean_column_and_names_the_outliers"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    lines.append(pad(tier_for(comove_outliers(keys, mean), width), width))"""
+replace = "    lines.append(pad(\"\", width))"
+
+[[mutation]]
+id = "ledger-comove-diagonal-fills-27-cells"
+why = """자기상관 1.0 이 27칸을 `+⣿` 로 채운다. 아는 사실만 되풀이하면서 눈이
+따라갈 기준선을 없앤다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_diagonal_is_blank_so_the_eye_has_a_baseline"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """                row += heat_diag()
+                continue"""
+replace = """                row += heat_cell(m[i][j])
+                continue"""
+
+[[mutation]]
+id = "ledger-comove-chip-advertises-a-dead-sort"
+why = """`s 정렬` 은 동시성 화면에서 아무 일도 하지 않는데(정렬 3종의 출력이
+동일) 헤더 칩은 계속 정렬을 표시한다. 안 듣는 값을 광고하면 사용자는 눌러 보고
+아무 일도 안 일어나는 것을 자기 탓으로 돌린다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_header_does_not_advertise_a_sort_that_does_nothing"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    order = (\"순서[평균상관]\" if mo.view == \"comove\"
+             else f\"정렬[{SORTS[mo.si][1]}]\")"""
+replace = "    order = f\"정렬[{SORTS[mo.si][1]}]\""
+
+[[mutation]]
+id = "ledger-undefined-correlation-looks-like-zero"
+why = """분산 0(그 구간에 흐름이 없는 섹터)에서 상관은 **정의되지 않는다**.
+0.0 을 돌려주면 히트맵에서 `|r|<0.05` 와 같은 빈칸이 되어 "무상관" 과
+"잴 수 없다" 가 구분되지 않는다. 그리고 그 값이 널 대조의 분모에도 섞인다."""
+guards = ["tests/test_tui_ledger_view.py::test_undefined_correlation_is_not_the_same_glyph_as_no_correlation"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    if va <= 0 or vb <= 0:
+        return float(\"nan\")"""
+replace = """    if va <= 0 or vb <= 0:
+        return 0.0"""
+
+[[mutation]]
+id = "ledger-spark-block-glyphs-are-ambiguous-width"
+why = """`▁▂▃▄▅▆▇█` 는 East Asian Width 가 'A' 라 한글 로케일 터미널이 2칸으로
+그릴 수 있다. 20점이 40칸이 되면 `pad` 가 뒤를 잘라내고 **구간의 절반만 그린
+채 전부인 척한다.** `kq-flow` 는 이미 브라유(EAW 'N')로 옮겼는데 원장만 안
+옮겨져 있었다. 히트맵 `·░▒▓█` 과 막대 `█▌` 도 같은 문제였다."""
+guards = [
+  "tests/test_tui_ledger_view.py::test_spark_glyphs_are_one_cell_in_every_locale",
+  "tests/test_tui_ledger_view.py::test_picture_glyphs_are_one_cell_even_when_ambiguous_is_wide",
+]
+file = "src/kr_quant/tui/ledger_view.py"
+find = 'SPARK_SIGNED = {2: "⠛", 1: "⠒", 0: "⠐", -1: "⠤", -2: "⣤"}'
+replace = 'SPARK_SIGNED = {2: "█", 1: "▆", 0: "▄", -1: "▂", -2: "▁"}'
+
+[[mutation]]
+id = "ledger-spark-has-no-zero-baseline"
+why = """`lo, hi = min(values), max(values)` 면 `▁` 이 행마다 다른 뜻이다 —
+전기/전자에서는 −24,304, 건설에서는 ≈0. 그래서 20일 내내 판 섹터가
+`████████…▁▁` 로 나와 **"높다가 없어졌다" 로 읽힌다**(사실은 계속 팔아
+내려간 것이다). ⚠️ `kq-flow` 처방(0 을 범위에 접어 넣기)으로도 안 고쳐진다 —
+hi=0 이 되어 경로가 맨 위에서 시작할 뿐이다. 0 을 세로 한가운데 **고정**해야
+한다. 그래서 변이도 flow 처방 쪽으로 잡는다(더 그럴듯한 오답이라서)."""
+guards = ["tests/test_tui_ledger_view.py::test_spark_puts_zero_at_the_same_height_in_every_row"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    peak = spark_scale(values)
+    out = []
+    for v in values:
+        if peak <= 0 or v == 0:
+            lv = 0
+        else:
+            r = v / peak
+            lv = 2 if r > 0.5 else 1 if r > 0 else -1 if r >= -0.5 else -2
+        out.append(SPARK_SIGNED[lv])
+    return \"\".join(out)"""
+replace = """    lo, hi = min(0.0, *values), max(0.0, *values)
+    span = hi - lo
+    order = [-2, -1, 0, 1, 2]
+    return \"\".join(
+        SPARK_SIGNED[order[0 if not span else min(4, int((v - lo) / span * 4))]]
+        for v in values)"""
+
+[[mutation]]
+id = "ledger-timeline-scale-measured-on-points-not-drawn"
+why = """`진폭[억]` 은 **원본 260점**의 최고−최저인데 그림은 **다운샘플된 점들**로
+정규화된다. 폭 80·260일에서 최대 21.5% 어긋났다(일반서비스 29,112억 vs 그림
+22,839억). "숫자가 그림의 눈금을 알려준다"는 계약이 정확히는 거짓이었다."""
+guards = ["tests/test_tui_ledger_view.py::test_timeline_scale_column_matches_the_points_actually_drawn"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = '                fmt_amt(acc), f"{spark_scale(show):,.0f}"]'
+replace = '                fmt_amt(acc), f"{spark_scale(cum):,.0f}"]'
+
+[[mutation]]
+id = "ledger-residual-share-cancels-itself-out"
+why = """표는 **구간 합계**를 보여주는데 일별 잔여는 부호가 엇갈려 상쇄된다.
+실측(20일·전시장): 전기/전자 합계 −175억인데 일별 |잔여| 합은 1,934억으로
+11배, IT 서비스는 48배다. 한계 §5 가 정확히 그 뭉개기를 경고하는데 화면이
+그걸 하고 있었다."""
+guards = ["tests/test_tui_ledger_view.py::test_residual_share_is_measured_daily_not_on_the_cancelled_total"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """            rabs = sum(abs(sum(arr[i] for arr in d4)) for i in range(len(d4[0])))"""
+replace = "            rabs = abs(r[\"resid\"])"
+
+[[mutation]]
+id = "ledger-spike-has-no-anchor-or-marker"
+why = """`최대일몫[%]` 은 이름만으로 안 잡힌다 — 무엇의 최대인지, 분모가 뭔지,
+높으면 무슨 뜻인지가 화면에 없다. 균등(=100÷구간일수, 20일=5%) 앵커가 있어야
+17.9% 가 큰지 안다. 마커는 색이 아니라 **글자**여야 한다(`~` 와 같은 이유)."""
+guards = ["tests/test_tui_ledger_view.py::test_spike_column_marks_what_beats_the_even_anchor"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = '        mark = "!" if sp is not None and sp >= SPIKE_MARK_MULT * unif else " "'
+replace = '        mark = " "'
+
+[[mutation]]
+id = "ledger-status-line-drops-the-anchor-and-the-actor"
+why = """`a` 를 누르면 `최대일몫` 열만 조용히 바뀌는데 열 헤더에는 주체가 없다.
+그리고 균등 앵커가 화면 어디에도 없으면 17.9% 를 해석할 수 없다. 상태줄을 한
+줄로 이어 붙이면 `pad` 가 뒤를 잘라 폭 132 에서도 그 부분이 통째로 사라졌다."""
+guards = ["tests/test_tui_ledger_view.py::test_status_line_anchors_the_spike_and_names_the_actor"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """        parts.append(f"최대일몫({mo.actor_ko}) {r['spike']:.1f}%"
+                     f" · 균등 {mo.uniform_spike():.1f}%")"""
+replace = """        parts.append(f"최대일몫 {r['spike']:.1f}%")"""
+
+[[mutation]]
+id = "ledger-narrow-notice-is-a-dead-end"
+why = """폭 70 에서 원장은 안 그리는데 전개(48칸)·동시성·한계는 정상 동작한다.
+안내가 그걸 한 글자도 안 말하고 "창을 넓혀라" 만 준다 — SSH 로 붙은 창은 못
+넓히는 경우가 흔하고, 그때 화면의 75%가 빈 줄이다."""
+guards = [
+  "tests/test_tui_ledger_view.py::test_narrow_notice_names_a_screen_that_works_at_this_width",
+  "tests/test_tui_ledger_view.py::test_narrow_ledger_says_why_instead_of_showing_part_of_it",
+]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """                 pad(tier_for(LEDGER_NARROW_TIERS, width), width),
+                 pad(narrow_also(width), width)],
+                [False, False, False], 3)"""
+replace = """                 pad(tier_for(LEDGER_NARROW_TIERS, width), width),
+                 pad("", width)],
+                [False, False, False], 3)"""
+
+[[mutation]]
+id = "ledger-narrow-notice-promises-a-screen-that-is-also-too-narrow"
+why = """없는 것을 있다고 하면 안내가 아니라 오도다 — 폭 48 미만에서는 전개도
+안 그려진다. 안내 문구를 폭과 무관하게 하나만 쓰면 폭 30 에서 "v 전개" 를
+권하고, 눌러 보면 또 "안 그린다" 가 뜬다."""
+guards = ["tests/test_tui_ledger_view.py::test_narrow_notice_names_a_screen_that_works_at_this_width"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    return tier_for(NARROW_ALSO_TIERS if width >= TIMELINE_MIN_W
+                    else NARROW_ALSO_NO_TIMELINE_TIERS, width)"""
+replace = "    return tier_for(NARROW_ALSO_TIERS, width)"
+
+[[mutation]]
+id = "ledger-rows-cache-key-misses-the-actor"
+why = """`rows()` 캐시 키에서 주체가 빠지면 `a` 를 눌러도 `선택주체` 정렬과
+`최대일몫` 이 안 바뀐다. `kq-flow` 가 바로 이 자리에서 물렸다 — 캐시 키에
+역순이 빠져 `r` 이 안 먹었다. 캐시를 넣으면서 같은 함정을 다시 밟지 않는지
+기계가 확인한다."""
+guards = ["tests/test_tui_ledger_view.py::test_rows_are_cached_on_everything_that_changes_them"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = "        key = (self.market, self.window, self.sort_key, self.actor)"
+replace = "        key = (self.market, self.window, self.sort_key)"
+
+[[mutation]]
+id = "ledger-status-line-builds-the-table-it-throws-away"
+why = """`status_line` 이 한계 화면에서도 `selected()`→`rows()` 를 먼저 부르고
+나서 `if view == \"limits\"` 로 되돌아간다. 매 프레임 안 쓸 표를 만든다."""
+guards = ["tests/test_tui_ledger_view.py::test_screens_do_not_compute_what_they_throw_away"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    if mo.view == "limits":
+        return pad(" " + banner_for(width), width)
+    r = mo.selected()
+    if not r:"""
+replace = """    r = mo.selected()
+    if mo.view == "limits" or not r:"""
+
+[[mutation]]
+id = "ledger-comove-computes-a-matrix-it-discards"
+why = """`comove_lines` 가 `corr_matrix()` 를 먼저 부르고 구간<20 이면 버린다 —
+5·10일 구간에서 27×27 을 헛계산한다(첫 진입 645ms)."""
+guards = ["tests/test_tui_ledger_view.py::test_screens_do_not_compute_what_they_throw_away"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    obs = mo.obs_neg_frac()
+    if obs is None:"""
+replace = """    _keys, _m = mo.corr_matrix()
+    obs = mo.obs_neg_frac()
+    if obs is None:"""
+
+[[mutation]]
+id = "ledger-timeline-note-still-describes-the-old-picture"
+why = """그림을 고치고 문구를 안 고치면 화면이 자기 그림을 잘못 설명한다.
+예전 문구는 "각 행의 최저~최고를 8단계에 편다" 였는데, 지금 그림은 0 을 세로
+한가운데 고정하고 크기만 행마다 정규화한다 — 읽는 법이 통째로 달라졌다."""
+guards = [
+  "tests/test_tui_ledger_view.py::test_timeline_shows_its_scale_so_rows_are_comparable",
+  "tests/test_tui_ledger_view.py::test_narrow_timeline_says_why_instead_of_a_clipped_sparkline",
+]
+file = "src/kr_quant/tui/ledger_view.py"
+find = """    " ↑ 세로 한가운데가 0 이다 — 위 ⠒⠛ 는 순매수, 아래 ⠤⣤ 는 순매도."
+    " 크기 눈금만 행마다 다르다(눈금[억] 열이 그 값이다).","""
+replace = """    " ↑ 세로 눈금은 행마다 다르다(각 행의 최저~최고를 8단계에 편다).","""
+
+[[mutation]]
+id = "ledger-bar-tails-fill-the-same-side"
+why = """발산 막대의 반칸 꼬리는 **바깥쪽**을 향해야 한다 — 양수는 칸의 왼쪽
+절반, 음수는 오른쪽 절반. 둘 다 같은 쪽을 채우면 음수 막대의 꼬리가 한 칸
+떨어져 보인다(예전 `▏▎▍…` 여덟 단계가 정확히 그랬다)."""
+guards = ["tests/test_tui_ledger_view.py::test_signed_bar_points_the_right_way"]
+file = "src/kr_quant/tui/ledger_view.py"
+find = 'BLOCK_FULL, BLOCK_L, BLOCK_R = "⣿", "⡇", "⢸"'
+replace = 'BLOCK_FULL, BLOCK_L, BLOCK_R = "⣿", "⡇", "⡇"'

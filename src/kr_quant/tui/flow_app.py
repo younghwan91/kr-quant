@@ -160,7 +160,14 @@ def layout(h: int, drill: bool = False) -> tuple[int, int, int, int, int]:
     hint_y = h - 2 if h >= 5 else -1
     limit = hint_y if hint_y >= 0 else foot_y      # 표가 쓸 수 있는 y 의 끝(배타)
     nhead = 2 if drill else 1                      # 표 자체의 머리 줄(제목·열이름)
-    detail = 3 if (not drill and h >= DETAIL_MIN_H) else 0
+    # 상세는 우선순위 순서로 그린다(제목 → 반대편 → 순매수상위 → 순매도상위).
+    # 한 줄이 더 필요해진 것은 **4주체 줄** 때문이다 — "기관이 팔았다" 다음에
+    # 오는 질문이 "그럼 누가 받았지" 라, 그 답이 화면을 바꾸지 않고 여기 있다.
+    # 자리가 모자라면 뒤에서부터 잘린다.
+    if drill or h < DETAIL_MIN_H:
+        detail = 0
+    else:
+        detail = 4 if h >= DETAIL_MIN_H + 1 else 3
     for head in (2, 1, 0):
         rows = limit - head - nhead - detail
         if rows >= 1:

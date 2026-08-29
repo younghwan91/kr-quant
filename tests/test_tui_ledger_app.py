@@ -245,7 +245,7 @@ def test_dump_carries_the_key_and_column_help():
     from kr_quant.tui.ledger_view import render_text
 
     text = render_text(Model(_payload()), 100)
-    assert "── 키 ──" in text and "최대1일[%]" in text
+    assert "── 키 ──" in text and "최대일몫[%]" in text
     assert "**" not in text
 
 

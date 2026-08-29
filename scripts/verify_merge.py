@@ -185,13 +185,32 @@ def sec_worktree(wt: Path, base: str, py: str) -> tuple[Section, list[str]]:
 
 # --------------------------------------------------------------------------- 2. 신원
 
+def _ok_identity(addr: str, want: str) -> bool:
+    """레포 설정이거나, **GitHub 이 스스로 찍는 주소**면 통과.
+
+    PR 을 웹에서 머지하면 GitHub 이 author 를 계정 프라이버시 주소
+    (``…@users.noreply.github.com``), committer 를 ``noreply@github.com`` 으로
+    찍는다. 사람이 덮어쓴 게 아니라 GitHub 이 만든 커밋이다 — 안 봐주면
+    **머지된 브랜치를 판정할 때마다 REJECT** 가 난다.
+
+    허용은 이 둘로 좁힌다. 임의 도메인을 열면 규칙이 사라진다.
+    """
+    return (addr == want
+            or addr == "noreply@github.com"
+            or addr.endswith("@users.noreply.github.com"))
+
+
 def sec_identity(wt: Path, commits: list[str]) -> Section:
     """새 커밋의 author/committer 가 레포 설정과 같은가.
 
-    공개 레포다. 2026-08-29 에 ``git -c user.email=<회사주소>`` 로 찍힌 커밋 52건이
-    올라간 적이 있다. check_guardrails 규칙 (i) 와 같은 검사지만, 여기서는 **기준
+    공개 레포라 의도치 않은 주소가 이력에 박히면 되돌리기 어렵다.
+    ``scripts/check_guardrails.py`` 규칙 (i) 와 같은 검사지만, 여기서는 **기준
     브랜치 이후의 새 커밋만** 본다(규칙 (i) 는 최근 30건 고정이라 새 커밋이 30건을
     넘으면 오래된 것부터 시야에서 사라진다).
+
+    ⚠️ 같은 규칙이 세 곳에 있다 — 여기, ``check_guardrails.check_commit_identity``,
+    그리고 ``.github/workflows/commit-identity.yml``. 봐주는 주소를 바꿀 때는
+    **셋을 같이** 고쳐야 한다. 한쪽만 고쳐서 PR 검사가 계속 빨갛던 적이 있다.
     """
     s = Section("identity")
     want_mail = git(wt, "config", "--get", "user.email")
@@ -206,7 +225,9 @@ def sec_identity(wt: Path, commits: list[str]) -> Section:
     for sha in commits:
         line = git(wt, "log", "-1", "--format=%h|%an|%ae|%cn|%ce", sha)
         h, an, ae, cn, ce = line.split("|")
-        if ae != want_mail or ce != want_mail:
+        if _ok_identity(ae, want_mail) and _ok_identity(ce, want_mail):
+            pass
+        elif True:
             s.fail(f"{h} 신원이 다르다 (author={ae} committer={ce}) — "
                    f"`git -c user.email=…` 금지, 레포 설정을 그대로 쓴다")
         elif an != want_name or cn != want_name:
