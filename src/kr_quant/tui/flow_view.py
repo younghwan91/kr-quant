@@ -8,8 +8,30 @@
 
 from __future__ import annotations
 
+import os
 import unicodedata
 from collections import namedtuple
+
+#: East Asian Width 가 'A'(Ambiguous) 인 글자를 **두 칸으로 센다**.
+#:
+#: 이 화면들은 `·` `—` `↑` `↓` `→` `×` `÷` `²` `½` `Δ` `Σ` `β` `▲` `▼` `※` `≠`
+#: `…` `─` 같은 'A' 글자를 쓴다. 유니코드는 이 글자들의 폭을 **정하지 않았고**,
+#: 터미널이 정한다 — 대부분 1칸이지만 한국어권에서 흔한 "ambiguous=wide" 설정
+#: (PuTTY 의 "Treat CJK ambiguous chars as wide", iTerm2·mintty 의 같은 옵션)
+#: 에서는 2칸으로 그린다. 그러면 `cell_width` 가 1로 센 칸이 2칸을 먹어 **그 줄
+#: 오른쪽이 통째로 밀리고**, `pad(..., width)` 로 폭에 딱 맞춘 줄은 넘쳐서 다음
+#: 줄로 접힌다(화면 전체가 어긋난다).
+#:
+#: 글자를 ASCII 로 바꾸는 대신 **세는 규칙을 터미널에 맞추는** 쪽을 골랐다.
+#: 이유는 세 가지다. (i) 'A' 글자가 31종·440여 곳이라 일부만 바꾸면 나머지가
+#: 그대로 밀린다 — 부분 치환은 문제를 줄일 뿐 없애지 못한다. (ii) `Σ` `Δ` `β`
+#: `÷` 처럼 뜻을 지고 있어 ASCII 로 옮기면 길어지거나 읽기 나빠지는 것이 있다.
+#: (iii) 폭 계산이 전부 `cell_width` 한 곳을 지나므로, 여기만 고치면 표·푸터·
+#: 도움말·원장까지 한 번에 맞는다(원장 블록 문자 ``▁▂▃█▒▓▌`` 도 'A' 다).
+#:
+#: 켜지 않은 기본값에서는 예전과 **한 글자도 다르게 세지 않는다.**
+AMBIGUOUS_WIDE = os.environ.get("KQ_AMBIGUOUS_WIDE", "").strip().lower() \
+    not in ("", "0", "false", "no", "off")
 
 WINDOWS = ("5", "20", "60", "120", "종합")
 # 종목 목록은 **절대 순매수 금액** 순이다 — 섹터 합계가 금액의 합이므로 기여도는
@@ -60,8 +82,13 @@ def cell_width(ch: str) -> int:
     ``ord(c) > 0x1100`` 같은 어림은 쓰지 않는다 — U+2212(−, 마이너스)가 그 범위에
     들어가 2칸으로 세어졌고, 음수 행이 한 칸씩 밀렸다. 유니코드 표준
     East Asian Width 가 'W'(Wide)·'F'(Fullwidth)인 것만 2칸이다.
+
+    'A'(Ambiguous) 는 터미널이 정한다 — ``AMBIGUOUS_WIDE`` 주석을 보라.
     """
-    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    eaw = unicodedata.east_asian_width(ch)
+    if eaw in ("W", "F"):
+        return 2
+    return 2 if (AMBIGUOUS_WIDE and eaw == "A") else 1
 
 
 def cell_len(text: str) -> int:
@@ -509,26 +536,43 @@ def table_cols(st: State, width: int) -> list[Col]:
     return cols
 
 
-def _fit(cols: list[Col], width: int) -> list[Col]:
-    """폭에 **온전히** 들어가는 열까지만 남긴다. 첫 열은 잘려도 남긴다
-    (섹터 이름은 잘려도 뜻이 남지만, 숫자는 잘리면 다른 값이 된다)."""
-    out, used = [], 0
-    for c in cols:
-        need = c.width + (1 if out else 0)
-        if out and used + need > width:
+def fit_widths(widths: list[int], total: int) -> int:
+    """``total`` 칸에 **온전히** 들어가는 열 **개수**. 열 사이 공백 1칸을 센다.
+
+    첫 열은 잘려도 남긴다 — 섹터 이름은 잘려도 뜻이 남지만, 숫자는 잘리면 다른
+    값이 된다(-1,360 이 -1 로 보인다).
+
+    열 표현이 아니라 **폭 목록**만 받는다. 흐름 화면의 열은 ``Col`` 이고 원장
+    화면의 열은 3-튜플이라 같은 규칙이 두 벌 살고 있었다 — 둘을 잇는 검사가
+    하나도 없어서, 한쪽을 고치면 다른 쪽이 조용히 옛 규칙을 유지하고 같은 앱의
+    두 화면이 열을 다르게 자른다. 폭만 받으면 양쪽이 같이 쓸 수 있다.
+    """
+    n, used = 0, 0
+    for w in widths:
+        need = w + (1 if n else 0)
+        if n and used + need > total:
             break
-        out.append(c)
+        n += 1
         used += need
-    return out
+    return n
+
+
+def span_at(widths: list[int], i: int) -> tuple[int, int]:
+    """``i`` 번째 열의 (시작 표시칸, 폭). 열 사이 공백 1칸을 더해가며 센다."""
+    return sum(w + 1 for w in widths[:i]), widths[i]
+
+
+def _fit(cols: list[Col], width: int) -> list[Col]:
+    """폭에 **온전히** 들어가는 열까지만 남긴다."""
+    return cols[:fit_widths([c.width for c in cols], width)]
 
 
 def col_span(cols: list[Col], header: str) -> tuple[int, int] | None:
-    """열 헤더의 (시작 표시칸, 폭). 열 사이 공백 1칸을 더해가며 센다."""
-    cell = 0
-    for c in cols:
+    """열 헤더의 (시작 표시칸, 폭). 같은 헤더가 둘이면 **앞의 것**."""
+    widths = [c.width for c in cols]
+    for i, c in enumerate(cols):
         if c.header == header:
-            return cell, c.width
-        cell += c.width + 1
+            return span_at(widths, i)
     return None
 
 

@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import pytest
 
-from kr_quant.tui.flow_view import cell_width
+from kr_quant.tui.flow_view import cell_width, span_at
 from kr_quant.tui.ledger_view import (
     ACTORS, ACTOR_KEYS, BANNER, LIMITS, SORTS, VIEWS, WINDOWS, Model,
-    col_span, heat_cell, heat_level, ledger_cols, ledger_lines, comove_lines,
+    heat_cell, heat_level, ledger_cols, ledger_lines, comove_lines,
     residual,
     LEDGER_MIN_W, SPARK, THIN_N, TIMELINE_MIN_W, _fit, downsample, load, render_text,
     screen, signed_bar, spark, status_line, timeline_lines,
@@ -108,7 +108,8 @@ def test_numeric_columns_start_at_the_same_display_cell(data):
         # ledger_cols() 만 보면 렌더가 안 그리는 열의 경계를 검사하게 된다.
         cols = _fit(ledger_cols(), width)
         lines, _t, nh = ledger_lines(mo, width)
-        bounds = [col_span(cols, c[0])[0] for c in cols[1:]]
+        widths = [c[1] for c in cols]
+        bounds = [span_at(widths, i)[0] for i in range(1, len(cols))]
         for line in lines:
             cells = _cells(line)
             for b in bounds:
@@ -837,3 +838,35 @@ def test_narrow_notices_are_never_truncated(data):
         lines, _thin, nh = timeline_lines(mo, width)
         assert lines[0].rstrip().endswith(ends), (width, lines[0].rstrip())
         assert lines[1].rstrip() in TIMELINE_NARROW_TIERS, (width, lines[1].rstrip())
+
+
+def test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide(data, monkeypatch):
+    """⚠️ 원장 화면의 'A'(Ambiguous) 글자 — 블록 문자 ``▁▂▃█▒▓▌`` 도 'A' 다.
+
+    폭 계산이 `flow_view.cell_width` 한 곳을 지나므로, 거기서 'A' 를 2칸으로
+    세면 이 화면도 같이 맞는다. 그 배선이 살아 있는지 본다 — `cell_width` 를
+    안 쓰는 참조 구현으로 재서 폭을 넘는 줄이 없어야 한다.
+    """
+    import unicodedata
+
+    from kr_quant.tui import flow_view
+
+    def wide_w(text: str) -> int:
+        return sum(2 if unicodedata.east_asian_width(c) in ("W", "F", "A") else 1
+                   for c in text)
+
+    assert any(unicodedata.east_asian_width(c) == "A" for c in SPARK), \
+        "스파크라인 글자가 'A' 가 아니게 됐다 — 이 검사가 겨냥한 위험이 사라졌나?"
+
+    monkeypatch.setattr(flow_view, "AMBIGUOUS_WIDE", True)
+    mo = Model(data)
+    bad = []
+    for width in (72, 80, 100, 132):
+        for vi in range(len(VIEWS)):
+            mo.vi = vi
+            for wi in range(len(WINDOWS)):
+                mo.wi = wi
+                for line in screen(mo, width, 40)["lines"]:
+                    if wide_w(line) > width:
+                        bad.append((VIEWS[vi][0], width, wide_w(line), line))
+    assert not bad, f"폭을 넘는 줄 {len(bad)}개 — 예: {bad[:3]}"

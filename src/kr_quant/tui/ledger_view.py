@@ -31,7 +31,7 @@ import os
 import random
 
 from kr_quant.tui.flow_view import (
-    HELP_TITLE_TIERS, MARKET_ORDER, cell_len, cell_width, fmt_amt, help_desc,
+    HELP_TITLE_TIERS, MARKET_ORDER, cell_len, cell_width, fit_widths, fmt_amt, help_desc,
     help_lines, hint_line, pad, tier_for)
 
 ACTORS = (("indiv", "개인"), ("forgn", "외국인"), ("inst", "기관"), ("etc", "기타법인"))
@@ -139,16 +139,11 @@ def _fit(cols: list[tuple[str, int, bool]], width: int) -> list[tuple[str, int, 
     """폭에 **온전히** 들어가는 열까지만 남긴다. 첫 열은 잘려도 남긴다
     (섹터 이름은 잘려도 뜻이 남지만, 숫자는 잘리면 다른 값이 된다).
 
-    ``flow_view._fit`` 과 같은 규칙이다(위 모듈 독스트링의 ⚠️ 참조).
+    규칙 자체는 ``flow_view.fit_widths`` 한 곳에만 있다 — 예전엔 같은 로직이
+    여기와 흐름 화면에 두 벌 살았고, 둘을 잇는 검사가 없어 한쪽만 고쳐도
+    초록이었다.
     """
-    out, used = [], 0
-    for c in cols:
-        need = c[1] + (1 if out else 0)
-        if out and used + need > width:
-            break
-        out.append(c)
-        used += need
-    return out
+    return cols[:fit_widths([c[1] for c in cols], width)]
 
 
 def downsample(values: list[float], n: int) -> list[float]:
@@ -452,15 +447,6 @@ def ledger_cols() -> list[tuple[str, int, bool]]:
     return ([_col("섹터", 13, False), _col("", 1, False)]
             + [_col(f"{ko}[억]", 10) for _, ko in ACTORS]
             + [_col("잔여[억]", 9), _col("최대1일[%]", 10), _col("종목[수]", 8)])
-
-
-def col_span(cols, header: str) -> tuple[int, int] | None:
-    cell = 0
-    for name, w, _r in cols:
-        if name == header:
-            return cell, w
-        cell += w + 1
-    return None
 
 
 #: 좁아서 표를 못 그릴 때의 안내 — 넓은 것부터. 잘린 안내는 안내가 아니다.
