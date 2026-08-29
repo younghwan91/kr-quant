@@ -99,7 +99,7 @@ def load(report_dir: str) -> dict:
     # 생 트레이스백으로 터진다. 문 앞에서 잡는다.
     missing = [k for k in ("dates", "sectors", "markets", "flows") if not d.get(k)]
     if missing:
-        raise SystemExit(f"{path} 의 데이터에 {', '.join(missing)} 가 없다 — "
+        raise SystemExit(f"{path} 의 데이터에 없는 키: {', '.join(missing)} — "
                          f"리포트 형식이 바뀌었나?\n  있는 키: {sorted(d)}")
     return d
 
@@ -581,7 +581,7 @@ def comove_lines(mo: Model, width: int) -> tuple[list[str], list[tuple], int]:
     keys, m = mo.corr_matrix()
     obs, nul = mo.obs_neg_frac(), mo.null_neg_frac()
     if obs is None:
-        note = f"구간이 {mo.window}일이라 상관을 내지 않는다 (최소 {_MIN_CORR_N}일)."
+        note = f" 구간이 {mo.window}일이라 상관을 내지 않는다(최소 {_MIN_CORR_N}일)."
         return [pad(note, width), pad(" " + banner_for(width), width)], [], 1
 
     verdict = ("관측이 널보다 낮다 → 로테이션은 우연보다 드물다"
@@ -591,7 +591,7 @@ def comove_lines(mo: Model, width: int) -> tuple[list[str], list[tuple], int]:
           f"널(순환이동×{_NULL_SHIFTS}) {nul * 100:.0f}%   → {verdict}")
     l2 = " 같은/반대 방향으로 동시에 갔다는 **사실**이다. 옮겨갔다는 뜻이 아니다."
     if mo.detrend:
-        l2 += "  ⚠β제거: 전기/전자發 음상관은 구성적 인공물과 구분 안 됨"
+        l2 += "  ⚠β제거: 전기/전자발 음상관은 구성적 인공물과 구분 안 된다"
     lines = [pad(l1, width), pad(l2, width)]
     marks: list[tuple] = []
 
@@ -635,7 +635,7 @@ LIMITS = [
     "2. 주체 → 주체 전이도 그리지 않는다. 4주체의 주변합(독립 3개)으로는 쌍별 이전량",
     "   C(4,2)=6 개가 결정되지 않는다 — 해공간이 3차원 남는다. 섹터→섹터와 같은 미식별이다.",
     "",
-    "3. '순매수'는 소유권 이전이지 시장으로의 **자금 유입이 아니다**. 모든 체결에는",
+    "3. '순매수'는 소유권 이전이지 시장에 **자금이 들어온 것이 아니다**. 모든 체결에는",
     "   같은 크기의 매수와 매도가 있다.",
     "",
     "4. 금액은 **종가 환산 근사**다. DB 는 순매매 수량만 준다(참값은 VWAP 가중).",

@@ -48,7 +48,7 @@ def load(report_dir: str) -> dict:
                          f"  리포트를 다시 생성하라 — scripts/daily_report.sh") from None
     missing = [k for k in ("asof", "blocks") if not d.get(k)]
     if missing:
-        raise SystemExit(f"{path} 의 데이터에 {', '.join(missing)} 가 없다 — "
+        raise SystemExit(f"{path} 의 데이터에 없는 키: {', '.join(missing)} — "
                          f"리포트 형식이 바뀌었나?\n  있는 키: {sorted(d)}")
     return d
 
@@ -196,7 +196,7 @@ def hint_text(st: State, width: int = 200) -> str:
         arrow = "▲" if st.nrev else "▼"
     elif st.window == "종합":
         # 종합은 페이로드 순서 그대로다 — 없는 정렬을 있는 척하지 않는다.
-        return " 종합 화면은 창별 G 를 나란히 볼 뿐, 정렬·역순이 없다 · ? 로 열 설명"
+        return " 종합 화면은 구간별 G 를 나란히 볼 뿐, 정렬·역순이 없다 · ? 로 열 설명"
     else:
         key, _fell = st.effective_sort(st.rows())
         header = (SORT_COL.get(key) or _EXTRA_COL.get(key)
@@ -509,7 +509,7 @@ def main() -> None:
         raise SystemExit(
             f"TERM={term or '(비어 있음)'} — 이 터미널은 화면 제어(커서 이동·지우기)를"
             f" 못 해 TUI 를 그릴 수 없다.\n"
-            f"  TERM=xterm-256color 처럼 두고 다시 실행하라"
+            f"  TERM=xterm-256color 로 설정하고 다시 실행하라"
             f" (숫자만 필요하면 리포트의 numbers.html 을 보라).")
     curses.wrapper(_loop, data)
 
