@@ -663,8 +663,41 @@ def detail_lines(st: State, width: int) -> list[str]:
     exact = "" if x is None else f" · 미실현 {fmt_pct(x, 1)}%p"
     exact += "" if u is None else f"(포텐셜 {u:.0f})"
     return [pad(f" {r.get('sector','—')} · 종목 {n}개 · Enter 로 전체{exact}", width),
+            pad(_actors_line(r, width), width),
             pad(side("buy", "순매수 상위"), width),
             pad(side("sell", "순매도 상위"), width)]
+
+
+#: 상세 패널의 4주체 줄 — 넓은 것부터. 폭이 모자라면 뒤에서 잘라 낸다.
+_ACTORS_TIERS = (
+    ("개인", "외국인", "기관", "기타법인"),
+    ("개인", "외국인", "기관"),
+    ("개인", "기관"),
+)
+_ACTOR_KEY = dict((ko, k) for k, ko in ACTORS)
+
+
+def _actors_line(r: dict, width: int) -> str:
+    """선택 섹터의 **4주체 순매수**를 한 줄에.
+
+    화면이 한 번에 한 주체만 보여주므로 "기관이 팔았다" 까지는 알아도
+    **누가 받았는지**는 앱을 바꿔야 알 수 있었다(`kq-ledger` 의 원장 화면).
+    주식은 누가 사면 누가 판 것이고 4주체 합은 0 에 닫히므로, 그 답은
+    같은 페이로드 안에 이미 있다 — 화면을 바꿀 이유가 없다.
+
+    잔여(= −Σ4주체)는 여기 안 적는다. 원장에는 그 열이 있지만 이 줄은
+    "누가 반대편인가" 한 가지만 답한다 — 다섯째 주체까지 말하려면
+    설명이 붙어야 하고, 그건 원장이 할 일이다.
+    """
+    for names in _ACTORS_TIERS:
+        parts = []
+        for ko in names:
+            v = r.get(_ACTOR_KEY[ko])
+            parts.append(f"{ko} {fmt_amt(v)}" if v is not None else f"{ko} —")
+        line = " 반대편: " + " · ".join(parts) + " [억]"
+        if cell_len(line) + 1 <= width:
+            return line
+    return " 반대편: —"
 
 
 def names_lines(st: State, width: int) -> tuple[list[str], int]:

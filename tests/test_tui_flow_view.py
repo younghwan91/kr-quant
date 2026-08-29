@@ -410,7 +410,8 @@ def test_table_and_detail_show_the_same_top_names(data):
     width = 170
     lines, _thin, nhead = table_lines(st, width, 20)
     row_line = lines[nhead + st.row]
-    detail = detail_lines(st, width)[1]        # '순매수 상위' 줄
+    # 줄 번호로 집으면 패널에 줄이 하나 늘 때 무관한 이유로 깨진다(실제로 깨졌다).
+    detail = next(ln for ln in detail_lines(st, width) if "순매수 상위" in ln)
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
     # 표는 1위만, 하단 패널은 상위 3을 보여준다 — 1위는 반드시 일치해야 한다.
     assert top, "상위 종목이 비었다"
@@ -427,7 +428,7 @@ def test_detail_panel_shows_the_value_it_sorts_by(data):
     """
     st = State(data)
     st.row = 0
-    line = detail_lines(st, 132)[1]
+    line = next(ln for ln in detail_lines(st, 132) if "순매수 상위" in ln)
     top = (st.rows()[st.row].get("top") or {}).get("buy") or []
     shown = [x for x in top[:3]]
     if len(shown) < 2:
@@ -1236,3 +1237,40 @@ def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
     assert fit_widths([5, 5, 5], 16) == 2
     assert span_at([5, 5, 5], 0) == (0, 5)
     assert span_at([5, 5, 5], 2) == (12, 5)
+
+
+def test_detail_panel_answers_who_took_the_other_side(data):
+    """회귀 — "기관이 팔았다" 다음 질문은 **"그럼 누가 받았지"** 다.
+
+    화면이 한 번에 한 주체만 보여주므로 그 답은 앱을 바꿔야(`kq-ledger`)
+    알 수 있었다. 주식은 누가 사면 누가 판 것이고 4주체 합은 0 에 닫히므로,
+    답은 같은 페이로드 안에 이미 있다 — 화면을 바꿀 이유가 없다.
+    """
+    from kr_quant.tui.flow_view import ACTORS, cell_len, detail_lines
+
+    st = State(data)
+    raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
+    for row in range(min(3, len(st.rows()))):
+        st.row = row
+        line = next(ln for ln in detail_lines(st, 170) if "반대편" in ln)
+        src = raw[st.rows()[row]["sector"]]
+        for key, ko in ACTORS:
+            assert ko in line, f"{ko} 가 반대편 줄에 없다"
+            assert fmt_amt(src[key]) in line, (
+                f"{ko} 금액이 원본과 다르다 — 기대 {fmt_amt(src[key])}, 줄: {line!r}")
+        # 네 주체가 서로 다른 값이어야 이 검사가 헛돌지 않는다.
+        assert len({src[k] for k, _ko in ACTORS}) > 1, "픽스처가 4주체를 같게 뒀다"
+
+    # 좁아지면 단계를 내려 줄인다. **자르기 전 원문**을 재야 한다 —
+    # `detail_lines` 가 `pad` 로 감싸므로 출력으로는 넘침이 원리상 안 보인다
+    # (이 저장소가 오늘만 세 번 밟은 함정이다).
+    from kr_quant.tui.flow_view import _actors_line
+
+    st.row = 0
+    r = st.rows()[0]
+    for width in range(24, 180, 3):
+        raw_line = _actors_line(r, width)
+        assert cell_len(raw_line) + 1 <= width or raw_line == " 반대편: —", (
+            f"폭{width} 에서 {cell_len(raw_line)}칸: {raw_line!r}")
+        if width >= 90:
+            assert "기타법인" in raw_line, f"폭{width} 인데 주체가 빠졌다"
