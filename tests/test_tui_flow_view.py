@@ -819,12 +819,15 @@ def test_spark_and_bar_glyphs_are_never_ambiguous_width():
 
     이 검사는 그림 글자에만 건다 — 기존 UI 는 이미 '·'·'—'·'²'(전부 'A')를
     쓰고 있어서 전면 금지는 이 작업 범위를 넘는다(보고서에 적었다).
+
+    (미실현 발산 막대는 숫자로 되돌렸다 — 숫자가 10칸을 덜 쓰고 정확하다.
+    그래서 여기 검사 대상은 스파크라인 글자만 남았다.)
     """
     import unicodedata
 
-    from kr_quant.tui.flow_view import BAR_AXIS, BAR_FILL, SPARK
+    from kr_quant.tui.flow_view import SPARK
 
-    for ch in list(SPARK.values()) + [BAR_FILL, BAR_AXIS]:
+    for ch in SPARK.values():
         eaw = unicodedata.east_asian_width(ch)
         assert eaw not in ("A", "W", "F"), f"{ch!r} 의 폭이 {eaw} 다"
         assert cell_width(ch) == 1
@@ -842,35 +845,6 @@ def test_spark_is_exactly_its_column_width_and_recent_is_rightmost():
     assert up != down
     assert _w(spark([])) == 1                     # 값이 없으면 '—'
 
-
-def test_divergence_bar_puts_sign_on_the_side_and_size_in_length():
-    from kr_quant.tui.flow_view import BAR_AXIS, BAR_FILL, xbar
-
-    wide, small, neg = xbar(10.0, 10.0), xbar(1.0, 10.0), xbar(-10.0, 10.0)
-    for b in (wide, small, neg, xbar(0.0, 10.0)):
-        assert _w(b) == 9, b
-        assert b.count(BAR_AXIS) == 1
-    # 크기 = 길이
-    assert wide.count(BAR_FILL) > small.count(BAR_FILL)
-    # 부호 = 기준선의 어느 쪽인가
-    assert wide.index(BAR_FILL) > wide.index(BAR_AXIS)
-    assert neg.index(BAR_FILL) < neg.index(BAR_AXIS)
-    assert xbar(None, 10.0) == "—"
-
-
-def test_divergence_bar_gets_a_color_role_from_its_side():
-    """막대에는 부호 문자가 없다 — 색까지 빠지면 방향 정보가 도형에만 남는다."""
-    from kr_quant.tui.flow_view import color_spans, xbar
-
-    def roles(s):
-        return [r for _, _, r in color_spans(s)]
-
-    assert roles(xbar(5.0, 10.0)) == ["up"]
-    assert roles(xbar(-5.0, 10.0)) == ["down"]
-    assert roles(xbar(0.0, 10.0)) == []
-
-
-# ── 새 열이 선택된 주체를 따르는가 ───────────────────────────────────────
 
 def test_year_percentile_and_spark_follow_the_selected_actor(data):
     """회귀 — 오늘 고친 버그가 정확히 '한 행 안에 두 주체의 숫자가 섞이는' 것이었다.

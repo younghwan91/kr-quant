@@ -269,16 +269,6 @@ class State:
         rows.sort(key=val)
         return rows
 
-    def xmax(self) -> float:
-        """이 화면에서 |미실현| 의 최댓값 — 발산 막대의 눈금.
-
-        x 는 OLS 잔차의 부호 반전이라 27개 합이 0 인 **상대** 지표다. 절대 눈금이
-        없으므로 막대도 화면 안 최댓값에 맞춘다. 창·시장을 바꾸면 눈금이 바뀐다 —
-        막대끼리는 비교되지만 화면끼리는 비교되지 않는다.
-        """
-        vals = [abs(r["x"]) for r in self.rows() if r.get("x") is not None]
-        return max(vals) if vals else 0.0
-
     def block_meta(self) -> str:
         if self.window == "종합":
             c = self.d.get("combined", {}).get(self.market)
@@ -397,8 +387,6 @@ Col = namedtuple("Col", "header width right fn")      # fn(r, st) -> str
 #: 이유가 없다.** 이 저장소는 폭 계산 함정을 이미 세 번 밟았다.
 #: 값: +2 강한 유입 · +1 유입 · 0 · -1 유출 · -2 강한 유출.
 SPARK = {2: "⠛", 1: "⠒", 0: "⠀", -1: "⠤", -2: "⣤"}
-BAR_FILL = "⣿"       # 꽉 찬 브라유 — 막대 몸통
-BAR_AXIS = "|"            # 0 기준선. ASCII 라 폭이 애매할 여지가 없다
 
 
 def spark(vals, cells: int = 8) -> str:
@@ -424,26 +412,6 @@ def spark(vals, cells: int = 8) -> str:
     # 조각이 cells 보다 적으면(5일 창) **왼쪽**을 비운다 — 오른쪽 끝이 최근이라는
     # 약속을 깨지 않기 위해서다.
     return pad(out, cells, right=True)
-
-
-def xbar(x, mx: float, half: int = 4) -> str:
-    """미실현 x 의 0 기준 발산 막대 — 부호와 크기를 한 도형에서 읽는다.
-
-    포텐셜 U = ½kx² 는 k 가 블록당 상수라 |x| 의 순증가 변환이다(4개 창 전부
-    Spearman 1.0000, 실측). 즉 U 열은 x 열의 **크기만** 다시 적은 것이고, 잃는
-    것은 부호다. 막대는 그 크기를 부호와 함께 보여주므로 겹침이 정보 손실로
-    바뀌지 않는다. U 는 지우지 않고 넓은 폭 전용 열 + 정렬 옵션으로 남긴다.
-    """
-    if x is None:
-        return "—"
-    if not mx or x == 0:
-        lv = 0
-    else:
-        q = abs(x) / mx * half
-        lv = min(half, int(q) + (1 if q > int(q) else 0))
-    left = (" " * (half - lv) + BAR_FILL * lv) if x < 0 else " " * half
-    right = (BAR_FILL * lv + " " * (half - lv)) if x > 0 else " " * half
-    return left + BAR_AXIS + right
 
 
 def _num(key, nd=2):
@@ -491,7 +459,7 @@ _TABLE_COLS = (
         lambda r, st: "—" if r.get("pct") is None else f"{r['pct']:.0f}"),
     Col("추이[8]", 8, False, lambda r, st: spark(r.get("spark"))),
     Col("수익률[%]", 10, True, _num("ret")),
-    Col("미실현[%p]", 10, False, lambda r, st: xbar(r.get("x"), st.xmax())),
+    Col("미실현[%p]", 10, True, _num("x", 1)),
     Col("풀림[%p/일²]", 12, True, _num("xddot", 3)),
     Col("G[0~1]", 7, True,
         lambda r, st: f"{r['G']:.2f}" if r.get("G") is not None else "—"),
@@ -688,21 +656,6 @@ def color_spans(line: str) -> list[tuple[int, int, str]]:
     for i, ch in enumerate(line):
         if ch == "*":
             spans.append((cell_at[i], 1, "mark"))
-    # 발산 막대 — 기준선 왼쪽은 음수, 오른쪽은 양수. 막대에는 부호 문자가 없어
-    # 위 정규식이 못 잡는다. 색까지 빠지면 왼쪽/오른쪽만으로 부호를 읽어야 한다.
-    i = 0
-    while i < len(line):
-        if line[i] != BAR_FILL:
-            i += 1
-            continue
-        j = i
-        while j < len(line) and line[j] == BAR_FILL:
-            j += 1
-        if j < len(line) and line[j] == BAR_AXIS:
-            spans.append((cell_at[i], cell_at[j] - cell_at[i], "down"))
-        elif i > 0 and line[i - 1] == BAR_AXIS:
-            spans.append((cell_at[i], cell_at[j] - cell_at[i], "up"))
-        i = j
     return spans
 
 
@@ -744,9 +697,8 @@ HELP = [
     ("수익률[%]", "그 섹터 **자체 바구니**의 구간 수익률 [%], 전일 시총 가중."),
     ("", "        KRX 업종지수가 아니다 — 구성종목이 달라 분자·분모가 어긋난다."),
     ("예상Δv", "k × 가속 + b. k·b 는 그 구간 27개 섹터의 횡단면 회귀(절편 포함 OLS)."),
-    ("미실현[%p]", "예상Δv − 실제 수익률 [%p]. 0 기준 **발산 막대** — 기준선 오른쪽이"),
-    ("", "        +(덜 갔다·눌림), 왼쪽이 −(이미 더 갔다). 길이는 화면 안 |최댓값|"),
-    ("", "        대비라 절대 크기가 아니다. 정확한 값은 하단 상세 패널 첫 줄에 있다."),
+    ("미실현[%p]", "예상Δv − 실제 수익률 [%p]. + 면 덜 갔고(눌림), − 면 이미 더 갔다."),
+    ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
     ("", "        OLS 잔차의 부호 반전이라 27개 합이 0 이다 — **상대** 지표다."),
     ("포텐셜[½kx²]", "½·k·x². k 가 블록당 상수라 **|미실현| 의 순증가 변환**이다 — 4개 구간"),
     ("", "        전부 Spearman 1.0000(실측). 즉 미실현 막대와 같은 크기를"),
