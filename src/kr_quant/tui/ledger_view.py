@@ -18,9 +18,11 @@ C(4,2)=6개의 쌍별 이전량이 3차원만큼 남는다.
 **같은 모양으로** 있었다. 셋 다 여기서 같이 고쳤다 — 한쪽만 고치면 다른 쪽이
 조용히 남는다.
 
-⚠️ 열 자르기(:func:`_fit`)만 ``flow_view._fit`` 을 그대로 베껴 왔다. 지금 그쪽
-열 표현이 튜플에서 객체로 바뀌는 중이라 사인이 흔들린다 — 움직이는 사설 API 에
-붙는 것보다 6줄을 갖는 편이 싸다. 그쪽이 정착하면 하나로 올릴 것.
+그림 글자는 **전부 브라유**(U+28xx)다 — 스파크라인·히트맵 농도·발산 막대. 블록
+문자(``▁▂▃█``·``·░▒▓█``·``▌``)는 East Asian Width 가 'A' 라 터미널이 2칸으로 그릴
+수 있는데, 이 화면들은 그림 글자가 **1칸이라고 가정하고 칸을 센다.** 어긋나면
+스파크라인이 잘려 구간의 일부를 전부인 척하고, 히트맵 27열이 54칸을 먹는다.
+``kq-flow`` 가 먼저 옮겼고 원장만 남아 있었다.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ ACTOR_KEYS = tuple(k for k, _ in ACTORS)
 WINDOWS = (5, 20, 60, 120, 260)
 VIEWS = (("ledger", "원장"), ("timeline", "전개"), ("comove", "동시성"), ("limits", "한계"))
 SORTS = (("abs", "절대크기"), ("actor", "선택주체"), ("name", "섹터명"),
-         ("spike", "최대1일"), ("n", "종목수"))
+         ("spike", "최대일몫"), ("n", "종목수"))
 
 #: 모든 화면 최하단에 상주하는 한 줄. 각주가 아니라 본문이다.
 #: 폭에 맞춰 단계별로 줄인다 — 잘라내면 "미관측" 이 사라지는 자리라, 한 줄
@@ -58,12 +60,39 @@ def banner_for(width: int) -> str:
     """그 폭에 온전히 들어가는 가장 긴 배너. 앞에 공백 한 칸이 붙는다."""
     return tier_for(BANNER_TIERS, width - 1)
 
-SPARK = "▁▂▃▄▅▆▇█"
-#: 반칸 블록. 양수는 오른쪽으로 자라며 꼬리가 `▌`(칸의 왼쪽 절반), 음수는 왼쪽으로
-#: 자라며 꼬리가 `▐`(칸의 오른쪽 절반). 두 글자로 양쪽 모두 **반칸 해상도**가 나온다.
-#: 한때 `▏▎▍…` 여덟 단계를 썼는데 그건 항상 칸의 *왼쪽*을 채워서 음수 막대의 꼬리가
-#: 한 칸 떨어져 보였다.
-BLOCK_FULL, BLOCK_L, BLOCK_R = "█", "▌", "▐"
+#: 전개 스파크라인의 글자 — **브라유**(U+28xx) 다. 세로 한가운데가 **0** 이고,
+#: 위 두 단계(``⠒⠛``)가 순매수, 아래 두 단계(``⠤⣤``)가 순매도, ``⠐`` 이 정확히 0 이다.
+#:
+#: 두 가지를 한꺼번에 고친다.
+#:
+#: 1. **폭.** 예전 글자표 ``▁▂▃▄▅▆▇█`` 는 East Asian Width 가 ``A``(Ambiguous) 라
+#:    한글 로케일 터미널이 2칸으로 그릴 수 있다. 20점이 40칸이 되면 ``pad`` 가
+#:    뒤를 잘라내고 **구간의 절반만 그린 채 전부인 척한다.** 브라유는 ``N`` 이라
+#:    어떤 로케일에서도 1칸이다. ``kq-flow`` 가 같은 이유로 먼저 옮겼다.
+#: 2. **기준선.** 예전에는 ``lo, hi = min(values), max(values)`` 라 ``▁`` 이 행마다
+#:    다른 뜻이었다 — 전기/전자에서는 −24,304, 건설에서는 ≈0. 그래서 20일 내내
+#:    판 섹터가 ``████████…▁▁`` 로 나와 "높다가 없어졌다"로 읽혔다(사실은 계속
+#:    팔아 내려간 것이다). 0 을 **세로 한가운데에 고정**하면 그 오독이 표현
+#:    불가능해진다: 계속 판 섹터는 처음부터 끝까지 중앙선 아래에 있다.
+#:
+#: ⚠️ ``kq-flow`` 의 처방(브라유 + 누적 + ``min(0,·)``)만으로는 **모자란다.**
+#: 0 을 범위에 접어 넣어도 눈금은 여전히 바닥 채우기라, 계속 판 섹터는 hi=0 에서
+#: 시작해 ``⣿⣿⣿…⣀⣀`` 가 된다 — 같은 오독이다(실측으로 확인했다). flow 는 크기
+#: 순위 화면이라 부호가 부차적이지만 **원장은 회계 화면이라 부호가 전부**다.
+#: 대신 크기 해상도가 한쪽에 두 단계뿐인데, 그건 ``눈금[억]`` 열이 메운다.
+SPARK_SIGNED = {2: "⠛", 1: "⠒", 0: "⠐", -1: "⠤", -2: "⣤"}
+#: 검사·렌더가 "이게 스파크라인 글자냐"를 물을 때 쓰는 문자열.
+SPARK = "".join(SPARK_SIGNED[lv] for lv in (2, 1, 0, -1, -2))
+#: 반칸 막대 — **브라유**다. 양수는 오른쪽으로 자라며 꼬리가 `⡇`(칸의 왼쪽 절반),
+#: 음수는 왼쪽으로 자라며 꼬리가 `⢸`(칸의 오른쪽 절반). 두 글자로 양쪽 모두
+#: **반칸 해상도**가 나온다. 브라유는 4행 × 2열이라 한 열을 통째로 채우면
+#: 반칸 블록과 같은 그림이 된다.
+#:
+#: ⚠️ 예전엔 `█▌▐` 였다. `█`·`▌` 는 East Asian Width 가 'A' 라 터미널이 2칸으로
+#: 그릴 수 있는데, :func:`signed_bar` 는 **1칸이라고 가정하고 칸을 센다** —
+#: `KQ_AMBIGUOUS_WIDE=1` 을 켜면(그리고 실제 한글 로케일 터미널에서는) 막대가
+#: 자기 폭의 두 배를 먹고 뒤 열을 밀어냈다. 브라유(EAW 'N')는 어느 쪽이든 1칸이다.
+BLOCK_FULL, BLOCK_L, BLOCK_R = "⣿", "⡇", "⢸"
 
 #: 이보다 종목이 적은 (시장,섹터)는 '섹터'로 읽으면 안 된다 — 거래소/부동산은 3종목이다.
 THIN_N = 10
@@ -123,16 +152,36 @@ def residual(cell: dict, i: int) -> float:
     return -sum(cell[k][i] for k in ACTOR_KEYS)
 
 
+def spark_scale(values: list[float]) -> float:
+    """스파크라인의 세로 눈금 — ``⠛``/``⣤`` 끝 칸에 해당하는 값.
+
+    **그려지는 점들로 잰다.** 원본 260점의 최고−최저를 옆에 적어 두던 예전
+    ``진폭[억]`` 열은 그림이 다운샘플된 점으로 정규화된다는 사실을 무시했고,
+    폭 80·260일에서 최대 **21.5%** 어긋났다(일반서비스 29,112억 vs 그림 22,839억).
+    "숫자가 그림의 눈금을 알려준다"는 계약은 **같은 점들**을 봐야 참이 된다.
+    """
+    return max((abs(v) for v in values), default=0.0)
+
+
 def spark(values: list[float]) -> str:
-    """8단계 블록 스파크라인. 전 구간이 같은 값이면 가운데 높이로 눕힌다."""
+    """0 을 세로 한가운데 고정한 **부호 스파크라인**(:data:`SPARK_SIGNED`).
+
+    ``values`` 는 **누적 경로**다. 중앙선 위면 그 시점까지 순매수, 아래면 순매도.
+    크기는 그 행의 ``max|누적|``(= :func:`spark_scale`) 을 1 로 두고 반으로 가른다 —
+    ``⠛``/``⣤`` 는 절반 너머, ``⠒``/``⠤`` 는 절반 이내, ``⠐`` 은 정확히 0 이다.
+    """
     if not values:
         return ""
-    lo, hi = min(values), max(values)
-    if hi - lo <= 0:
-        return SPARK[len(SPARK) // 2] * len(values)
-    span = hi - lo
-    return "".join(SPARK[min(len(SPARK) - 1, int((v - lo) / span * len(SPARK)))]
-                   for v in values)
+    peak = spark_scale(values)
+    out = []
+    for v in values:
+        if peak <= 0 or v == 0:
+            lv = 0
+        else:
+            r = v / peak
+            lv = 2 if r > 0.5 else 1 if r > 0 else -1 if r >= -0.5 else -2
+        out.append(SPARK_SIGNED[lv])
+    return "".join(out)
 
 
 def _fit(cols: list[tuple[str, int, bool]], width: int) -> list[tuple[str, int, bool]]:
@@ -162,7 +211,10 @@ def signed_bar(value: float, scale: float, half: int) -> str:
     """0 을 가운데 둔 부호 막대. 표시 폭은 **항상** ``2 * half``.
 
     ``scale`` 은 막대 한쪽 끝(= ``half`` 칸)에 해당하는 값이다. 넘치면 잘리되
-    끝 칸을 `█` 로 채워 "넘쳤다"가 보이게 둔다.
+    끝 칸을 `⣿` 로 채워 "넘쳤다"가 보이게 둔다.
+
+    ⚠️ 이 함수는 글자가 **1칸이라고 가정하고 칸을 센다**(`" " * half` 처럼).
+    그래서 글자표(:data:`BLOCK_FULL` 외)는 EAW 'N' 이어야 한다.
     """
     if half <= 0:
         return ""
@@ -178,12 +230,18 @@ def signed_bar(value: float, scale: float, half: int) -> str:
 
 
 def _corr(a: list[float], b: list[float]) -> float:
+    """피어슨 상관. **분산이 0 이면 ``nan``** 이다 — 0.0 이 아니다.
+
+    한쪽이 상수(그 구간에 흐름이 아예 없는 섹터)면 상관은 **정의되지 않는다.**
+    예전엔 0.0 을 돌려줬는데, 히트맵에서 그건 ``|r|<0.05`` 와 **같은 빈칸**이라
+    "무상관"과 "잴 수 없다"가 구분되지 않았다. ``nan`` 은 화면에서 ``?`` 로 나온다.
+    """
     n = len(a)
     ma, mb = sum(a) / n, sum(b) / n
     va = sum((x - ma) ** 2 for x in a)
     vb = sum((y - mb) ** 2 for y in b)
     if va <= 0 or vb <= 0:
-        return 0.0
+        return float("nan")
     return sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / math.sqrt(va * vb)
 
 
@@ -214,6 +272,10 @@ class Model:
         self.help_row = 0
         self._corr_cache: dict = {}
         self._null_cache: dict = {}
+        # ⚠️ 캐시 키에 **정렬이 의존하는 것까지** 넣는다. `sort_key == "actor"` 도,
+        # `spike`·`최대일몫` 도 고른 주체의 값이라 **actor 가 키에 있어야 한다.**
+        # `kq-flow` 가 바로 이 자리에서 물렸다(역순이 키에 빠져 `r` 이 안 먹었다).
+        self._rows_cache: dict = {}
 
     # --- 선택 ---
     @property
@@ -271,9 +333,6 @@ class Model:
             return [sum(residual(c, i) for c in cells) for i in range(n)]
         return [sum(c[key][i] for c in cells) for i in range(n)]
 
-    def net(self, sector: str, key: str) -> float:
-        return sum(self.daily(sector, key)[-self.window:])
-
     def n_stocks(self, sector: str) -> int:
         return sum(int(self.d["n_by_sector"].get(m, {}).get(sector, 0))
                    for m in self._mkts())
@@ -281,33 +340,59 @@ class Model:
     def cap(self, sector: str) -> float:
         return sum(float(self.d["cap"].get(m, {}).get(sector, 0.0)) for m in self._mkts())
 
-    def spike(self, sector: str) -> float | None:
-        """구간 중 **최대 하루**가 그 구간 총거래(gross)에서 차지하는 비중(%).
+    def uniform_spike(self) -> float:
+        """매일 고르게 들어왔을 때의 ``최대일몫`` — ``100 ÷ 구간일수``.
 
-        구간 합만 보면 하루짜리 블록딜이 안 보인다. 실측: 최근 20일 전기/전자는
-        2026-07-31 하루가 개인 gross 의 17.9% 였다(GUARDRAILS §10 취약성의 시각화판).
+        앵커가 없으면 17.9% 가 큰지 작은지 알 수 없다. 20일이면 5.0% 다.
         """
-        v = self.daily(sector, self.actor)[-self.window:]
-        gross = sum(abs(x) for x in v)
-        return (max(abs(x) for x in v) / gross * 100) if gross > 0 else None
+        return 100.0 / self.window if self.window else 0.0
 
     def rows(self) -> list[dict]:
+        """표 한 판. **캐시한다** — 한 번 그릴 때 세 곳에서 부른다(1회 23ms).
+
+        키는 결과를 바꾸는 것 전부다: ``(시장, 구간, 정렬, 주체)``. 주체가 빠지면
+        ``a`` 를 눌러도 ``최대일몫`` 과 ``선택주체`` 정렬이 안 바뀐다.
+        """
+        key = (self.market, self.window, self.sort_key, self.actor)
+        hit = self._rows_cache.get(key)
+        if hit is not None:
+            return hit
+        w = self.window
+        ai = ACTOR_KEYS.index(self.actor)
         out = []
         for s in self.sectors:
-            r = {"sector": s, "n": self.n_stocks(s), "spike": self.spike(s)}
-            for k in ACTOR_KEYS:
-                r[k] = self.net(s, k)
-            r["resid"] = self.net(s, "resid")
+            # 4주체 일별을 **한 번만** 뽑아 합계·잔여·몫·최대일을 여기서 다 낸다.
+            # 예전엔 net×4 + net("resid") + spike 가 각각 daily 를 다시 돌았다.
+            d4 = [self.daily(s, k)[-w:] for k in ACTOR_KEYS]
+            r: dict = {"sector": s, "n": self.n_stocks(s)}
+            for k, arr in zip(ACTOR_KEYS, d4):
+                r[k] = sum(arr)
+            r["resid"] = -sum(r[k] for k in ACTOR_KEYS)
             r["abs"] = sum(abs(r[k]) for k in ACTOR_KEYS)
+            # ⚠️ 잔여 몫은 **일별 절댓값**으로 잰다. 구간 합계로 재면 부호가
+            # 엇갈려 상쇄된다 — 실측(20일·전시장) 전기/전자는 합계 −175억인데
+            # 일별 |잔여| 합이 1,934억(11배), IT 서비스는 48배다. 한계 §5 가
+            # 경고한 "전체로 뭉개면 한 칸의 잔여가 지워진다"를 화면이 그대로
+            # 저지르고 있었다.
+            gross = sum(abs(x) for arr in d4 for x in arr)
+            rabs = sum(abs(sum(arr[i] for arr in d4)) for i in range(len(d4[0])))
+            r["resid_pct"] = (rabs / gross * 100) if gross > 0 else None
+            av = d4[ai]
+            agross = sum(abs(x) for x in av)
+            # 구간 중 **최대 하루**가 그 구간 총거래(gross)에서 차지하는 비중(%).
+            # 구간 합만 보면 하루짜리 블록딜이 안 보인다. 실측: 최근 20일
+            # 전기/전자는 2026-07-31 하루가 개인 gross 의 17.9% 였다.
+            r["spike"] = (max(abs(x) for x in av) / agross * 100) if agross else None
             out.append(r)
-        key = self.sort_key
-        if key == "name":
+        key_s = self.sort_key
+        if key_s == "name":
             out.sort(key=lambda r: r["sector"])
-        elif key == "actor":
+        elif key_s == "actor":
             out.sort(key=lambda r: -r[self.actor])
         else:
-            k = key if key in ("abs", "spike", "n") else "abs"
+            k = key_s if key_s in ("abs", "spike", "n") else "abs"
             out.sort(key=lambda r: -(r[k] if r[k] is not None else -1e18))
+        self._rows_cache[key] = out
         return out
 
     def selected(self) -> dict | None:
@@ -347,6 +432,26 @@ class Model:
         return out
 
     def corr_matrix(self) -> tuple[list[str], list[list[float]]]:
+        """상관행렬. 행·열 순서는 **평균상관 내림차순**이지 가나다순이 아니다.
+
+        27×27 을 가나다로 늘어놓으면 무늬가 없다 — 섹터 이름의 첫 글자와 상관은
+        아무 관계가 없으니 당연하다. 이 화면이 답해야 하는 질문은 하나뿐이고
+        (로테이션은 이미 기각됐다) 그건 **"어느 섹터가 시장 공통요인과 따로
+        노는가"** 다. 평균상관으로 줄세우면 그 답이 그림에 나온다 — 왼쪽 위에
+        ``+⣿`` 덩어리, 오른쪽 아래로 ``-`` 띠, 그리고 맨 아래 네 줄이 답이다.
+
+        ⚠️ ``s 정렬`` 은 이 화면에 **안 듣는다.** 안 듣는 값을 헤더 칩이 계속
+        표시하지 않도록 :func:`header_lines` 가 여기서는 ``순서[평균상관]`` 을
+        찍는다.
+        """
+        keys, m, _mean = self._corr_ordered()
+        return keys, m
+
+    def corr_means(self) -> dict[str, float]:
+        """섹터 → 나머지와의 **평균 상관**. 그림을 못 봐도 결론이 남는 열이다."""
+        return self._corr_ordered()[2]
+
+    def _corr_ordered(self):
         key = (self.market, self.actor, self.window, self.detrend)
         if key in self._corr_cache:
             return self._corr_cache[key]
@@ -354,9 +459,19 @@ class Model:
         if self.detrend:
             ser = self._detrended(ser)
         keys = [s for s in self.sectors if s in ser]
-        m = [[1.0 if a == b else _corr(ser[a], ser[b]) for b in keys] for a in keys]
-        self._corr_cache[key] = (keys, m)
-        return keys, m
+        raw = {a: {b: (1.0 if a == b else _corr(ser[a], ser[b])) for b in keys}
+               for a in keys}
+        mean = {}
+        for a in keys:
+            vals = [raw[a][b] for b in keys if b != a and raw[a][b] == raw[a][b]]
+            mean[a] = sum(vals) / len(vals) if vals else float("nan")
+        # 못 잰 섹터(분산 0)는 맨 뒤로 — nan 은 어떤 비교에도 False 라 정렬이
+        # 조용히 뒤엉킨다. 그래서 정렬 키에서 nan 을 **명시적으로** 걷어낸다.
+        keys.sort(key=lambda s: (mean[s] != mean[s], -mean[s]
+                                 if mean[s] == mean[s] else 0.0, s))
+        m = [[raw[a][b] for b in keys] for a in keys]
+        self._corr_cache[key] = (keys, m, mean)
+        return keys, m, mean
 
     def null_neg_frac(self) -> float | None:
         """순환이동 널에서 **음의 상관 쌍**이 차지하는 비율.
@@ -367,6 +482,9 @@ class Model:
         key = (self.market, self.actor, self.window, self.detrend)
         if key in self._null_cache:
             return self._null_cache[key]
+        if self.window < _MIN_CORR_N:
+            self._null_cache[key] = None
+            return None
         ser = self._norm_series()
         if self.detrend:
             ser = self._detrended(ser)
@@ -384,18 +502,26 @@ class Model:
                 sh[s] = ser[s][t:] + ser[s][:t]
             for i, a in enumerate(keys):
                 for b in keys[i + 1:]:
+                    c = _corr(sh[a], sh[b])
+                    if c != c:
+                        continue          # 잴 수 없는 쌍은 관측 쪽과 같이 뺀다
                     tot += 1
-                    if _corr(sh[a], sh[b]) < 0:
+                    if c < 0:
                         neg += 1
         out = neg / tot if tot else None
         self._null_cache[key] = out
         return out
 
     def obs_neg_frac(self) -> float | None:
+        if self.window < _MIN_CORR_N:
+            return None                  # 헛계산 방지 — 27×27 을 만들고 버리지 않는다
         keys, m = self.corr_matrix()
-        if self.window < _MIN_CORR_N or len(keys) < 2:
+        if len(keys) < 2:
             return None
-        vals = [m[i][j] for i in range(len(keys)) for j in range(i + 1, len(keys))]
+        # nan(분산 0 이라 **잴 수 없는** 쌍)은 분모에서도 뺀다. `nan < 0` 은 False
+        # 라서 그냥 두면 "음수가 아닌 쌍"으로 세어져 비율이 조용히 낮아진다.
+        vals = [m[i][j] for i in range(len(keys)) for j in range(i + 1, len(keys))
+                if m[i][j] == m[i][j]]
         return sum(1 for v in vals if v < 0) / len(vals) if vals else None
 
 
@@ -407,8 +533,13 @@ def header_lines(mo: Model, width: int) -> list[str]:
     l1 = (f" 자금 원장 · {mo.dates[-1]} {chip} · "
           f"{mo.dates[max(0, len(mo.dates) - mo.window)]}~{mo.dates[-1]} "
           f"({mo.window}거래일)")
+    # ⚠️ 동시성 화면에서 `s` 는 **아무 일도 하지 않는다**(정렬 3종의 출력이 동일).
+    # 그런데도 칩이 정렬을 계속 표시하면 화면이 안 듣는 값을 광고하는 것이다.
+    # 그 화면의 순서는 정렬 키가 아니라 평균상관이므로 그렇게 적는다.
+    order = ("순서[평균상관]" if mo.view == "comove"
+             else f"정렬[{SORTS[mo.si][1]}]")
     l2 = (f" 화면[{VIEWS[mo.vi][1]}] 구간[{mo.window}일] 시장[{mo.market}]"
-          f" 주체[{mo.actor_ko}] 정렬[{SORTS[mo.si][1]}]")
+          f" 주체[{mo.actor_ko}] {order}")
     return [pad(l1, width), pad(l2, width)]
 
 
@@ -421,6 +552,10 @@ def _col(name: str, want: int, right: bool = True) -> tuple[str, int, bool]:
     """
     return (name, max(want, cell_len(name)), right)
 
+
+#: ``최대일몫`` 이 균등(=100÷구간일수)의 몇 배를 넘으면 `!` 를 붙이나.
+#: 3배면 20일 구간에서 15% 다 — "추세가 아니라 사건" 쪽으로 넘어가는 자리다.
+SPIKE_MARK_MULT = 3
 
 #: 원장의 최소 폭. 4주체 + 잔여가 **한 덩어리**라 이보다 좁으면 표를 안 그린다.
 LEDGER_MIN_W = 71
@@ -446,7 +581,8 @@ def ledger_cols() -> list[tuple[str, int, bool]]:
     # 무색 터미널·색맹·`--dump` 에서 경고가 통째로 사라진다. 값에 붙이면 열이 밀린다.
     return ([_col("섹터", 13, False), _col("", 1, False)]
             + [_col(f"{ko}[억]", 10) for _, ko in ACTORS]
-            + [_col("잔여[억]", 9), _col("최대1일[%]", 10), _col("종목[수]", 8)])
+            + [_col("잔여[억]", 9), _col("잔여몫[%]", 9),
+               _col("최대일몫[%]", 10), _col("종목[수]", 8)])
 
 
 #: 좁아서 표를 못 그릴 때의 안내 — 넓은 것부터. 잘린 안내는 안내가 아니다.
@@ -468,6 +604,33 @@ TIMELINE_NARROW_TIERS = (
 )
 
 
+#: 좁아서 표를 못 그릴 때 **이 폭에서도 되는 것**. 넓은 것부터.
+#: "창을 넓혀라"는 SSH 로 붙은 창에 자주 막다른 길이다 — 폭 70 에서 원장만
+#: 안 그려질 뿐 전개(48칸)·동시성·한계는 멀쩡히 돌고, 그때 화면의 75%가 빈 줄이다.
+#: 되는 것을 한 줄로 말하면 좁은 창이 쓸모를 잃지 않는다.
+NARROW_ALSO_TIERS = (
+    " 이 폭에서도 볼 수 있다 → v 로 전개 · 동시성 · 한계, ? 로 도움말",
+    " 이 폭에서도 → v 전개 · 동시성 · 한계 · ? 도움말",
+    " v 전개 · 동시성 · 한계 · ? 도움말",
+    " v 다른 화면 · ? 도움말",
+    " v 화면 · ? 도움",
+)
+#: 전개조차 안 되는 폭(<48)용 — 없는 것을 있다고 하면 안내가 아니라 오도다.
+NARROW_ALSO_NO_TIMELINE_TIERS = (
+    " 이 폭에서도 볼 수 있다 → v 로 동시성 · 한계, ? 로 도움말",
+    " 이 폭에서도 → v 동시성 · 한계 · ? 도움말",
+    " v 동시성 · 한계 · ? 도움말",
+    " v 다른 화면 · ? 도움말",
+    " v 화면 · ? 도움",
+)
+
+
+def narrow_also(width: int) -> str:
+    """좁은 화면 안내의 **셋째 줄** — 여기서도 되는 것."""
+    return tier_for(NARROW_ALSO_TIERS if width >= TIMELINE_MIN_W
+                    else NARROW_ALSO_NO_TIMELINE_TIERS, width)
+
+
 def _too_narrow(what: str, width: int, minw: int) -> str:
     """"안 그리는 이유" 첫 줄 — 폭에 맞춰 단계별로."""
     return tier_for((f" 폭이 {width}칸이라 {what} 안 그린다 — 최소 {minw}칸.",
@@ -485,8 +648,9 @@ def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     """
     if width < LEDGER_MIN_W:
         return ([pad(_too_narrow("원장을", width, LEDGER_MIN_W), width),
-                 pad(tier_for(LEDGER_NARROW_TIERS, width), width)],
-                [False, False], 2)
+                 pad(tier_for(LEDGER_NARROW_TIERS, width), width),
+                 pad(narrow_also(width), width)],
+                [False, False, False], 3)
     # 폭이 모자라면 **열 경계에서** 떨어뜨린다. 줄을 통째로 자르면 숫자가
     # 자릿수 중간에서 끊겨 -1,360 이 -1 로 보인다 — 안 보이는 것보다 나쁘다.
     cols = _fit(ledger_cols(), width)
@@ -500,11 +664,16 @@ def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
 
     rows = mo.rows()
     scale = max((abs(r[mo.actor]) for r in rows), default=0.0)
+    unif = mo.uniform_spike()
     for r in rows:
-        sp = r["spike"]
+        sp, rp = r["spike"], r["resid_pct"]
+        # 문턱 초과는 **글자**로 표시한다(`~` 와 같은 이유 — 색은 무색 터미널·
+        # 색맹·`--dump` 에서 사라진다). 마커는 늘 1칸이라 자릿수는 안 밀린다.
+        mark = "!" if sp is not None and sp >= SPIKE_MARK_MULT * unif else " "
         vals = ([r["sector"], "~" if r["n"] < THIN_N else ""]
                 + [fmt_amt(r[k]) for k in ACTOR_KEYS] + [fmt_amt(r["resid"])]
-                + [f"{sp:.1f}" if sp is not None else "—", str(r["n"])])
+                + [f"{rp:.1f}" if rp is not None else "—",
+                   f"{sp:.1f}{mark}" if sp is not None else "—", str(r["n"])])
         cells = [pad(v, c[1], c[2]) for v, c in zip(vals, cols)]
         line = " ".join(cells)
         if half:
@@ -514,12 +683,15 @@ def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     return out, thin, 1
 
 
-#: 스파크라인의 세로 눈금 경고 — 넓은 것부터. :func:`tier_for` 가 폭에 맞춰 고른다.
+#: 스파크라인 읽는 법 — 넓은 것부터. :func:`tier_for` 가 폭에 맞춰 고른다.
+#: **가운데가 0** 이라는 문장이 어느 단계에서도 안 사라진다. 그게 이 그림의
+#: 전부이고, 예전 그림이 못 하던 것이다.
 TIMELINE_NOTE_TIERS = (
-    " ↑ 세로 눈금은 행마다 다르다(각 행의 최저~최고를 8단계에 편다)."
-    " 행 사이 크기 비교는 진폭 열로 하라.",
-    " ↑ 세로 눈금은 행마다 다르다 — 크기 비교는 진폭 열로.",
-    " ↑ 눈금은 행마다 다르다",
+    " ↑ 세로 한가운데가 0 이다 — 위 ⠒⠛ 는 순매수, 아래 ⠤⣤ 는 순매도."
+    " 크기 눈금만 행마다 다르다(눈금[억] 열이 그 값이다).",
+    " ↑ 가운데가 0 · 위 ⠒⠛ 순매수, 아래 ⠤⣤ 순매도 · 크기는 눈금[억] 열",
+    " ↑ 가운데가 0 · 위 순매수 · 아래 순매도",
+    " ↑ 가운데가 0",
 )
 
 
@@ -529,16 +701,18 @@ def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     순위가 교차하는 게 눈에 보이면 그게 전부다. "A 에서 B 로 옮겨갔다"는 이
     화면에서 **읽을 수 없다** — 돈에 꼬리표가 없기 때문이다.
 
-    ⚠️ 스파크라인은 **행마다 따로 정규화**된다(각 행의 최저~최고를 8단계에 편다).
-    3종목짜리 부동산의 그림이 387종목짜리 전기/전자만큼 극적으로 보인다. 그래서
-    ``진폭[억]`` 열을 옆에 둔다 — 그림의 세로 눈금이 행마다 다르다는 걸 숫자가 알려준다.
+    스파크라인의 **0 은 어느 행에서나 세로 한가운데**다(:func:`spark`). 크기만
+    행마다 정규화되므로 3종목짜리 부동산의 그림이 387종목짜리 전기/전자만큼
+    극적으로 보일 수 있다 — 그래서 ``눈금[억]`` 열을 옆에 둔다. 그 값은
+    **그려지는 점들**로 잰 것이라 그림과 정확히 맞는다(:func:`spark_scale`).
     """
     if width < TIMELINE_MIN_W:
         return ([pad(_too_narrow("전개를", width, TIMELINE_MIN_W), width),
-                 pad(tier_for(TIMELINE_NARROW_TIERS, width), width)],
-                [False, False], 2)
+                 pad(tier_for(TIMELINE_NARROW_TIERS, width), width),
+                 pad(narrow_also(width), width)],
+                [False, False, False], 3)
     cols = _fit([_col("섹터", 13, False), _col("", 1, False),
-                 _col("누적[억]", 11), _col("진폭[억]", 11)], width)
+                 _col("누적[억]", 11), _col("눈금[억]", 11)], width)
     used = sum(c[1] + 1 for c in cols)
     # 남는 칸이 곧 스파크라인 폭이다. 최소값으로 **올려** 잡으면 줄이 폭을 넘어
     # pad 가 뒤를 잘라내고, 구간의 일부만 그려진 채 전부인 척한다.
@@ -558,21 +732,28 @@ def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
         for x in v:
             acc += x
             cum.append(acc)
-        amp = (max(cum) - min(cum)) if cum else 0.0
         show = downsample(cum, sw)
-        # 진폭은 늘 양수라 부호를 붙이지 않는다 — `+` 를 달면 순매수처럼 읽힌다.
+        # ⚠️ 눈금은 **그려지는 점들**(show)로 잰다. 원본 260점으로 재면 그림의
+        # 정규화와 어긋난다 — 폭 80·260일에서 최대 21.5% 였다.
+        # 늘 양수라 부호를 붙이지 않는다 — `+` 를 달면 순매수처럼 읽힌다.
         vals = [r["sector"], "~" if r["n"] < THIN_N else "",
-                fmt_amt(acc), f"{amp:,.0f}"]
+                fmt_amt(acc), f"{spark_scale(show):,.0f}"]
         line = " ".join(pad(x, c[1], c[2]) for x, c in zip(vals, cols))
         out.append(pad(line + " " + pad(spark(show), sw), width))
         thin.append(r["n"] < THIN_N)
     return out, thin, 2
 
 
-#: 히트맵 한 칸 = 2글자. 첫 글자가 **부호**, 둘째가 **세기**.
+#: 히트맵 한 칸 = 2글자. 첫 글자가 **부호**(ASCII `+`/`-`), 둘째가 **세기**.
 #: 색만으로 부호를 표현하면 8색 터미널·평문 덤프·색맹에서 그림이 통째로 사라진다.
 #: 글자에 부호를 박아두면 색은 **보조**가 되고 정보는 색 없이도 남는다.
-HEAT_RAMP = " ·░▒▓█"
+#:
+#: 세기는 **브라유 점 개수**로 낸다 — `⡀`1 `⣀`2 `⣤`4 `⣶`6 `⣿`8 점. 예전 `·░▒▓█`
+#: 은 다섯 중 넷(`·▒▓█`)이 EAW 'A' 라, 터미널이 2칸으로 그리면 27열 히트맵이
+#: 54칸을 먹고 행이 통째로 밀렸다. 폭이 생명인 화면이라 블록을 지키고 폭 계산만
+#: 고치는 길(= 켜면 폭 예산 2배)은 못 간다 — 폭 80 에서 아예 못 그리게 된다.
+#: 브라유는 EAW 'N' 이라 모드와 무관하게 1칸이고, 점 개수가 단조라 농도가 남는다.
+HEAT_RAMP = " ⡀⣀⣤⣶⣿"
 
 
 def heat_level(c: float) -> int:
@@ -582,69 +763,173 @@ def heat_level(c: float) -> int:
     return max(-5, min(5, int(round(c * 5 / 0.5))))
 
 
+#: 못 잰 쌍(분산 0). 빈칸으로 두면 ``|r|<0.05`` 와 구분되지 않는다 —
+#: "무상관" 과 "잴 수 없다" 는 다른 말이다.
+HEAT_UNDEF = " ?"
+
+
 def heat_cell(c: float) -> str:
+    if c != c:
+        return HEAT_UNDEF
     lv = heat_level(c)
     if lv == 0:
         return "  "
     return ("+" if lv > 0 else "-") + HEAT_RAMP[abs(lv)]
 
 
+def heat_diag() -> str:
+    """대각선(자기상관 1.0) 자리. **비운다.**
+
+    27칸을 ``+⣿`` 로 채워 봐야 아는 사실("자기 자신과는 상관 1")만 되풀이하고,
+    무늬를 읽을 때 눈이 걸린다. 비우면 그 빈 줄이 곧 눈이 따라갈 기준선이 된다.
+    """
+    return "  "
+
+
+def comove_verdict_tiers(obs: float, nul: float | None) -> tuple[str, ...]:
+    """첫 줄 — 폭에 맞춰 **단계별로**. 잘린 결론은 뜻이 뒤집힌다.
+
+    폭 80 에서 예전 한 줄은 ``→ 관측이 널보다 낮다 → 로테이션`` 에서 끝났다.
+    원문은 "로테이션은 우연보다 **드물다**" 인데, 잘린 자리에서 읽으면 정확히
+    반대로 읽힌다. 이 저장소는 배너·푸터·도움말 제목에 전부 단계를 깔아 뒀는데
+    **가장 결론적인 이 줄에만** 없었다.
+    """
+    low = nul is not None and obs < nul - 0.03
+    long = ("로테이션은 우연보다 드물다" if low else "널과 다르지 않다 — 무늬를 읽지 마라")
+    short = ("로테이션은 드물다" if low else "무늬를 읽지 마라")
+    o, n = obs * 100, (nul * 100 if nul is not None else float("nan"))
+    return (
+        f" 음의 상관 쌍  관측 {o:.0f}%  널(순환이동×{_NULL_SHIFTS}) {n:.0f}%  → {long}",
+        f" 음상관 관측 {o:.0f}% · 널 {n:.0f}% → {long}",
+        f" 관측 {o:.0f}% · 널 {n:.0f}% → {short}",
+        f" 관측 {o:.0f}%/널 {n:.0f}% → {short}",
+        f" → {short}",
+    )
+
+
+def comove_outliers(keys: list[str], mean: dict[str, float], n: int = 4) -> tuple[str, ...]:
+    """"따로 노는 섹터" 한 줄 — 폭에 맞춰 이름을 하나씩 뺀다.
+
+    ``keys`` 는 이미 평균상관 내림차순이라 **뒤에서** 집으면 그게 답이다.
+    그림을 못 보는 사람(좁은 창·평문 덤프·스크롤 아래)에게도 결론이 남아야 한다.
+    """
+    tail = [k for k in reversed(keys) if mean[k] == mean[k]][:n]
+    if not tail:
+        return (" 평균상관을 낼 수 있는 섹터가 없다.",)
+    names = [f"{k} {mean[k] * 100:+.0f}" for k in tail]
+    return tuple(
+        [" 시장 공통요인과 따로 논다(평균 낮은 순): " + " · ".join(names[:i])
+         for i in range(len(names), 0, -1)]
+        + [" 따로 논다: " + tail[0]]
+    )
+
+
+#: 행렬 아래 범례 — 각각 폭에 맞춰 단계별로. **척도를 밝힌다.**
+#: 예전 범례는 "부호 + 세기(·░▒▓█)" 라고만 적어서 `▓` 가 0.3 인지 0.7 인지
+#: 알 수 없었다 — 글자에서 r 을 역산할 수 없으면 그건 범례가 아니다. 그리고
+#: 빈칸이 "무상관" 인지 "잴 수 없음" 인지도 구분되지 않았다(쌍의 21.9% 가 빈칸이다).
+COMOVE_LEGEND_TIERS = (
+    (" 세기: |r| 0.1↑ ⡀  0.2↑ ⣀  0.3↑ ⣤  0.4↑ ⣶  0.5↑ ⣿ (0.5 에서 포화).",
+     " 세기: 0.1↑ ⡀  0.2↑ ⣀  0.3↑ ⣤  0.4↑ ⣶  0.5↑ ⣿",
+     " ⡀ ⣀ ⣤ ⣶ ⣿ = |r| 0.1·0.2·0.3·0.4·0.5↑",
+     " 세기 = |r| 0.1 단계"),
+    (" 빈칸 = |r| 0.05 미만 · ? = 잴 수 없다(분산 0) · 대각선은 비웠다.",
+     " 빈칸 = |r|<0.05 · ? = 잴 수 없다 · 대각선은 비웠다",
+     " 빈칸 |r|<0.05 · ? 잴 수 없다",
+     " 빈칸 = 무상관"),
+    (" 평균 = 그 섹터와 나머지의 평균 상관 ×100 — 행·열이 그 내림차순이다.",
+     " 평균 = 나머지와의 평균 상관 ×100 (행·열 순서)",
+     " 평균 = 평균 상관 ×100",
+     " 평균 ×100"),
+)
+
+
 def comove_lines(mo: Model, width: int) -> tuple[list[str], list[tuple], int]:
-    """27×27 상관 히트맵 + **널 대조**.
+    """섹터쌍 상관 히트맵 + **널 대조**. 행·열은 **평균상관 내림차순**이다.
+
+    이 화면이 답하는 질문은 하나다 — **"어느 섹터가 시장 공통요인과 따로 노는가."**
+    로테이션("A 에서 B 로 옮겨갔다")은 여기서 이미 기각됐고(그게 첫 줄의 판정이다),
+    남는 것이 그 질문이다. 가나다순으로 늘어놓으면 무늬가 없지만 평균상관으로
+    줄세우면 답이 그림에 나온다: 왼쪽 위 ``+⣿`` 덩어리, 오른쪽 아래로 ``-`` 띠.
+    그림을 못 봐도 ``평균`` 열과 셋째 줄이 같은 결론을 글자로 남긴다.
 
     헤더가 스스로 답한다 — "이 무늬가 우연보다 두드러지나". 순수 노이즈면 음수쌍이
     50% 다. 개인·기관·외국인은 17~34% 라 섹터들이 서로 **반대가 아니라 같이**
     움직인다. **기타법인은 45~54% 로 널과 구분되지 않는다** — 주체마다 다르므로
     범위 하나로 단정하지 말고 헤더의 판정줄을 읽어야 한다.
 
+    ⚠️ 번호→이름 범례를 행렬 **아래**에 12줄로 두던 것을 없앴다. 폭 80·높이 24
+    에서는 행이 15개만 보이는데 범례가 화면 밖이라, 정작 행렬을 보는 동안 열이
+    무엇인지 알 수 없었다. 행·열 순서가 같으므로 **행 이름이 곧 범례**이고,
+    그 사실을 둘째 줄이 말한다 — 없애도 정보가 안 준다.
+
     반환하는 두 번째 값은 색칠 지시 ``(y, x, width, level)`` 이다 — 문자열만으로는
     발산 색상을 표현할 수 없어서, 무엇을 어디에 칠할지만 알려주고 색은 앱이 정한다.
     """
-    keys, m = mo.corr_matrix()
-    obs, nul = mo.obs_neg_frac(), mo.null_neg_frac()
+    # ⚠️ 구간 검사가 **먼저**다. 예전엔 `corr_matrix()` 를 부른 뒤에 버려서
+    # 5·10일 구간에서 27×27 을 헛계산했다.
+    obs = mo.obs_neg_frac()
     if obs is None:
         note = f" 구간이 {mo.window}일이라 상관을 내지 않는다(최소 {_MIN_CORR_N}일)."
         return [pad(note, width), pad(" " + banner_for(width), width)], [], 1
+    keys, m = mo.corr_matrix()
+    mean = mo.corr_means()
+    nul = mo.null_neg_frac()
 
-    verdict = ("관측이 널보다 낮다 → 로테이션은 우연보다 드물다"
-               if nul is not None and obs < nul - 0.03 else
-               "관측이 널과 다르지 않다 → 무늬를 읽지 마라")
-    l1 = (f" 음의 상관 쌍  관측 {obs * 100:.0f}%   "
-          f"널(순환이동×{_NULL_SHIFTS}) {nul * 100:.0f}%   → {verdict}")
-    l2 = " 같은/반대 방향으로 동시에 갔다는 **사실**이다. 옮겨갔다는 뜻이 아니다."
-    if mo.detrend:
-        l2 += "  ⚠β제거: 전기/전자발 음상관은 구성적 인공물과 구분 안 된다"
-    lines = [pad(l1, width), pad(l2, width)]
+    lines = [pad(tier_for(comove_verdict_tiers(obs, nul), width), width)]
+    l2 = tier_for((
+        " 동시에 갔다는 사실이다 — 옮겨갔다는 뜻이 아니다."
+        "  행·열 순서는 같다(열 N = 행 N).",
+        " 동시에 갔다는 사실이다 — 옮겨갔다는 뜻이 아니다. 열 N = 행 N.",
+        " 옮겨갔다는 뜻이 아니다 · 열 N = 행 N",
+        " 옮겨갔다는 뜻이 아니다",
+    ), width)
+    if mo.detrend and cell_len(l2) + 46 <= width:
+        l2 += "  ⚠β제거: 전기/전자발 음상관은 인공물과 구분 안 된다"
+    lines.append(pad(l2, width))
+    lines.append(pad(tier_for(comove_outliers(keys, mean), width), width))
     marks: list[tuple] = []
 
     lab = 13
-    ncol = max(0, min(len(keys), (width - lab - 1) // 2))
-    tens = pad("", lab) + " " + "".join(f"{(i + 1) // 10 or ' ':>2}" for i in range(ncol))
-    ones = pad("", lab) + " " + "".join(f"{(i + 1) % 10:>2}" for i in range(ncol))
+    avg = 4                       # `평균` 열(상관 ×100). 그림을 못 봐도 남는 결론.
+    x0 = lab + 1 + avg + 1
+    ncol = max(0, min(len(keys), (width - x0) // 2))
+    pre = pad("", lab) + " " + pad("", avg) + " "
+    tens = pre + "".join(f"{(i + 1) // 10 or ' ':>2}" for i in range(ncol))
+    ones = (pad("", lab) + " " + pad("평균", avg) + " "
+            + "".join(f"{(i + 1) % 10:>2}" for i in range(ncol)))
     lines += [pad(tens, width), pad(ones, width)]
     head = len(lines)
 
     for i, a in enumerate(keys):
-        row = pad(f"{i + 1:>2} {a}", lab) + " "
-        x0 = lab + 1
+        mv = mean[a]
+        row = (pad(f"{i + 1:>2} {a}", lab) + " "
+               + pad(f"{mv * 100:+.0f}" if mv == mv else "?", avg) + " ")
         for j in range(ncol):
+            if i == j:
+                # 대각선은 비운다 — 자기상관 1.0 이 27칸을 먹으면 무늬를 가린다.
+                # 색칠 지시도 **안 낸다**: 등급 0 짜리 지시는 앱이 어차피 안
+                # 칠하는데, 있으면 "지시한 자리에 부호 글자가 있다"는 계약이 깨진다.
+                row += heat_diag()
+                continue
             row += heat_cell(m[i][j])
-            marks.append((head + i, x0 + 2 * j, 2, heat_level(m[i][j])))
+            lv = heat_level(m[i][j])
+            # 등급 0(빈칸·`?`)은 칠할 것이 없다. 지시를 내면 앱은 안 칠하는데
+            # "지시한 자리에 부호 글자가 있다"는 계약만 거짓이 된다 — 그 계약을
+            # 검사가 붙들고 있으므로 여기서 안 낸다.
+            if lv:
+                marks.append((head + i, x0 + 2 * j, 2, lv))
         lines.append(pad(row, width))
 
     lines.append(pad("", width))
     if ncol < len(keys):
         lines.append(pad(f" 폭이 좁아 {ncol}/{len(keys)} 열만 보인다 — 창을 넓혀라.",
                          width))
-    lines.append(pad(" 칸 = 부호 + 세기(" + HEAT_RAMP.strip() + ")."
-                     "  +█ = 같이 샀다/팔았다,  -█ = 반대로 갔다.", width))
-    # 범례 — 칸을 고정하지 않으면 한글 길이가 제각각이라 열이 안 맞는다.
-    ew = 18
-    per = max(1, (width - 1) // ew)
-    for i in range(0, len(keys), per):
-        lines.append(pad(" " + "".join(pad(f"{j + 1:>2} {keys[j]}", ew)
-                                       for j in range(i, min(i + per, len(keys)))),
-                         width))
+    # 척도를 밝힌다 — 글자에서 r 을 역산할 수 있어야 범례다. 예전 범례는
+    # "부호 + 세기" 라고만 적어 `▓` 가 0.3 인지 0.7 인지 알 수 없었고,
+    # 빈칸이 "무상관" 인지 "잴 수 없음" 인지도 구분이 안 됐다.
+    for tiers in COMOVE_LEGEND_TIERS:
+        lines.append(pad(tier_for(tiers, width), width))
     return lines, marks, head
 
 
@@ -768,9 +1053,11 @@ LEDGER_HELP = [
     ("w W", "구간 5·20·60·120·260 거래일. 대문자는 역방향."),
     ("m M", "시장 전체·거래소·코스닥. 대문자는 역방향."),
     ("a A", "주체 개인·외국인·기관·기타법인. 대문자는 역방향."),
-    ("", "           고른 주체만 막대·최대1일·전개·동시성에 쓰인다. 원장 표의"),
+    ("", "           고른 주체만 막대·최대일몫·전개·동시성에 쓰인다. 원장 표의"),
     ("", "           금액 열 넷은 주체 선택과 무관하게 늘 넷 다 나온다."),
-    ("s S", "정렬 절대크기·선택주체·섹터명·최대1일·종목수. 대문자는 역방향."),
+    ("s S", "정렬 절대크기·선택주체·섹터명·최대일몫·종목수. 대문자는 역방향."),
+    ("", "           동시성 화면에는 **안 듣는다** — 거기 순서는 평균상관이라서,"),
+    ("", "           헤더 칩도 그 화면에서는 순서[평균상관] 으로 바뀐다."),
     ("", "           역순 토글은 없다 — 섹터명만 오름차순, 나머지는 내림차순이다."),
     ("d", "동시성 화면의 β제거 토글. 다른 화면에서는 아무 일도 하지 않는다."),
     ("? F1", "이 도움말. 안에서 ↑↓·PgUp/PgDn·g·G 로 훑고, q·Esc·?·Enter 로"),
@@ -808,34 +1095,58 @@ LEDGER_HELP = [
     ("", "           크기는 분모를 정해야 말할 수 있다(260일 실측): 거래대금 대비"),
     ("", "           0.0076%, (시장,섹터,일) 칸의 gross 가중 평균 0.330%. 다만 그건"),
     ("", "           평균이고 **최악의 한 칸은 37.7%** 다(거래소/금속/2026-04-07)."),
-    ("최대1일[%]", "그 구간 총량 중 **하루가 차지한 비중** = max|일별| ÷ Σ|일별| × 100."),
-    ("", "           분자·분모 모두 **고른 주체·고른 시장**의 값이고 부호는 절댓값으로"),
-    ("", "           죽인다. 매일 고르게 들어왔다면 100 ÷ 구간일수 다 — 20일이면 5%."),
+    ("잔여몫[%]", "잔여가 그 섹터 순매매에서 차지한 몫 = Σ|일별 잔여| ÷ Σ|일별 4주체|"),
+    ("", "           ⚠️ **합계가 아니라 일별 절댓값으로** 잰다. 구간 합계로 재면"),
+    ("", "           부호가 엇갈려 상쇄된다 — 20일·전시장 전기/전자는 합계가"),
+    ("", "           −175억인데 일별 |잔여| 합은 1,934억으로 **11배**, IT 서비스는"),
+    ("", "           **48배** 다. 한계 §5 가 경고한 '전체로 뭉개면 한 칸의 잔여가"),
+    ("", "           지워진다'를 이 화면이 그대로 저지르고 있었다."),
+    ("", "           `기타제조 -1억` 은 무시하게 생겼지만 그 섹터 순매매의 1.71% 다."),
+    ("최대일몫[%]", "그 구간 총량 중 **하루가 차지한 몫** = max|일별| ÷ Σ|일별| × 100."),
+    ("", "           분자·분모 모두 **고른 주체(a 로 바뀐다)·고른 시장**의 값이고"),
+    ("", "           부호는 절댓값으로 죽인다. 매일 고르게 들어왔다면 100 ÷ 구간일수"),
+    ("", "           다 — 20일이면 5%. 그 앵커는 상태줄이 행마다 같이 찍는다."),
     ("", "           그래서 17.9%(20일 전기/전자 개인, 실측)는 **추세가 아니라 사건**"),
     ("", "           이라는 뜻이다. 하루짜리 블록딜 하나로 구간 합이 만들어진다."),
-    ("", "           구간 총량이 0 이면 '—' 다."),
+    ("!", "최대일몫이 균등의 3배를 넘었다는 표시. 20일이면 15% 다."),
+    ("", "           `~` 와 같은 이유로 **색이 아니라 글자**다 — 무색 터미널·색맹·"),
+    ("", "           `--dump` 에서 색은 통째로 사라진다. 구간 총량이 0 이면 '—' 다."),
     ("종목[수]", "그 (시장,섹터)의 상장 종목 수. 10 미만이면 ~ 마커가 붙는다."),
     ("절대크기", "정렬 전용 값 — Σ|4주체|. 열로는 안 보인다. 부호를 지우고 더하므로"),
     ("", "           서로 반대로 큰 주체가 있는 섹터가 위로 온다."),
     ("막대", "오른쪽 끝의 '−  주체  +' 열 — 고른 주체의 순매수. 한쪽 끝이 지금"),
     ("", "           화면 안의 최대 절댓값이라 **화면이 바뀌면 눈금도 바뀐다.**"),
-    ("", "           반칸(▌▐) 해상도이고 넘치면 끝 칸이 █ 로 찬다. 폭이 좁으면"),
+    ("", "           반칸(⡇⢸) 해상도이고 넘치면 끝 칸이 ⣿ 로 찬다. 폭이 좁으면"),
     ("", "           아예 안 그린다."),
     ("", ""),
     ("", "── 전개 열 ──"),
     ("누적[억]", "구간 누적 순매수 [억원] — 고른 주체. 원장의 그 주체 칸과 같다."),
-    ("진폭[억]", "누적 경로의 최고−최저 [억원]. 늘 양수라 부호를 안 붙인다."),
-    ("", "           스파크라인의 눈금이 행마다 다르다는 걸 이 숫자가 알려준다."),
+    ("눈금[억]", "스파크라인의 **세로 눈금** [억원] — ⠛ 과 ⣤ 끝 칸이 이 값이다."),
+    ("", "           늘 양수라 부호를 안 붙인다. **그려지는 점들로 잰다** — 원본"),
+    ("", "           260점으로 재던 예전 진폭[억] 은 그림이 다운샘플된 점으로"),
+    ("", "           정규화된다는 걸 무시해 폭 80·260일에서 최대 21.5% 어긋났다."),
     ("추이", "구간 동안 순매수가 **누적된 경로**. 왼쪽이 구간 시작, 오른쪽이 끝이다."),
+    ("", "           **세로 한가운데가 0 이다** — 위 ⠒⠛ 는 그때까지 순매수, 아래"),
+    ("", "           ⠤⣤ 는 순매도, ⠐ 은 정확히 0. 0 이 어느 행에서나 같은 자리라"),
+    ("", "           `계속 팔았다` 가 `높다가 없어졌다` 로 안 읽힌다(예전 ▁▂▃█ 은"),
+    ("", "           행마다 바닥이 달라서 정확히 그렇게 읽혔다)."),
     ("", "           올라가면 들어오는 중 · 내려가면 빠져나가는 중 · 평평하면 멈췄다."),
-    ("", "           높이는 **그 행 안에서** 최저~최고를 8단계(▁▂▃▄▅▆▇█)에 편 것이라"),
-    ("", "           **행끼리 비교되지 않는다** — 크기는 진폭[억] 열이 말한다."),
+    ("", "           크기는 **그 행 안에서** 정규화되므로 행끼리 비교되지 않는다 —"),
+    ("", "           크기는 눈금[억] 열이 말한다. 글자는 브라유라 어떤 로케일에서도"),
+    ("", "           1칸이다(▁▂▃█ 은 한글 로케일에서 2칸이 될 수 있다)."),
     ("", "           구간이 칸보다 길면 묶어서 각 묶음의 **끝점**을 찍는다(앞을 안 버린다)."),
     ("", ""),
     ("", "── 동시성 ──"),
-    ("칸", "두 섹터의 상관 = 부호 + 세기(·░▒▓█). +█ 은 같이 샀다/팔았다,"),
-    ("", "           -█ 은 반대로 갔다. 세기는 |r| 0.1 마다 한 단계, 0.5 이상이 █ 이다."),
+    ("칸", "두 섹터의 상관 = 부호 + 세기(⡀⣀⣤⣶⣿). +⣿ 은 같이 샀다/팔았다,"),
+    ("", "           -⣿ 은 반대로 갔다. 세기는 |r| 0.1 마다 한 단계, 0.5 이상이 ⣿ 다."),
     ("", "           색은 **보조**다 — 부호를 글자에 박아 무색·평문에서도 남는다."),
+    ("", "           빈칸은 |r| 0.05 미만, `?` 는 **잴 수 없다**(구간 분산 0)."),
+    ("", "           대각선(자기상관 1.0)은 비운다 — 27칸을 먹고 아는 것만 되풀이한다."),
+    ("평균", "그 섹터와 나머지의 **평균 상관** ×100. 행·열이 이 값의 내림차순이라"),
+    ("", "           왼쪽 위가 같이 가는 덩어리, 오른쪽 아래가 따로 노는 섹터다."),
+    ("", "           이 화면이 답하는 질문이 그거다 — 로테이션은 판정줄이 이미"),
+    ("", "           기각했고, 남는 것은 **누가 시장 공통요인과 따로 노는가** 다."),
+    ("", "           행렬 셋째 줄이 그 답을 글자로도 남긴다(그림을 못 봐도 된다)."),
     ("상관", "섹터 시총으로 나눈 일별 흐름(%p)의 피어슨 상관. 고른 주체·구간."),
     ("", "           구간이 20일 미만이면 상관을 아예 내지 않는다."),
     ("널", "각 계열을 **무작위로 순환이동**해 20번 다시 잰 음의 상관 쌍 비율."),
@@ -898,7 +1209,7 @@ def help_screen(mo: "Model", width: int, height: int) -> list[str]:
 
 #: 정렬 키 → 도움말 항목 이름. 열이 없는 정렬(절대크기)도 항목이 있다.
 _SORT_HELP = {"abs": "절대크기", "name": "섹터",
-              "spike": "최대1일[%]", "n": "종목[수]"}
+              "spike": "최대일몫[%]", "n": "종목[수]"}
 
 #: 동시성 화면의 힌트 — 정렬이 없는 화면이라 열 대신 **읽는 법**을 말한다.
 HINT_COMOVE_TIERS = (
@@ -924,7 +1235,7 @@ def hint_text(mo: "Model", width: int) -> str:
     ``?`` 는 전면 모달이라 "이 숫자가 뭐냐" 를 물은 사람이 **그 숫자를 보면서**
     답을 읽을 수 없다. ``kq-flow`` 가 같은 이유로 힌트바를 뒀다. 원장에도 맞는가 —
     맞다. 상태줄은 커서가 놓인 **행의 값**을 말하지 그 열이 **무슨 뜻인지**는
-    말하지 않는데, 원장에서 설명이 가장 필요한 두 열(``잔여``·``최대1일``)이
+    말하지 않는데, 원장에서 설명이 가장 필요한 두 열(``잔여``·``최대일몫``)이
     바로 이름만으로는 오해되는 열이다.
     """
     if mo.view == "comove":
@@ -939,16 +1250,41 @@ def hint_text(mo: "Model", width: int) -> str:
 
 
 def status_line(mo: Model, width: int) -> str:
-    """커서가 놓인 칸의 전체 수치 — 터미널에 툴팁이 없으니 상태줄이 그 자리다."""
-    r = mo.selected()
-    if mo.view == "limits" or not r:
+    """커서가 놓인 칸의 전체 수치 — 터미널에 툴팁이 없으니 상태줄이 그 자리다.
+
+    ``최대일몫`` 옆에 **균등 앵커**를 같이 찍는다. 17.9% 가 큰 값인지는 균등
+    (=100÷구간일수, 20일이면 5.0%)을 알아야 판단된다 — 그 앵커가 화면 어디에도
+    없으면 열 이름만으로는 아무것도 안 잡힌다. 고른 주체도 여기서 이름을 댄다
+    (``a`` 를 누르면 그 열만 조용히 바뀌는데 열 헤더에는 주체가 없다).
+    """
+    # ⚠️ 한계 화면 검사가 **먼저**다. 예전엔 `selected()`→`rows()` 를 먼저 부르고
+    # 나서 되돌아왔다 — 안 쓸 표를 매 프레임 만들었다.
+    if mo.view == "limits":
         return pad(" " + banner_for(width), width)
-    parts = [f"{r['sector']}", f"종목 {r['n']}"]
-    parts += [f"{ko} {fmt_amt(r[k])}" for k, ko in ACTORS]
-    parts.append(f"잔여 {fmt_amt(r['resid'])}")
+    r = mo.selected()
+    if not r:
+        return pad(" " + banner_for(width), width)
+    parts = [r["sector"]]
     if r["spike"] is not None:
-        parts.append(f"최대1일 {r['spike']:.1f}%")
-    return pad(" " + " · ".join(parts), width)
+        parts.append(f"최대일몫({mo.actor_ko}) {r['spike']:.1f}%"
+                     f" · 균등 {mo.uniform_spike():.1f}%")
+    resid = f"잔여 {fmt_amt(r['resid'])}"
+    if r["resid_pct"] is not None:
+        resid += f" (일별 {r['resid_pct']:.1f}%)"
+    parts.append(resid)
+    parts.append(f"종목 {r['n']}")
+    parts += [f"{ko} {fmt_amt(r[k])}" for k, ko in ACTORS]
+    # ⚠️ **우선순위 순서**로 붙이고 안 들어가면 거기서 멈춘다. 예전엔 한 줄로
+    # 이어 붙여 `pad` 가 잘랐고, 하필 뒤쪽에 있던 최대1일이 폭 132 에서도
+    # 통째로 잘려 나갔다. 앞의 둘은 **표를 봐도 뜻을 알 수 없는** 값이고
+    # (앵커·주체·일별 기준), 4주체 금액은 표에 열로 이미 있다 — 그래서 뒤다.
+    out = ""
+    for p in parts:
+        cand = f"{out} · {p}" if out else p
+        if cell_len(" " + cand) > width:
+            break
+        out = cand
+    return pad(" " + out, width)
 
 
 #: 푸터 — 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 배너와 이어 붙인
