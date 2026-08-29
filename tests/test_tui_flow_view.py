@@ -1152,6 +1152,59 @@ def test_hint_bar_fits_the_width_it_is_given(data):
                         f"힌트바가 넘친다: {got!r}")
 
 
+def test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80(data):
+    """힌트바가 도움말 문장을 통째로 재사용해 폭 80 에서 `…` 로 잘렸다.
+
+    잘리지 않는 자리에서도 한 줄을 비유가 잡아먹었다 — 가속 정렬에서 화면에
+    늘 떠 있던 문장이 ``… × 100 [%p]. 물리로 a = F/m.`` 이었다. 값을 읽는 데
+    필요한 건 정의와 단위까지고, 비유는 `?` 도움말의 일이다.
+
+    주입: `hint_desc` 가 `HINT_DESC` 를 안 보고 `help_desc` 만 내면(예전 동작)
+    폭 80 에서 잘리는 열이 나와 실패한다.
+    """
+    from kr_quant.tui.flow_app import hint_text
+    from kr_quant.tui.flow_view import (
+        HINT_DESC, NAME_SORT_COL, SORT_COL, hint_desc)
+
+    st = State(data)
+    for width in (80, 90, 100, 132):
+        for drill in (False, True):
+            st.drill = drill
+            n = len(NAME_SORTS) if drill else len(SORTS)
+            for i in range(n):
+                if drill:
+                    st.nsi = i
+                else:
+                    st.si = i
+                line = hint_text(st, width)
+                assert "…" not in line, f"폭{width}·드릴{drill} 힌트바가 잘렸다: {line}"
+
+    # 줄세울 수 있는 열은 **전부** 짧은 설명을 가진다. 없으면 도움말 문장으로
+    # 떨어지는데, 그건 폴백이지 기본값이 아니다.
+    for header in list(SORT_COL.values()) + list(NAME_SORT_COL.values()):
+        assert header in HINT_DESC, f"{header!r} 의 짧은 설명이 없다"
+    # 그래도 폴백은 살아 있어야 한다 — 열이 하나 늘었을 때 빈 줄이 되면 안 된다.
+    assert hint_desc("포텐셜[½kx²]")
+    assert "27개" in hint_desc("섹터"), "짧은 설명이 없는 항목의 폴백이 죽었다"
+
+
+def test_the_long_explanations_stay_in_the_help(data):
+    """짧게 만든 건 힌트바뿐이다 — 비유·유래·한계는 도움말에 그대로 남는다.
+
+    주입: `HELP` 에서 물리 비유를 지우면 실패한다. 힌트바를 짧게 만든 대가로
+    설명을 **잃지는 않았다**는 사실이 이 검사의 내용이다.
+    """
+    from kr_quant.tui.flow_view import HELP, HINT_DESC, help_desc
+
+    assert "물리로 a = F/m" in help_desc(HELP, "가속[%p]")
+    assert "물리로" not in HINT_DESC["가속[%p]"], "비유가 힌트바에 남았다"
+    for header, short in HINT_DESC.items():
+        long = help_desc(HELP, header)
+        if long:        # 표에 없는 열(종목명 등)은 도움말 항목이 없을 수 있다
+            assert len(short) <= len(long), (
+                f"{header!r} 의 힌트바 문장이 도움말보다 길다 — 두 벌로 나눈 뜻이 없다")
+
+
 def test_help_labels_are_never_truncated():
     """회귀 — 도움말 라벨이 잘리면 **어느 열 설명인지 알 수 없다.**
 
@@ -1295,10 +1348,14 @@ def test_detail_panel_answers_who_took_the_other_side(data):
     raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
     for row in range(min(3, len(st.rows()))):
         st.row = row
-        line = next(ln for ln in detail_lines(st, 170) if "반대편" in ln)
+        line = next(ln for ln in detail_lines(st, 170) if "기타법인" in ln)
+        # 라벨은 없다 — 넷을 다 적는 줄에 "반대편"(선택 주체를 뺀 나머지)이라는
+        # 이름이 붙어 있었다. 들여쓰기는 다른 패널 줄과 같은 한 칸이다.
+        assert "반대편" not in line, f"틀린 라벨이 아직 붙어 있다: {line!r}"
+        assert line.startswith(" ") and not line.startswith("  "), repr(line)
         src = raw[st.rows()[row]["sector"]]
         for key, ko in ACTORS:
-            assert ko in line, f"{ko} 가 반대편 줄에 없다"
+            assert ko in line, f"{ko} 가 4주체 줄에 없다"
             assert fmt_amt(src[key]) in line, (
                 f"{ko} 금액이 원본과 다르다 — 기대 {fmt_amt(src[key])}, 줄: {line!r}")
         # 네 주체가 서로 다른 값이어야 이 검사가 헛돌지 않는다.
@@ -1313,7 +1370,10 @@ def test_detail_panel_answers_who_took_the_other_side(data):
     r = st.rows()[0]
     for width in range(24, 180, 3):
         raw_line = _actors_line(r, width)
-        assert cell_len(raw_line) + 1 <= width or raw_line == " 반대편: —", (
+        assert cell_len(raw_line) + 1 <= width or raw_line == " —", (
             f"폭{width} 에서 {cell_len(raw_line)}칸: {raw_line!r}")
-        if width >= 90:
+        # 폭 80(SSH 기본)에서는 네 주체가 다 들어가야 한다 — 라벨(`반대편: `,
+        # 6칸)이 붙어 있던 시절엔 `기타법인` 이 먼저 잘렸는데, 예시처럼 그
+        # 종목의 주역이 기타법인인 경우가 있어 그게 실질 손실이었다.
+        if width >= 80:
             assert "기타법인" in raw_line, f"폭{width} 인데 주체가 빠졌다"

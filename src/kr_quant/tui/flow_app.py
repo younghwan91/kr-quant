@@ -24,8 +24,8 @@ import re
 from collections import namedtuple
 
 from kr_quant.tui.flow_view import (
-    HELP, NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
-    detail_lines, footer_line, header_lines, help_desc, help_lines, hint_line,
+    NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
+    detail_lines, footer_line, header_lines, help_lines, hint_desc, hint_line,
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
@@ -254,9 +254,12 @@ _EXTRA_COL = {"tv": "거래대금[억]", "cap_idx": "시총[억]"}
 
 
 def _help_desc(header: str) -> str:
-    """이 화면의 HELP 에서 열 설명 한 줄. 찾기는 ``flow_view.help_desc`` 가 한다
-    — 원장 힌트바도 같은 함수를 쓴다(``**`` 떼기가 두 벌이면 갈라진다)."""
-    return help_desc(HELP, header)
+    """힌트바에 쓸 열 설명 한 줄 — 짧은 것이 있으면 그것(``flow_view.hint_desc``).
+
+    도움말의 긴 설명을 그대로 쓰던 시절엔 뒤가 `…` 로 잘려나갔고, 잘리지 않는
+    자리에서는 비유(``물리로 a = F/m``)가 한 줄을 잡아먹었다. 고르는 규칙은
+    문장을 가진 쪽(`flow_view`)에 둔다."""
+    return hint_desc(header)
 
 
 #: 종합 화면의 힌트바 — 넓은 것부터. 이 화면은 정렬이 **없어서** 열 설명 대신

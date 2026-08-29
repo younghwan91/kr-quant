@@ -453,16 +453,16 @@ def test_hint_bar_explains_the_column_being_sorted():
     푸터 위 한 줄은 늘 떠 있고, s 로 정렬을 바꾸면 같이 바뀐다.
     """
     from kr_quant.tui.flow_app import hint_text
-    from kr_quant.tui.flow_view import HELP, SORTS
+    from kr_quant.tui.flow_view import SORTS, hint_desc
 
     st = _st()
     seen = set()
     for _ in range(len(SORTS)):
         line = hint_text(st)
         header = line.split("정렬 ", 1)[1].split("▼")[0].split("▲")[0]
-        desc = next((d for n, d in HELP if n == header), None)
-        assert desc, f"'{header}' 의 설명이 HELP 에 없다 — 힌트바가 빈다"
-        # 힌트바는 HELP 의 **강조** 별표를 뗀다(통과 마커 * 와 헷갈린다).
+        desc = hint_desc(header)
+        assert desc, f"'{header}' 의 설명이 어디에도 없다 — 힌트바가 빈다"
+        # 힌트바는 **강조** 별표를 뗀다(통과 마커 * 와 헷갈린다).
         assert desc.strip().replace("**", "")[:12] in line, f"열 설명이 없다: {line}"
         assert ("▼" in line) != ("▲" in line), f"정렬 방향 표시가 없다: {line}"
         seen.add(line)
