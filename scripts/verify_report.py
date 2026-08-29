@@ -923,7 +923,7 @@ def layer_g(P: dict, D: dict) -> None:
     etc = [v for v, *_ in obs["기타법인"]]
     lo3, hi3 = min(three), max(three)
     txt = "\n".join(LV.LIMITS) + "\n".join(d for _n, d in LV.LEDGER_HELP)
-    chk("G", "도움말·한계의 동시성 범위가 오늘 실측을 덮는가",
+    chk("G", "도움말·한계의 동시성 범위가 오늘 실측을 덮는가(β제거 끈 상태)",
         f"{lo3:.0f}~{hi3:.0f}%" in txt,
         f"실측 개인·외국인·기관 {lo3:.0f}~{hi3:.0f}% · "
         f"기타법인 {min(etc):.0f}~{max(etc):.0f}%")
@@ -931,7 +931,8 @@ def layer_g(P: dict, D: dict) -> None:
     bad = [f"{ko}/{m}/{W} 관측 {v:.0f}% ≥ 널 {n:.0f}%"
            for ko in ("개인", "외국인", "기관") for v, n, m, W in obs[ko]
            if v >= n - 3]
-    chk("G", "개인·외국인·기관은 어느 조합에서도 널보다 음수쌍이 드문가", not bad,
+    chk("G", "개인·외국인·기관은 어느 조합에서도 널보다 음수쌍이 드문가(β제거 끈 상태)",
+        not bad,
         f"{len(three)}조합  " + "; ".join(bad[:2]))
 
     # 잔여의 "최악의 한 칸" — 한계 §5 는 gross 하한을 밝히고 적는다.
