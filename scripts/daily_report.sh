@@ -41,7 +41,7 @@ if [ -d "$DEST" ] && [ -f "$DEST/numbers.html" ]; then
 fi
 
 mkdir -p "$DEST"
-echo "[$(date '+%F %T')] 생성 시작 — 기준일 $ASOF, 창 ${DAYS}거래일"
+echo "[$(date '+%F %T')] 생성 시작 — 기준일 $ASOF, 구간 ${DAYS}거래일"
 # 페이로드를 **한 번만** 만들고 둘 다 그걸 쓴다. 월별 시총 계산이 수 분이라
 # 예전처럼 세 번 돌리면 배치가 15분을 넘고 그만큼 실패 창이 넓어진다.
 "${UVR[@]}" python scripts/sector_flow.py    --days "$DAYS" --json "$DEST/payload.json"

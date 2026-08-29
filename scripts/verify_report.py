@@ -141,10 +141,10 @@ def layer_b(payload: dict, db: str | None) -> None:
     chk("B", "섹터 시총 커버리지", cap_n >= len(secs), f"{cap_n}/{len(secs)*len(mkts)}")
     chk("B", "업종지수 커버리지", idx_n >= len(secs) * 0.6, f"{idx_n}/{len(secs)*len(mkts)}")
 
-    # 대표종목
+    # 종목
     nm = payload["names"]
     covered = {r["sector"] for r in nm.values()}
-    chk("B", "대표종목이 전 섹터를 덮는가", covered >= set(secs) - {"(미분류)"},
+    chk("B", "종목이 전 섹터를 덮는가", covered >= set(secs) - {"(미분류)"},
         f"{len(covered)}/{len(secs)} 섹터, {len(nm)}종목")
     # 종목은 일별 배열이 아니라 **구간별 집계**를 싣는다(전 종목을 실으면서 바뀜).
     wins = {w for r in nm.values() for w in (r.get("win") or {})}
@@ -161,7 +161,7 @@ def layer_b(payload: dict, db: str | None) -> None:
     chk("B", "섹터별 종목 수 = n_by_sector", not bad, "; ".join(bad[:2]))
 
     if not db:
-        print("       (--db-check 없음 — DB 대조는 건너뜀)")
+        print("       (--db-check 없음 — DB 대조는 건너뛴다)")
         return
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
     from kr_quant.storage import connect  # noqa: PLC0415
