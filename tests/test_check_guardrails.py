@@ -192,3 +192,65 @@ def test_rule_g2_allows_supply_demand_without_the_join(lint, tmp_path, monkeypat
     )
     monkeypatch.setattr(lint, "REPO", tmp_path)
     assert lint.check_no_survivor_only_join() == []
+
+
+def test_rule_i_flags_a_foreign_commit_identity(tmp_path, monkeypatch):
+    """(i) 커밋 신원이 레포 설정과 다르면 잡는가 — 위반을 실제로 주입해서 본다.
+
+    통과만 보는 테스트는 규칙이 죽어도 초록이다(GUARDRAILS §5 의 교훈).
+    """
+    import subprocess
+
+    import scripts.check_guardrails as lint
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def git(*a, **kw):
+        return subprocess.run(("git", *a), cwd=repo, capture_output=True,
+                              text=True, check=False, **kw)
+
+    git("init", "-q")
+    git("config", "user.name", "T")
+    git("config", "user.email", "me@example.com")
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "ok")
+    monkeypatch.setattr(lint, "REPO", repo)
+    assert lint.check_commit_identity() == [], "정상 커밋인데 잡혔다"
+
+    # 위반 주입 — 다른 이메일로 커밋
+    (repo / "f.txt").write_text("y", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.email=work@corp.com", "commit", "-q", "-m", "bad")
+    out = lint.check_commit_identity()
+    assert out and "identity" in out[0], f"위반을 못 잡았다: {out}"
+    assert "work@corp.com" in out[0]
+
+
+def test_scan_skips_nested_worktrees_but_still_catches_real_violations(lint, tmp_path):
+    """회귀 — `.claude/worktrees` 는 에이전트용 **레포 복사본**이다.
+
+    스캔에 넣으면 같은 위반이 두 번 세어지고, 남이 작업 중인 코드로 CI 가 깨진다.
+    반대로 건너뛰기가 넓으면 진짜 위반까지 조용히 놓친다 — 둘 다 검사한다.
+    """
+    # 린트 자신이 이 파일도 스캔하므로 위반 문자열은 쪼개서 만든다.
+    bad = 'q = "SELECT * FROM ' + "daily_bars" + '_adjusted WHERE code = 1"\n'
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "real.py").write_text(bad, encoding="utf-8")
+    (tmp_path / ".claude" / "worktrees" / "a" / "pkg").mkdir(parents=True)
+    (tmp_path / ".claude" / "worktrees" / "a" / "pkg" / "copy.py").write_text(
+        bad, encoding="utf-8")
+
+    found = [p.name for p in lint._iter_py(tmp_path)]
+    assert "real.py" in found, "진짜 위반 파일을 스캔에서 빠뜨렸다"
+    assert "copy.py" not in found, "워크트리 복사본까지 스캔했다"
+
+
+def test_scan_is_not_silenced_by_an_ancestor_directory_name(lint, tmp_path):
+    """회귀 — 건너뛰기를 **절대경로**로 판단하면, 레포가 `.claude/...` 아래
+    놓였을 때 스캔이 통째로 비어 린트가 항상 통과한다."""
+    root = tmp_path / ".claude" / "checkout"
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "real.py").write_text("x = 1\n", encoding="utf-8")
+    assert [p.name for p in lint._iter_py(root)] == ["real.py"]

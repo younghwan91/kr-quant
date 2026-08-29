@@ -46,7 +46,10 @@ def max_drawdown(r: np.ndarray) -> float:
     r = r[np.isfinite(r)]
     if r.size == 0:
         return float("nan")
-    equity = np.cumprod(1.0 + r)
+    # 초기자본 1.0 을 첫 peak 로 세운다. 이게 없으면 **첫 구간의 손실이 안 잡힌다** —
+    # 자기 자신이 peak 가 되어 drawdown 0 이 되기 때문이다.
+    # 실측 반례: max_drawdown([-0.20, +0.05, +0.05]) 가 0.0 을 돌려줬다(정답 -0.20).
+    equity = np.concatenate(([1.0], np.cumprod(1.0 + r)))
     peak = np.maximum.accumulate(equity)
     return float((equity / peak - 1.0).min())
 

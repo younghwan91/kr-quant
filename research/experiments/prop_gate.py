@@ -293,8 +293,14 @@ def _print_summary(rep: dict) -> None:
         print(f"  {bp:>4}bp | {cs['oos_n']:>6} {cs['oos_expectancy_R']:>+9.3f} | "
               f"{raw_k:>8} {clean_k:>10}")
     edies = rep["cost_edge_dies"]
-    print(f"  → 엣지 사망 비용(OOS expR 첫 ≤0): "
-          f"{'전 구간 생존' if edies is None else f'{int(round(edies * 1e4))}bp'}")
+    # nan = 잴 수 없음(유효 관측 0). "전 구간 생존" 과 반드시 구분해서 찍는다.
+    if edies is None:
+        _e = "전 구간 생존"
+    elif edies != edies:
+        _e = "측정 불가 — 유효 OOS 관측 없음"
+    else:
+        _e = f"{int(round(edies * 1e4))}bp"
+    print(f"  → 엣지 사망 비용(OOS expR 첫 ≤0): {_e}")
 
     fb = rep["folds"]
     print(f"\n[2] 폴드 재현성 (기준 {int(round(fb['primary_cost'] * 1e4))}bp, 재최적화 없음)")

@@ -1,0 +1,581 @@
+<title>섹터 자금 흐름 추적</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#fbfbfc; --card:#ffffff; --sunk:#f4f5f8;
+  --ink:#14161a; --ink-2:#5a6070; --ink-3:#8b91a1;
+  --line:#e4e7ee; --line-2:#eef0f5;
+  --buy:#e34948; --sell:#2a78d6;
+  --buy-soft:#fdeceb; --sell-soft:#e9f1fc;
+  --ctx:#c9cdd8; --focus:#2a78d6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
+    --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
+    --line:#2a2f38; --line-2:#232830;
+    --buy:#e66767; --sell:#3987e5;
+    --buy-soft:#332223; --sell-soft:#1b2634;
+    --ctx:#3a404c; --focus:#3987e5;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#14161a; --card:#1b1e24; --sunk:#20242b;
+  --ink:#f2f4f8; --ink-2:#a4abbb; --ink-3:#767d8d;
+  --line:#2a2f38; --line-2:#232830;
+  --buy:#e66767; --sell:#3987e5;
+  --buy-soft:#332223; --sell-soft:#1b2634;
+  --ctx:#3a404c; --focus:#3987e5;
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased}
+.wrap{max-width:1280px; margin:0 auto; padding:26px 18px 64px; display:flex; flex-direction:column; gap:18px}
+.num{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums}
+.figure{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+.pos{color:var(--buy)} .neg{color:var(--sell)}
+
+header{display:flex; flex-direction:column; gap:8px}
+.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+h1{margin:0; font-size:clamp(25px,3.6vw,34px); font-weight:700; letter-spacing:-.02em; text-wrap:balance}
+.subline{display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:var(--ink-2); font-size:13px}
+.chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+  font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--sunk); color:var(--ink-2)}
+.chip.live{border-color:var(--buy); color:var(--buy); background:var(--buy-soft)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* controls — 차트 카드 밖, 한 줄 */
+.bar{display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center;
+  padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:11px}
+.grp{display:flex; align-items:center; gap:8px}
+.grp>.lab{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+.seg{display:inline-flex; background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:3px; gap:2px}
+.seg button{font:inherit; font-size:12.5px; font-weight:500; padding:5px 11px; border:0; border-radius:5px;
+  background:transparent; color:var(--ink-2); cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg button:focus-visible,select:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+select{font:inherit; font-size:12.5px; padding:5px 8px; border-radius:7px; border:1px solid var(--line);
+  background:var(--sunk); color:var(--ink); font-family:"IBM Plex Mono",monospace}
+.rangeinfo{font-size:12.5px; color:var(--ink-3)}
+
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr)); gap:9px}
+.tile{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 15px;
+  display:flex; flex-direction:column; gap:3px; position:relative; overflow:hidden}
+.tile::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--line)}
+.tile.pos::before{background:var(--buy)} .tile.neg::before{background:var(--sell)}
+.tile .k{font-size:11.5px; color:var(--ink-2); font-weight:500}
+.tile .v{font-size:21px; font-weight:600; letter-spacing:-.01em}
+.tile .u{font-size:11px; color:var(--ink-3)}
+
+.panel{background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.panel h2{margin:0; padding:14px 17px 11px; font-size:14px; font-weight:600; border-bottom:1px solid var(--line-2);
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:8px}
+.panel h2 small{font-weight:400; color:var(--ink-3); font-size:12px}
+.legend{margin-left:auto; display:flex; gap:12px; align-items:center; font-size:11.5px; color:var(--ink-2); font-weight:400}
+.legend i{display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px}
+
+/* heatmap */
+.hm{overflow-x:auto; padding:10px 14px 14px}
+.hmgrid{display:grid; gap:2px; min-width:660px}
+.hmlab{font-size:11.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  padding-right:8px; display:flex; align-items:center; justify-content:flex-end}
+.hmrow{display:contents}
+.hmc{height:19px; border-radius:2px; cursor:pointer; background:var(--sunk)}
+.hmc:hover{outline:2px solid var(--ink); outline-offset:-1px}
+.hmax{font-size:10px; color:var(--ink-3); text-align:center; white-space:nowrap; padding-top:4px}
+.hmsel{outline:2px solid var(--ink); outline-offset:-1px}
+
+/* line */
+.chart{padding:6px 14px 12px}
+svg{display:block; width:100%; height:auto; overflow:visible}
+.gl{stroke:var(--line-2); stroke-width:1}
+.zl{stroke:var(--line); stroke-width:1}
+.ctxln{fill:none; stroke:var(--ctx); stroke-width:1; opacity:.55}
+.mainln{fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round}
+.tk{font-size:10px; fill:var(--ink-3)}
+.endlab{font-size:11.5px; font-weight:600}
+
+/* ranking rows */
+.rows{padding:7px 6px 11px; max-height:520px; overflow-y:auto}
+.row{display:grid; grid-template-columns:158px 1fr 92px; align-items:center; gap:9px;
+  padding:3px 11px; border:0; background:none; width:100%; text-align:left; font:inherit; color:inherit;
+  cursor:pointer; border-radius:6px}
+.row:hover,.row:focus-visible{background:var(--sunk); outline:none}
+.row[aria-current="true"]{background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line)}
+.row .namebox{min-width:0; display:flex; flex-direction:column; gap:1px}
+.row .name{font-size:12.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.row .drv{font-size:10.5px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.row[aria-current="true"] .name{color:var(--ink); font-weight:600}
+@media (max-width:900px){.row .drv{display:none}}
+.track{position:relative; height:20px}
+.axis{position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--line); left:50%}
+.bb{position:absolute; top:4px; height:12px}
+.bb.p{background:var(--buy); border-radius:0 4px 4px 0}
+.bb.n{background:var(--sell); border-radius:4px 0 0 4px}
+.row .val{font-size:12px; text-align:right; font-weight:500}
+.row .val .sub{font-size:10.5px; color:var(--ink-3); margin-left:5px}
+
+.two{display:grid; grid-template-columns:1fr 1fr; gap:15px}
+@media (max-width:900px){.two{grid-template-columns:1fr} .row{grid-template-columns:90px 1fr 80px}}
+.lst{padding:6px 8px 11px}
+.li{display:grid; grid-template-columns:1fr auto auto; gap:9px; align-items:center; padding:5px 11px; border-radius:6px}
+.li:hover{background:var(--sunk)}
+.nm{font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.nm span{color:var(--ink-3); font-size:10.5px; margin-left:5px}
+.amt{font-size:12px; font-weight:500; text-align:right; min-width:72px}
+.rt{font-size:11px; text-align:right; min-width:46px; color:var(--ink-3)}
+.det-bars{display:flex; flex-direction:column; gap:6px; padding:11px 15px 15px}
+.db{display:grid; grid-template-columns:48px 1fr 70px; gap:9px; align-items:center; font-size:12px}
+.db .dbt{position:relative; height:11px; background:var(--sunk); border-radius:3px}
+.db .dbb{position:absolute; top:0; height:11px; border-radius:3px}
+
+.tblwrap{overflow-x:auto; max-height:460px}
+table{border-collapse:collapse; width:100%; font-size:12px}
+th,td{padding:6px 11px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line-2)}
+th:first-child,td:first-child{text-align:left}
+thead th{position:sticky; top:0; background:var(--card); color:var(--ink-2); font-weight:600;
+  font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid var(--line)}
+tbody tr:hover{background:var(--sunk)}
+
+#tip{position:fixed; z-index:60; pointer-events:none; opacity:0; transition:opacity .1s;
+  background:var(--card); border:1px solid var(--line); border-radius:9px; padding:9px 12px;
+  font-size:12px; box-shadow:0 8px 26px rgba(0,0,0,.18); min-width:180px}
+#tip .tt{font-weight:600; margin-bottom:5px; font-size:12.5px}
+#tip .tr{display:flex; justify-content:space-between; gap:18px; line-height:1.7}
+#tip .tk2{color:var(--ink-2)}
+
+.notes{border-left:3px solid var(--line); padding:2px 0 2px 14px; display:flex; flex-direction:column; gap:6px}
+.notes p{margin:0; font-size:12px; color:var(--ink-2)}
+.notes b{color:var(--ink); font-weight:600}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">KR MARKET · CUMULATIVE SECTOR FLOW</div>
+    <h1>섹터 자금 흐름 추적</h1>
+    <div class="subline">
+      <span class="num" id="hdr-range"></span>
+      <span id="hdr-chip"></span>
+      <span class="num" id="hdr-meta"></span>
+    </div>
+  </header>
+
+  <div class="bar">
+    <div class="grp"><span class="lab">기간</span><div class="seg" id="seg-preset" role="group" aria-label="기간 프리셋"></div></div>
+    <div class="grp"><span class="lab">시작</span><select id="sel-from" aria-label="시작일"></select>
+      <span class="lab">종료</span><select id="sel-to" aria-label="종료일"></select></div>
+    <div class="grp"><span class="lab">시장</span><div class="seg" id="seg-market" role="group" aria-label="시장"></div></div>
+    <div class="grp"><span class="lab">주체</span><div class="seg" id="seg-actor" role="group" aria-label="투자주체"></div></div>
+    <div class="grp"><span class="lab">기준</span><div class="seg" id="seg-metric" role="group" aria-label="랭킹 기준"></div></div>
+    <span class="rangeinfo" id="rangeinfo"></span>
+  </div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="panel">
+    <h2>언제 어디로 갔나<small>가로축은 시간, 세로축은 섹터 · 칸을 누르면 그 시점부터 다시 잡는다</small>
+      <span class="legend"><span><i style="background:var(--buy)"></i>순매수</span><span><i style="background:var(--sell)"></i>순매도</span></span>
+    </h2>
+    <div class="hm" id="hm"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="ln-title">누적 추이<small>구간 시작을 0 으로 놓고 다시 그린다</small>
+      <span class="legend" id="ln-legend"></span></h2>
+    <div class="chart" id="line"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="rk-title">구간 누적 랭킹<small>막대를 누르면 섹터가 선택된다 · 미반응 = 다른 섹터 대비 덜 간 정도(횡단면)</small></h2>
+    <div class="rows" id="rows"></div>
+  </section>
+
+  <div class="two">
+    <section class="panel"><h2 id="d-buy">담은 종목<small>시총 대비 순매수(%p) 순 · 오른쪽은 금액(억)</small></h2><div class="lst" id="lst-buy"></div></section>
+    <section class="panel"><h2 id="d-sell">던진 종목</h2><div class="lst" id="lst-sell"></div></section>
+  </div>
+
+  <section class="panel"><h2 id="d-detail">기관 세부<small>구간 누적 · 억원</small></h2><div class="det-bars" id="detbars"></div></section>
+
+  <section class="panel"><h2>전체 표<small>구간 누적</small></h2><div class="tblwrap"><table id="tbl"></table></div></section>
+
+  <div class="notes">
+    <p><b>순매수 금액은 종가 환산 근사다.</b> DB 가 주는 것은 순매매 <em>수량</em>이라 그날 종가를 곱해 금액을 복원했다. 참값은 VWAP 가중이다 — 방향과 상대 크기를 보는 용도다.</p>
+    <p><b>비중 변화는 구간 누적 순매수 ÷ 구간말 시가총액이다.</b> 기관 지분율이 몇 %p 올랐나에 대한 근사이지 실제 보유잔고가 아니다. 시총이 작은 섹터는 분모가 작아 크게 튄다 — 종목 수와 거래대금을 같이 보라.</p>
+    <p><b>미반응은 횡단면 편차다.</b> 절대 수익이 아니라 <em>다른 섹터 대비</em> 돈은 더 받았는데 덜 갔는지를 잰다. 처음엔 원점 통과 회귀로 잡았는데, 절편이 없어 시장 전체 드리프트가 전부 잔차로 밀렸다 — 지수평균 +16.3% 구간에서 24개 중 23개가 음수, −11.2% 구간에서 22개가 양수였다. 부호가 섹터 정보가 아니라 장세를 따라가면 지표로 쓸 수 없다.</p>
+    <p><b>수익률은 KRX 업종지수 실측이다.</b> 종목 등락률을 직접 집계하면 가중치 선택이 그대로 오차가 된다 — 같은 날 거래대금 가중은 급등주에 가중치를 몰아 20거래일 +102% 를 만들었고, 전일 시총 가중으로 바꿔도 60일 구간에서 지수 대비 중앙값 17%p 벌어졌다. 업종지수가 없는 6개 섹터(보험·증권·부동산·전기가스·기타제조·출판)는 <b>미반응 랭킹에서 제외</b>한다 — 두 정의를 섞지 않는다.</p>
+    <p><b>0 은 "관망"이 아니라 "0 또는 미보고"다.</b> 수집기가 파싱에 실패한 필드를 0 으로 채워 둘을 구분할 수 없다. 행 자체의 유무는 신뢰할 수 있다.</p>
+    <p><b>빨강이 순매수, 파랑이 순매도다</b>(국내 관행 · 서구 차트와 반대). <b>국가(natn)</b>는 90일 내내 전부 0 이라 뺐다. 유니버스는 현재 상장 종목이며(<span class="num">source='kiwoom'</span>), 개인·기관세부가 폐지 종목에 없어 소스를 좁혔다 — 과거 구간 집계에 그대로 쓰면 생존편향이 된다.</p>
+  </div>
+</div>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const D = __DATA__;
+const ACTORS=[["inst","기관"],["forgn","외국인"],["indiv","개인"],["etc","기타법인"]];
+const PRESETS=[[1,"1일"],[5,"5일"],[20,"20일"],[60,"60일"],[120,"120일"],[0,"전체"]];
+const METRICS=[["amt","임펄스 억"],["share","가속도 %p"],["resid","미반응"]];
+const NDATE=D.dates.length;
+
+let market="전체", actor="inst", metric="share", picked=null;
+let i0=Math.max(0,NDATE-20), i1=NDATE-1;
+
+const el=(t,c,x)=>{const e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;};
+const cls=n=>n>=0?"pos":"neg";
+const sgn=n=>(n>=0?"+":"−");
+const amt=n=>sgn(n)+Math.abs(n).toLocaleString("ko-KR",{maximumFractionDigits:0});
+const pp =n=>sgn(n)+Math.abs(n).toFixed(2);
+const mkts=()=>market==="전체"?D.markets:[market];
+
+function flow(sec,act){ // 일별 배열 합(시장 합산)
+  const out=new Array(NDATE).fill(0);
+  mkts().forEach(m=>{const a=D.flows[m]?.[sec]?.[act]; if(a) for(let i=0;i<NDATE;i++) out[i]+=a[i];});
+  return out;
+}
+/** 섹터 시가총액 — **구간말 월** 기준. 페이로드 마지막 날짜 하나만 쓰면, 과거로
+ *  끝나는 구간의 유량을 오늘 시총으로 나누게 된다(실측: 구간말 2025-08 에서
+ *  오늘/그때 비가 중앙값 1.33배, 27개 중 9개가 1.5배 이상 → 가속도가 그만큼
+ *  작게 나왔다). 그 월의 값이 없으면 페이로드 구간말 시총으로 폴백한다. */
+function capOf(sec){
+  const ym=D.dates[i1].slice(0,7);
+  let c=0;
+  mkts().forEach(m=>{
+    const byM=D.cap_by_month?.[m]?.[sec];
+    c += (byM && byM[ym] != null) ? byM[ym] : (D.cap[m]?.[sec]||0);
+  });
+  return c;
+}
+/** 지수 수익률과 **같은 시장 집합**의 시총. `retOf` 는 업종지수가 있는 시장만
+ *  가중하는데 `capOf` 는 모든 시장을 더해서, 지수가 한쪽 시장에만 있는 섹터에서는
+ *  분자(자금흐름)와 분모(수익률)의 시장 집합이 어긋났다. 기타제조·출판/매체복제는
+ *  겹침이 0 이라 코스닥 자금흐름을 거래소 지수에 맞대고 있었다. */
+// 수익률이 자체 바구니가 되면서 시장 집합이 자금흐름과 같아졌다 — 별도 보정 불필요.
+function capOfIdx(sec){ return capOf(sec); }
+function accelIdxOf(sec){ return accelOf(sec); }
+function sum(arr,a,b){ let s=0; for(let i=a;i<=b;i++) s+=arr[i]; return s; }
+function windowVal(sec,act){
+  if(metric==="resid"){ const r=RES&&RES.out[sec];
+    return r==null?-Infinity:-r; }  // 미반응이 클수록 위로, 지수 없는 섹터는 맨 아래
+
+  const t=sum(flow(sec,act),i0,i1);
+  if(metric==="amt") return t; const c=capOf(sec); return c?t/c*100:0; }
+/** 구간 누적 수익률(%) — **자체 바구니**(자금흐름과 같은 종목집합), 전일 시총 가중.
+ *  이전 판본은 KRX 업종지수를 썼는데 구성종목이 달랐다(부동산 20일 지수 +6.0% vs
+ *  자체 바구니 +74.9%). 분자는 A 바구니, 분모는 B 바구니를 보던 셈이고, 맞추니
+ *  20일 R² 가 0.119 → 0.731 로 올랐다(실측). */
+function retOf(sec){
+  let acc=1, any=false;
+  for(let i=i0;i<=i1;i++){
+    let num=0,den=0;
+    mkts().forEach(m=>{
+      const r=D.ret[m]?.[sec]?.[i], w=D.retw[m]?.[sec]?.[i];
+      if(r!=null&&w){num+=r*w; den+=w; any=true;}});
+    acc*=1+(den?num/den:0)/100;
+  }
+  return any?(acc-1)*100:null;
+}
+const hasIdx=sec=>retOf(sec)!=null;
+function accelOf(sec){ const c=capOf(sec); return c?sum(flow(sec,actor),i0,i1)/c*100:0; }
+/** 힘 대비 얼마나 움직였나의 잔차. 원점을 지나는 최소제곱 기울기 k 를 구해
+ *  Δv − k·(J/m) 를 낸다. 음수 = 힘은 들어왔는데 아직 안 움직인 섹터. */
+function residuals(){
+  // **횡단면 편차**로 잡는다. 원점 통과 회귀는 절편이 없어 시장 전체 드리프트를
+  // 흡수할 데가 없고, 그게 전부 잔차로 밀려 모든 섹터를 같은 방향으로 민다
+  // (실측: 지수평균 +16.3% 구간에서 24개 중 23개 음수, −11.2% 구간에서 22개 양수).
+  // 부호가 섹터 정보가 아니라 장세를 따라가면 지표로 못 쓴다. 양변을 평균 대비
+  // 편차로 놓으면 드리프트가 상쇄되고 "다른 섹터 대비 덜 갔나" 만 남는다.
+  const A={},R={},out={};
+  // 회귀에는 지수와 **같은 시장 집합**의 가속도를 쓴다(accelIdxOf).
+  const use=D.sectors.filter(s=>hasIdx(s)&&accelIdxOf(s)!=null);
+  if(!use.length) return {k:0,out,A,R,use};
+  use.forEach(s=>{A[s]=accelIdxOf(s); R[s]=retOf(s);});
+  const abar=use.reduce((t,s)=>t+A[s],0)/use.length;
+  const rbar=use.reduce((t,s)=>t+R[s],0)/use.length;
+  let sxy=0,sxx=0;
+  use.forEach(s=>{const dx=A[s]-abar, dy=R[s]-rbar; sxy+=dx*dy; sxx+=dx*dx;});
+  const k=sxx?sxy/sxx:0;
+  use.forEach(s=>out[s]=(R[s]-rbar)-k*(A[s]-abar));
+  return {k,out,A,R,use};
+}
+let RES=null;
+function unit(){ return metric==="amt"?"억":"%p"; }
+function fmt(v){ return metric==="amt"?amt(v):pp(v); }
+function fmt2(v){ return pp(v); }
+
+/* ---------- controls ---------- */
+function seg(id,opts,get,set){
+  const box=document.getElementById(id);
+  opts.forEach(([k,label])=>{const b=el("button",null,label); b.type="button"; b.dataset.k=String(k);
+    b.addEventListener("click",()=>set(k)); box.append(b);});
+  box._sync=()=>[...box.children].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.k===String(get()))));
+}
+seg("seg-market",[["전체","전체"],...D.markets.map(m=>[m,m])],()=>market,v=>{market=v;render();});
+seg("seg-actor",ACTORS,()=>actor,v=>{actor=v;render();});
+seg("seg-metric",METRICS,()=>metric,v=>{metric=v;render();});
+seg("seg-preset",PRESETS,()=>curPreset(),v=>{
+  i1=NDATE-1; i0=v===0?0:Math.max(0,NDATE-v); render();});
+function curPreset(){ if(i1!==NDATE-1) return -1;
+  const n=i1-i0+1; if(i0===0) return 0;
+  return PRESETS.some(([v])=>v===n)?n:-1; }
+
+const selFrom=document.getElementById("sel-from"), selTo=document.getElementById("sel-to");
+D.dates.forEach((d,i)=>{selFrom.append(new Option(d,i)); selTo.append(new Option(d,i));});
+selFrom.addEventListener("change",()=>{i0=Math.min(+selFrom.value,i1); render();});
+selTo.addEventListener("change",()=>{i1=Math.max(+selTo.value,i0); render();});
+
+/* ---------- tooltip ---------- */
+const tip=document.getElementById("tip");
+function tipShow(e,title,rows){
+  tip.replaceChildren(el("div","tt",title));
+  rows.forEach(([k,v,c])=>{const r=el("div","tr"); r.append(el("span","tk2",k));
+    r.append(el("span","num "+(c||""),v)); tip.append(r);});
+  tip.style.opacity=1; tipMove(e);
+}
+function tipMove(e){const p=13,w=tip.offsetWidth,h=tip.offsetHeight;
+  let x=e.clientX+p,y=e.clientY+p;
+  if(x+w>innerWidth-8)x=e.clientX-w-p; if(y+h>innerHeight-8)y=e.clientY-h-p;
+  tip.style.left=x+"px"; tip.style.top=y+"px";}
+const tipHide=()=>tip.style.opacity=0;
+
+/** 구간 내 그 섹터의 해당 주체 순매수 — **시총 대비**(종목 가속도)로 줄세운다.
+ *  섹터를 a=J/m 으로 보면서 종목만 금액 절대값으로 줄세우면 같은 불일치가 한
+ *  단계 아래에서 반복된다. 시총이 없는 종목은 금액 순위로 폴백한다. */
+function drivers(sec,k){
+  const rows=[];
+  for(const code in D.names){const r=D.names[code];
+    if(r.sector!==sec) continue;
+    if(market!=="전체"&&r.market!==market) continue;
+    const v=sum(r[k],i0,i1);
+    rows.push({code,name:r.name,v,cap:r.cap,
+               a:(r.cap&&r.cap>0)?v/r.cap*100:null});}
+  const anyCap=rows.some(r=>r.a!=null);
+  rows.sort((x,y)=> anyCap ? ((y.a??-1e9)-(x.a??-1e9)) : (y.v-x.v));
+  return rows;
+}
+
+/* ---------- heatmap ---------- */
+const NB=26; // 시간 버킷 수
+function buckets(){
+  const n=i1-i0+1, k=Math.min(NB,n), size=n/k, out=[];
+  for(let b=0;b<k;b++){ const a=i0+Math.floor(b*size), z=i0+Math.ceil((b+1)*size)-1;
+    out.push([a,Math.min(z,i1)]); }
+  return out;
+}
+function renderHeat(order){
+  const box=document.getElementById("hm"); box.replaceChildren();
+  const bk=buckets();
+  const grid=el("div","hmgrid");
+  grid.style.gridTemplateColumns=`120px repeat(${bk.length},minmax(14px,1fr))`;
+  const vals=new Map(); let mx=0;
+  order.forEach(s=>{const f=flow(s,actor); const c=capOf(s);
+    const row=bk.map(([a,z])=>{const t=sum(f,a,z); return metric==="amt"?t:(c?t/c*100:0);});  // resid 는 구간 스칼라라 시계열은 가속도로 그린다
+    vals.set(s,row); row.forEach(v=>mx=Math.max(mx,Math.abs(v)));});
+  mx=mx||1;
+  order.forEach(s=>{
+    const lab=el("div","hmlab",s); grid.append(lab);
+    vals.get(s).forEach((v,bi)=>{
+      const c=el("div","hmc"+(picked===s?" hmsel":""));
+      const a=Math.min(1,Math.sqrt(Math.abs(v)/mx))*0.92+0.04;
+      if(Math.abs(v)>1e-9) c.style.background=`color-mix(in srgb, var(${v>=0?"--buy":"--sell"}) ${a*100}%, transparent)`;
+      const [ba,bz]=bk[bi];
+      c.tabIndex=0;
+      c.addEventListener("mouseenter",e=>tipShow(e,s,[
+        ["구간",D.dates[ba]+" ~ "+D.dates[bz]],
+        [ACTORS.find(x=>x[0]===actor)[1],fmt(v)+unit(),cls(v)]]));
+      c.addEventListener("mousemove",tipMove);
+      c.addEventListener("mouseleave",tipHide);
+      c.addEventListener("click",()=>{picked=s; i0=ba; render();});
+      grid.append(c);
+    });
+  });
+  grid.append(el("div","hmax",""));
+  bk.forEach(([a],bi)=>{const t=el("div","hmax", bi%4===0?D.dates[a].slice(2,7):""); grid.append(t);});
+  box.append(grid);
+}
+
+/* ---------- cumulative line ---------- */
+function renderLine(order){
+  const box=document.getElementById("line"); box.replaceChildren();
+  const W=1000,H=290,L=54,R=118,T=12,B=26;
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("role","img");
+  const focus=picked||order[0];
+  const series=order.map(s=>{
+    const f=flow(s,actor), c=capOf(s); let acc=0; const pts=[];
+    for(let i=i0;i<=i1;i++){acc+=f[i]; pts.push(metric==="amt"?acc:(c?acc/c*100:0));}
+    return {s,pts};
+  });
+  let lo=0,hi=0; series.forEach(o=>o.pts.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));
+  if(hi===lo){hi=1;lo=-1;}
+  const pad=(hi-lo)*0.08; hi+=pad; lo-=pad;
+  const n=i1-i0+1;
+  const X=i=>L+(n<2?0:(i/(n-1))*(W-L-R));
+  const Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+  const mk=(t,at)=>{const e=document.createElementNS("http://www.w3.org/2000/svg",t);
+    for(const k in at)e.setAttribute(k,at[k]); return e;};
+  for(let g=0;g<=4;g++){const v=lo+(hi-lo)*g/4;
+    svg.append(mk("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),class:g===0?"gl":"gl"}));
+    const tx=mk("text",{x:L-8,y:Y(v)+3,class:"tk","text-anchor":"end"}); tx.textContent=fmt(v); svg.append(tx);}
+  svg.append(mk("line",{x1:L,x2:W-R,y1:Y(0),y2:Y(0),class:"zl"}));
+  const path=o=>o.pts.map((v,i)=>(i?"L":"M")+X(i).toFixed(1)+" "+Y(v).toFixed(1)).join(" ");
+  series.filter(o=>o.s!==focus).forEach(o=>svg.append(mk("path",{d:path(o),class:"ctxln"})));
+  const f=series.find(o=>o.s===focus);
+  if(f){
+    const last=f.pts[f.pts.length-1], col=last>=0?"var(--buy)":"var(--sell)";
+    svg.append(mk("path",{d:path(f),class:"mainln",stroke:col}));
+    svg.append(mk("circle",{cx:X(n-1),cy:Y(last),r:4,fill:col}));
+    const lb=mk("text",{x:X(n-1)+9,y:Y(last)+4,class:"endlab",fill:col}); lb.textContent=focus+" "+fmt(last)+unit();
+    svg.append(lb);
+  }
+  [0,Math.floor((n-1)/2),n-1].forEach(i=>{const t=mk("text",{x:X(i),y:H-6,class:"tk","text-anchor":"middle"});
+    t.textContent=D.dates[i0+i]; svg.append(t);});
+  box.append(svg);
+  document.getElementById("ln-legend").replaceChildren(
+    el("span",null,(focus||"")+" 강조 · 나머지 "+(order.length-1)+"개 섹터는 회색"));
+}
+
+/* ---------- ranking ---------- */
+function render(){
+  ["seg-market","seg-actor","seg-metric","seg-preset"].forEach(id=>document.getElementById(id)._sync());
+  selFrom.value=String(i0); selTo.value=String(i1);
+  const label=ACTORS.find(a=>a[0]===actor)[1];
+  document.getElementById("hdr-range").textContent=D.dates[i0]+" ~ "+D.dates[i1];
+  document.getElementById("hdr-meta").textContent=(i1-i0+1)+"거래일 · "+D.n_names.toLocaleString("ko-KR")+"종목";
+  document.getElementById("rk-title").firstChild.textContent=
+    metric==="resid" ? label+" 미반응순 — 돈은 들어왔는데(가속>0) 아직 안 간 섹터"
+    : "구간 누적 "+label+" — "+(metric==="amt"?"임펄스(금액)순":"가속도(비중) 상승순");
+  document.getElementById("ln-title").firstChild.textContent=label+" 누적 추이";
+
+  RES=residuals();
+  let order=[...D.sectors].sort((a,b)=>windowVal(b,actor)-windowVal(a,actor));
+  // 미반응 랭킹은 (a) 업종지수가 있고 (b) 실제로 **자금이 들어온**(가속>0) 섹터만 본다.
+  // 잔차는 대칭이라 그냥 두면 "기관이 팔았는데 더 빠진" 섹터까지 미반응으로 올라오는데,
+  // 그건 "돈은 들어왔는데 아직 안 간" 과 정반대 상황이다.
+  if(metric==="resid") order=order.filter(s=>hasIdx(s)&&accelOf(s)>0);
+  if(!picked||!D.sectors.includes(picked)) picked=order[0];
+
+  renderTiles();
+  renderHeat(order);
+  renderLine(order);
+
+  const mx=Math.max(...order.map(s=>Math.abs(windowVal(s,actor))),1e-9);
+  const rows=document.getElementById("rows"); rows.replaceChildren();
+  order.forEach(s=>{
+    const v=windowVal(s,actor);
+    const other=metric==="amt"?accelOf(s):(metric==="share"?sum(flow(s,actor),i0,i1):accelOf(s));
+    const osuf=metric==="amt"?"%p":(metric==="share"?"억":"%p 가속");
+    const b=el("button","row"); b.type="button"; b.setAttribute("aria-current",String(picked===s));
+    const nb=el("div","namebox"); nb.append(el("div","name",s));
+    const dv=drivers(s,actor);
+    const h2=Math.min(2, Math.floor(dv.length/2)) || (dv.length?1:0);
+    const lead=(v>=0?dv.slice(0,h2):dv.slice(dv.length-h2).reverse())
+                 .filter(x=>Math.abs(x.v)>0);
+    nb.append(el("div","drv", lead.length?lead.map(x=>x.name).join(" · "):"—"));
+    b.append(nb);
+    const tr=el("div","track"); tr.append(el("div","axis"));
+    const bb=el("div","bb "+(v>=0?"p":"n"));
+    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
+    bb.style.width=Math.max(Math.abs(v)/mx*50,0.3)+"%"; tr.append(bb); b.append(tr);
+    const val=el("div","val");
+    val.append(el("span","num "+cls(v),fmt(v)));
+    val.append(el("span","sub num",(metric==="share"?amt(other):pp(other))+osuf));
+    b.append(val);
+    b.addEventListener("mouseenter",e=>tipShow(e,s,[
+      ["기간",D.dates[i0]+" ~ "+D.dates[i1]],
+      ...ACTORS.map(([k,ko])=>{const t=sum(flow(s,k),i0,i1); return [ko,amt(t)+"억",cls(t)];}),
+      ["거래대금",amt(sum(flow(s,"tv"),i0,i1)).replace("+","")+"억"],
+      ["시가총액",amt(capOf(s)).replace("+","")+"억"],
+      ["가속도 J/m",pp(accelOf(s))+"%p",cls(accelOf(s))],
+      ...(hasIdx(s)?[["실제 Δv (KRX지수)",pp(retOf(s))+"%",cls(retOf(s))],
+                     ["미반응 잔차",pp(-RES.out[s])+"%p",cls(-RES.out[s])]]:[["수익률","업종지수 없음"]]),
+      ...drivers(s,actor).slice(0,3).map(x=>["↑ "+x.name,amt(x.v)+"억",cls(x.v)])]));
+    b.addEventListener("mousemove",tipMove); b.addEventListener("mouseleave",tipHide);
+    b.addEventListener("click",()=>{picked=s; render();});
+    rows.append(b);
+  });
+  renderNames(); renderDetail(); renderTable(order);
+}
+
+function renderTiles(){
+  const box=document.getElementById("tiles"); box.replaceChildren();
+  let tv=0; D.sectors.forEach(s=>tv+=sum(flow(s,"tv"),i0,i1));
+  box.append(tile("구간 거래대금",amt(tv).replace("+",""),"억원",null));
+  ACTORS.forEach(([k,ko])=>{let t=0; D.sectors.forEach(s=>t+=sum(flow(s,k),i0,i1));
+    box.append(tile(ko,amt(t),"억원 누적 순매수",t));});
+  function tile(k,v,u,sign){
+    const d=el("div","tile"+(sign==null?"":(sign>=0?" pos":" neg")));
+    d.append(el("div","k",k));
+    const val=el("div","v figure",v); if(sign!=null) val.classList.add(cls(sign));
+    d.append(val,el("div","u",u)); return d;
+  }
+}
+
+function renderNames(){
+  const label=ACTORS.find(a=>a[0]===actor)[1];
+  document.getElementById("d-buy").firstChild.textContent=picked+" — "+label+"이 담은 종목";
+  document.getElementById("d-sell").firstChild.textContent=picked+" — "+label+"이 던진 종목";
+  const all=drivers(picked,actor).map(x=>({...x,tv:sum(D.names[x.code].tv,i0,i1)}));
+  // 후보가 적으면 상위 6 과 하위 6 이 겹친다 — 같은 종목이 "담은"·"던진" 양쪽에
+  // 뜨는 것을 막기 위해 겹치지 않게 반씩 나눈다.
+  const half=Math.min(6, Math.floor(all.length/2)) || (all.length?1:0);
+  const rows=all;
+  fill("lst-buy", all.slice(0, half).filter(r=>r.v>0));
+  fill("lst-sell", all.slice(all.length-half).reverse().filter(r=>r.v<0));
+  function fill(id,arr){
+    const box=document.getElementById(id); box.replaceChildren();
+    if(!arr.length){const p=el("div","li"); p.append(el("div","nm","이 시장에 해당 섹터 대표종목이 없다"));
+      box.append(p); return;}
+    arr.forEach(t=>{const li=el("div","li");
+      const nm=el("div","nm",t.name); nm.append(el("span",null,t.code)); li.append(nm);
+      li.append(el("div","amt num "+cls(t.a==null?t.v:t.a),
+                   t.a==null?amt(t.v):pp(t.a)+"%p"));
+      li.append(el("div","rt num "+cls(t.v),amt(t.v)));
+      box.append(li);});
+  }
+}
+
+function renderDetail(){
+  document.getElementById("d-detail").firstChild.textContent=picked+" — 기관 세부 ";
+  const box=document.getElementById("detbars"); box.replaceChildren();
+  const keys=Object.keys(D.detail_labels);
+  const vals=keys.map(k=>{let t=0; mkts().forEach(m=>{const a=D.detail[m]?.[picked]?.[k]; if(a) t+=sum(a,i0,i1);}); return t;});
+  const mx=Math.max(...vals.map(Math.abs),1e-9);
+  keys.forEach((k,idx)=>{const v=vals[idx]; const d=el("div","db");
+    d.append(el("div","dbn",D.detail_labels[k]));
+    const t=el("div","dbt"), bb=el("div","dbb");
+    bb.style.background=v>=0?"var(--buy)":"var(--sell)";
+    bb.style.width=Math.abs(v)/mx*50+"%";
+    if(v>=0) bb.style.left="50%"; else bb.style.right="50%";
+    t.append(bb); d.append(t); d.append(el("div","num "+cls(v),amt(v))); box.append(d);});
+}
+
+function renderTable(order){
+  const t=document.getElementById("tbl"); t.replaceChildren();
+  const thead=el("thead"),tr=el("tr");
+  ["섹터","기관","외국인","개인","기타법인","기관 비중%p","거래대금","시가총액"].forEach(h=>tr.append(el("th",null,h)));
+  thead.append(tr); t.append(thead);
+  const tb=el("tbody");
+  order.forEach(s=>{const r=el("tr"); r.append(el("td",null,s));
+    ACTORS.forEach(([k])=>{const v=sum(flow(s,k),i0,i1); r.append(el("td","num "+cls(v),amt(v)));});
+    const c=capOf(s), iv=sum(flow(s,"inst"),i0,i1), sh=c?iv/c*100:0;
+    r.append(el("td","num "+cls(sh),pp(sh)));
+    r.append(el("td","num",amt(sum(flow(s,"tv"),i0,i1)).replace("+","")));
+    r.append(el("td","num",amt(c).replace("+","")));
+    tb.append(r);});
+  t.append(tb);
+}
+
+const chip=el("span",D.finalized?"chip":"chip live");
+chip.append(el("span","dot"),document.createTextNode(D.finalized?"확정":"장중 · 미확정"));
+chip.title=D.finalized?"16:50 KST 이후 전 종목 재수집이 끝난 확정 데이터":"16:50 KST 이전이라 부분 데이터일 수 있다";
+document.getElementById("hdr-chip").append(chip);
+
+render();
+</script>

@@ -61,9 +61,16 @@ _IMPORT_RESEARCH = re.compile(r"^\s*(?:import\s+research\b|from\s+research\b)")
 _LITERAL_VERDICT = re.compile(r"""(?<![#])["'](PASS|FAIL|PASSED|FAILED)["']""")
 
 
+#: 스캔에서 뺄 디렉터리. `.claude/worktrees` 는 에이전트용 **레포 복사본**이라
+#: 그냥 두면 같은 위반이 두 번 세어지고, 남의 작업 중인 코드로 CI 가 깨진다.
+_SKIP_DIRS = {"__pycache__", ".venv", "node_modules", ".claude", ".git"}
+
+
 def _iter_py(root: Path):
     for p in sorted(root.rglob("*.py")):
-        if "__pycache__" in p.parts:
+        # **루트 기준** 상대경로로 판단한다. 절대경로를 보면 레포가
+        # `.claude/...` 아래 놓였을 때 스캔이 통째로 조용히 비어버린다.
+        if _SKIP_DIRS & set(p.relative_to(root).parts):
             continue
         yield p
 
@@ -237,6 +244,11 @@ _PRICE_READ_EXEMPT = {
     # 규칙 (d)가 테스트 파일을 하나씩 명시하는 것과도 비대칭이었다.
     "tests/test_read_prices_guard.py",  # 정문의 가드 자체를 검사 — 원자료를 봐야 한다
     "tests/test_price_adjust.py",       # 조정 로직 검사 — 조정 전/후를 직접 비교한다
+    # 2026-08-27: 무결성 감사기. 이 규칙이 막으려는 것은 "유니버스를 조용히 좁히는
+    # 로더"인데, 이 파일은 유니버스를 **만들지 않는다** — count(*) 로 중복·OHLC
+    # 불변식·단위 정합만 센다. 수익률 시계열을 만드는 코드가 이 파일에 들어오면
+    # 면제를 거둬야 한다.
+    "scripts/verify_report.py",
 }
 
 # 상장 마스터(stocks)와의 INNER JOIN 은 **WHERE 절 없이도** 폐지 종목을 떨군다.
@@ -312,9 +324,45 @@ VERDICT_RUNNER = {
     # 아니라 "판정에 코드가 붙어 있는가"다.
     "contrarian_retail": "contrarian_validate.py",
     "regime_switch": "regime_switch.py",
+    "inst_flow_accel": "inst_flow_accel_gate.py",
 }
 # VERDICT 가 러너 없이 존재해도 되는 유일한 조건: 아래 문구로 재현 불가를 선언한다.
 _IRREPRODUCIBLE_MARKER = "재현 불가 고지"
+
+
+# (i) 커밋 신원이 레포 설정과 다르면 실패.
+#
+# 커밋 시 `git -c user.email=...` 로 신원을 덮어쓰면 의도치 않은 주소가 공개
+# 이력에 박히고, 이력은 되돌리기 어렵다. "푸시 전에 확인하는 습관" 은 부탁이지
+# 규칙이 아니다(§0) — 레포 설정을 상속하게 두고 어긋나면 여기서 막는다.
+def check_commit_identity() -> list[str]:
+    """(i) 최근 커밋의 author/committer 이메일이 레포 설정과 같은가."""
+    import subprocess  # noqa: PLC0415 — 이 규칙에서만 쓴다
+
+    def _git(*args: str) -> str:
+        try:
+            return subprocess.run(("git", *args), cwd=REPO, capture_output=True,
+                                  text=True, timeout=10).stdout.strip()
+        except Exception:  # noqa: BLE001 — git 이 없거나 저장소가 아니면 검사 생략
+            return ""
+
+    want = _git("config", "--get", "user.email")
+    if not want:
+        return []                     # 설정이 없으면 비교할 기준이 없다
+    out = _git("log", "-30", "--format=%h %ae %ce")
+    bad = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        sha, ae, ce = parts
+        if ae != want or ce != want:
+            bad.append(
+                f"[identity] {sha} — 커밋 신원이 레포 설정과 다르다 "
+                f"(author={ae} committer={ce}, 설정={want}). "
+                f"`git -c user.email=...` 로 덮어쓰지 말 것 — 레포 설정을 그대로 쓴다."
+            )
+    return bad
 
 
 def check_verdicts_have_runner() -> list[str]:
@@ -353,6 +401,7 @@ def main() -> int:
     violations += check_no_raw_price_select()
     violations += check_no_survivor_only_join()
     violations += check_verdicts_have_runner()
+    violations += check_commit_identity()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

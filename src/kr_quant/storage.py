@@ -433,6 +433,120 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
     return df
 
 
+SUPPLY_TABLE = "supply_demand"
+_SUPPLY_READ_COLS = ("code", "date", "individual", "foreign_", "institution")
+#: 기관 세부 8종. 키움 소스에만 있고 네이버 폐지 백필에는 없다.
+INSTITUTION_DETAIL_COLS = ("fnnc_invt", "insrnc", "invtrt", "bank",
+                           "penfnd_etc", "samo_fund", "natn")
+
+
+#: 네이버 폐지 백필이 채우는 컬럼. 나머지는 전부 NULL 이다.
+NAVER_SUPPLY_COLS = ("code", "date", "close", "flu_rt", "acc_trde_qty",
+                     "foreign_", "institution", "source")
+#: 키움 소스에만 있는 컬럼 — 이걸 쓰면 유니버스가 현재 상장분으로 좁아진다.
+KIWOOM_ONLY_SUPPLY_COLS = ("individual", "etc_corp") + INSTITUTION_DETAIL_COLS
+
+
+def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
+                       start: "str | None" = None, end: "str | None" = None,
+                       sources: "tuple[str, ...] | None" = None,
+                       require_delisted: bool = True,
+                       allow_individual_survivorship: bool = False):
+    """수급 패널 정문 — 가격의 :func:`read_prices` 에 대응하는 자리.
+
+    이 테이블에는 오랫동안 정문이 없었다. 그래서 소비자들이 ``supply_demand JOIN
+    stocks`` 로 읽었는데 ``stocks`` 는 **현재 상장** 마스터라 WHERE 절이 없어도 폐지
+    종목이 구조적으로 빠졌고, 검증 스택은 넘겨받은 표본만 보므로 모든 게이트가 초록인
+    채로 성적만 부풀었다(GUARDRAILS §4 공백 2). 그 코드는 2026-08-16 에 삭제됐고,
+    이 함수가 그 자리를 대신한다.
+
+    **소스별로 컬럼이 반쪽이다.** 키움(현재 상장)은 11개 분류를 다 주지만, 네이버
+    폐지 백필은 **외국인·기관 순매매량만** 준다 — ``individual`` 이 NULL 이다. 따라서
+    ``individual`` 을 쓰면서 폐지 종목을 함께 담는 것은 **현재 데이터로 불가능**하고,
+    ``individual IS NOT NULL`` 로 거르는 순간 조용히 생존편향이 들어온다. 그 선택을
+    호출자가 **명시**하게 만드는 것이 이 함수의 존재 이유다.
+
+    Args:
+        con: 열린 연결.
+        cols: 반환 컬럼(기본 :data:`_SUPPLY_READ_COLS`). 기관 세부는
+            :data:`INSTITUTION_DETAIL_COLS` 를 붙여 요청한다.
+        start: 조회 시작일(``YYYY-MM-DD``, 포함). ``None`` 이면 처음부터.
+        end: 조회 종료일(포함). ``None`` 이면 끝까지.
+        require_delisted: 조회 **구간 안에** 수급이 존재하는 폐지 종목이 결과에도
+            담겼는지 검사한다. 구간을 좁히면 기대치도 그 구간으로 좁혀지므로,
+            "오늘 하루" 같은 시점 조회에서 헛되이 터지지 않는다.
+        allow_individual_survivorship: ``individual`` 을 요청하면서 폐지 종목 커버리지를
+            포기한다고 **명시**할 때 ``True``. 명시 없이 둘을 함께 요구하면
+            ``AssertionError`` 로 막는다 — 조용한 생존편향보다 시끄러운 실패가 낫다.
+
+    Returns: pandas DataFrame.
+    """
+    import pandas as pd
+
+    use = tuple(cols or _SUPPLY_READ_COLS)
+    kiwoom_only = tuple(c for c in use if c in KIWOOM_ONLY_SUPPLY_COLS)
+    if kiwoom_only and require_delisted and not allow_individual_survivorship:
+        raise AssertionError(
+            f"{', '.join(kiwoom_only)} 는 키움 소스에만 있고 네이버 폐지 백필에는 "
+            "NULL 이라, 폐지 종목을 함께 담을 수 없다. 더 고약한 건 **지표마다 "
+            "유니버스가 달라진다**는 점이다 — institution 으로 집계하면 폐지분이 들어오고 "
+            "individual 로 집계하면 같은 종목이 NULL 로 빠져서, 두 막대를 나란히 그리면 "
+            "분모가 다른 걸 비교하게 된다. 개인·기관세부가 꼭 필요하면 "
+            "sources=('kiwoom',) 로 유니버스를 명시적으로 좁히고 "
+            "allow_individual_survivorship=True 로 생존편향을 감수한다고 적어라."
+        )
+
+    ph = "%s" if _is_pg(con) else "?"
+    where, params = [], []
+    if start is not None:
+        where.append(f"date >= {ph}")
+        params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}")
+        params.append(end)
+    if sources is not None:
+        where.append(f"source IN ({', '.join([ph] * len(sources))})")
+        params.extend(sources)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    sel = ", ".join(use)
+    df = pd.read_sql_query(  # noqa: S608 — 컬럼은 모듈 상수, 날짜는 파라미터 바인딩
+        f"SELECT {sel} FROM {SUPPLY_TABLE}{clause}", con, params=tuple(params) or None)
+    if require_delisted:
+        _assert_supply_has_delisted(con, df, start=start, end=end)
+    return df
+
+
+def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
+    """조회 구간에 수급이 있는 폐지 종목이 결과에도 담겼는지 확인."""
+    ph = "%s" if _is_pg(con) else "?"
+    where, params = ["source = " + ph], ["naver"]
+    if start is not None:
+        where.append(f"date >= {ph}")
+        params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}")
+        params.append(end)
+    sql = (f"SELECT DISTINCT code FROM {SUPPLY_TABLE} "  # noqa: S608 — 모듈 상수
+           f"WHERE {' AND '.join(where)}")
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            expected = {r[0] for r in cur.fetchall()}
+    else:
+        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+    if not expected:
+        return  # 그 구간에 폐지 종목 수급이 아예 없다 — 요구할 수 없다.
+    if "code" not in getattr(df, "columns", []):
+        return  # code 를 안 뽑았으면 검사할 수단이 없다.
+    if not (expected & set(df["code"].astype(str))):
+        raise AssertionError(
+            f"{SUPPLY_TABLE} 조회 구간에 폐지 종목 수급 {len(expected)}개가 있는데 "
+            f"결과엔 하나도 없다 — stocks(현재 상장 마스터) 조인이나 "
+            f"individual IS NOT NULL 필터가 걸렸을 수 있다. 의도한 것이면 "
+            f"require_delisted=False 로 명시하라."
+        )
+
+
 def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
     """조회 결과가 폐지 종목을 담고 있는지 확인(DB 에 있는 경우에 한해)."""
     ph = "%s" if _is_pg(con) else "?"
@@ -462,6 +576,50 @@ def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
             f"생존편향이 들어간다. 유니버스를 좁히는 WHERE 를 걷어내거나, "
             f"의도한 것이면 read_prices(require_delisted=False) 로 명시하라."
         )
+
+
+#: 백필 완료 후 허용 잔여. 상류가 영구 결측 종목에 ``backfill_markers`` 를 찍어주므로
+#: 완료 상태의 기대값은 0 이다. 마커가 없는 구버전 DB 를 위해 여유만 둔다.
+SHARES_RESIDUAL_OK = 10
+
+
+def shares_backfill_pending(con: Any) -> int:
+    """과거 상장주식수가 아직 없는 **상장** 종목 수. 완료되면 60 근처로 수렴한다.
+
+    시총을 분모로 쓰는 연구는 이 값을 먼저 봐야 한다. 백필이 도는 중이면 유니버스가
+    **시대별로 다르게** 좁혀지고, 그 상태의 판정은 신호가 아니라 처리 진행률을 잰다.
+    실제로 그렇게 한 번 무효가 났다 — 분모가 5종목만 풀리던 구간에서 배터리가
+    +1.057R·승률 73% 를 냈고, 유니버스를 고른 건 신호가 아니라 데이터 존재 여부였다.
+
+    커버리지 숫자가 아니라 **그 데이터로 값이 나오는 종목**을 센다(§4-2 의 교훈 —
+    커버리지는 초록인데 한 행도 안 쓰였던 사고).
+
+    Returns: 미처리 종목 수. :data:`SHARES_RESIDUAL_OK` 이하면 정상 종료로 본다.
+    """
+    cur = con.cursor()
+    # 상류(quant-airflow)가 "재조회해도 안 나오는" 종목에 backfill_markers 를 찍는다.
+    # 그걸 빼야 **"아직 안 한 일" 과 "영구히 못 할 일" 이 구분된다** — 안 빼면 완료
+    # 상태에서도 잔여가 남아 게이트가 영원히 중단된다(실측 106건).
+    has_marker = False
+    try:
+        cur.execute("SELECT to_regclass('backfill_markers')")
+        has_marker = cur.fetchone()[0] is not None
+    except Exception:  # noqa: BLE001 — 구버전 DB·sqlite 는 마커 테이블이 없다
+        con.rollback() if hasattr(con, "rollback") else None
+    marker = ("AND NOT EXISTS (SELECT 1 FROM backfill_markers k WHERE k.code = b.code)"
+              if has_marker else "")
+    cur.execute(f"""
+        SELECT count(*) FROM (
+          SELECT b.code FROM daily_bars b
+          WHERE b.source <> 'naver'
+            AND b.date BETWEEN '2016-01-01' AND '2025-12-31'
+          GROUP BY b.code
+          HAVING NOT EXISTS (
+            SELECT 1 FROM shares_outstanding_history s
+            WHERE s.code = b.code AND s.date < '2026-01-01')
+          {marker}
+        ) t""")  # noqa: S608 — 리터럴 상수만, 사용자 입력 없음
+    return int(cur.fetchone()[0])
 
 
 def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
