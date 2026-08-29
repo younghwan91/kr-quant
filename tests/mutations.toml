@@ -204,8 +204,8 @@ why = """소스의 **강조** 는 화면에 나갈 글자가 아니다. 도움�
 guards = ["tests/test_tui_ledger_view.py::test_help_and_hint_never_show_markdown_asterisks"]
 file = "src/kr_quant/tui/flow_view.py"
 find = """        desc = desc.replace("**", "")
-        body.append"""
-replace = """        body.append"""
+        if not name:"""
+replace = """        if not name:"""
 
 [[mutation]]
 id = "ledger-narrow-notice-truncated"
@@ -351,7 +351,8 @@ id = "span-at-forgets-the-column-gap"
 why = """열 시작 칸을 공백 없이 세면 색칠·하이라이트가 열 하나만큼 왼쪽으로 밀려
 엉뚱한 열을 칠한다."""
 guards = ["tests/test_tui_flow_view.py::test_fit_widths_keeps_the_first_column_and_counts_the_gap",
-          "tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers"]
+          "tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers",
+          "tests/test_tui_ledger_view.py::test_numeric_columns_start_at_the_same_display_cell"]
 file = "src/kr_quant/tui/flow_view.py"
 find = "    return sum(w + 1 for w in widths[:i]), widths[i]"
 replace = "    return sum(w for w in widths[:i]), widths[i]"
