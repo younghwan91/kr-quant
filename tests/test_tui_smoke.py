@@ -523,20 +523,53 @@ def test_help_scroll_stops_where_the_last_line_is_at_the_bottom():
 def test_detail_panel_folds_on_short_screens_so_the_table_survives():
     """6줄 터미널에서 상세 패널이 헤더를 덮어써 표가 통째로 사라졌다."""
     for h in (6, 8, 9):
-        _head, rows, detail, _hint, _foot = layout(h)
-        assert detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
-        assert rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
+        lay = layout(h)
+        assert lay.detail == 0, f"h={h} 에서 상세 패널이 아직 표를 밀어낸다"
+        assert lay.rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
     # 줄 수를 박으면 패널에 줄이 늘 때 무관한 이유로 깨진다 — 있고,
     # 좁아지면 줄어들고, 더 좁아지면 접힌다는 **성질**만 본다.
-    assert layout(24)[2] >= 3, "정상 높이에서는 상세 패널이 있어야 한다"
-    assert layout(24)[2] >= layout(11)[2] >= 3, "높이가 줄면 패널도 줄어야 한다"
+    assert layout(24).detail >= 3, "정상 높이에서는 상세 패널이 있어야 한다"
+    assert layout(24).detail >= layout(11).detail >= 3, "높이가 줄면 패널도 줄어야 한다"
 
 
 def test_tall_screens_give_the_extra_height_to_the_table():
     """200x50 에서 표와 상세 패널 사이에 빈 줄이 14줄 남던 회귀."""
-    head, rows, detail, hint, foot = layout(50)
-    assert head + 1 + rows + detail == hint, "세로 배치에 빈 줄이 남는다"
-    assert foot == 49 and hint == 48
+    lay = layout(50)
+    assert lay.head + 1 + lay.rows + lay.gap + lay.detail == lay.hint_y, \
+        "세로 배치에 뜻 없는 빈 줄이 남는다"
+    assert lay.foot_y == 49 and lay.hint_y == 48
+
+
+def test_detail_panel_is_set_off_from_the_table_by_a_blank_line():
+    """상세 패널이 표 마지막 행에 딱 붙어 패널 첫 줄이 표의 다음 행처럼 읽혔다.
+
+    주입: `layout` 이 `gap` 을 늘 0 으로 내면 첫 단언이 실패한다.
+    """
+    for h in (24, 30, 50):
+        assert layout(h).gap == 1, f"h={h} 에서 표와 패널이 붙어 있다"
+    # 드릴다운에는 패널이 없다 — 띄울 것이 없으면 빈 줄도 없다.
+    assert layout(50, drill=True).gap == 0, "패널도 없는데 빈 줄만 남았다"
+
+
+def test_the_blank_line_is_the_first_thing_given_up_when_the_screen_is_short():
+    """여백은 **가장 먼저 포기하는** 것이다 — 폭에서 문구를 단계적으로 줄이는
+    (`tier_for`) 것과 같은 규율을 높이에도 쓴다.
+
+    주입: `layout` 이 자리를 안 보고 `gap=1` 을 박으면, 낮은 화면에서 패널이
+    잘리거나(detail 감소) 표가 비어(rows<1) 실패한다.
+    """
+    tall = layout(24)
+    for h in range(10, 24):
+        lay = layout(h)
+        assert lay.rows >= 1, f"h={h} 에서 표가 한 줄도 안 남았다"
+        assert lay.detail >= 3, f"h={h} 에서 여백이 패널 줄을 잡아먹었다"
+        assert lay.head + 1 + lay.rows + lay.gap + lay.detail == lay.hint_y, \
+            f"h={h} 세로 배치가 안 맞는다: {lay}"
+        # 여백을 지키려고 맨 위 헤더를 버리지는 않는다 — 날짜·구간 줄이 먼저다.
+        assert lay.head == tall.head or lay.gap == 0, \
+            f"h={h} 에서 빈 줄 하나 때문에 헤더가 사라졌다: {lay}"
+    # 낮아질수록 여백은 도로 없어진다(먼저 포기한다는 뜻).
+    assert layout(11).gap == 0 and layout(10).gap == 0
 
 # --------------------------------------------------------------- 자금 원장
 #

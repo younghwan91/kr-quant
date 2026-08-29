@@ -21,11 +21,12 @@ import curses
 import json
 import os
 import re
+from collections import namedtuple
 
 from kr_quant.tui.flow_view import (
     HELP, NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
     detail_lines, footer_line, header_lines, help_desc, help_lines, hint_line,
-    name_sort_span, names_lines, sort_span, table_lines, tier_for)
+    is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -53,26 +54,60 @@ def load(report_dir: str) -> dict:
     return d
 
 
-# 블룸버그 계열 배색 — 검은 바탕에 앰버가 골격, 값은 국내 관행(상승 빨강/하락 파랑).
-C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK, C_SORT = range(1, 9)
-# 정렬 표시는 **헤더만** 한다. 한때 열 전체에 배경을 깔았는데, 배경 위에서
-# 부호색(빨강/시안)이 묻혀 읽기 어려웠다. curses 는 색쌍 단위로만 칠해져
-# "배경만 바꾸기" 가 없으므로 (전경,배경) 조합을 다 만들어야 했고, 그렇게까지
-# 해도 대비가 안 나왔다.
+# --- 색 -------------------------------------------------------------------
 #
-# 8색 배색 자체는 건드리지 않는다 — 빨강/시안은 적록색맹에도 갈리고, 부호가
-# `+`/`-` 텍스트에도 있어 무색 터미널에서 정보가 남는다. 256색에서는 **같은
-# 역할의 더 읽기 좋은 톤**으로만 승격한다(빨강 203 · 청록 80 · 회색 244).
-RICH_UP, RICH_DOWN, RICH_DIM = 203, 80, 244
+# 블룸버그 단말 배색 — **검은 바탕에 앰버**가 골격이고, 값만 부호색으로 튄다.
+# 뼈대(헤더 띠·제목·힌트바)는 앰버, 본문은 밝은 회색, 비활성·얇은 섹터는
+# 어두운 회색이다. 화면 대부분이 무채색이라 부호색 몇 군데가 눈에 걸린다.
+#
+# **부호-색 대응은 뒤집지 않는다.** 블룸버그는 상승이 녹색이지만 이 화면은
+# 한국 시장 도구고, 이 저장소는 여태 상승·매수를 빨강으로 그려 왔다. 색조만
+# 팔레트로 옮기고 방향은 그대로 둔다 — 방향을 바꾸면 화면을 읽던 사람의
+# 눈이 먼저 틀린다(그건 배색 취향이 아니라 오독이다).
+#
+# 정렬 표시는 **헤더만** 한다. 한때 열 전체에 배경을 깔았는데, 배경 위에서
+# 부호색이 묻혀 읽기 어려웠다. curses 는 색쌍 단위로만 칠해져 "배경만 바꾸기"
+# 가 없으므로 (전경,배경) 조합을 다 만들어야 했고, 그렇게까지 해도 대비가
+# 안 나왔다.
+#
+# 색으로만 전하는 정보는 **새로 만들지 않는다** — 얇은 섹터의 `~`, G 통과의
+# `*` 는 글자로 남아 있고 부호는 `+`/`-` 로 적혀 있다. 색은 이미 적힌 것을
+# 빨리 찾게 할 뿐이라, 8색 터미널이나 NO_COLOR 에서도 사라지는 뜻이 없다.
+C_AMBER, C_UP, C_DOWN, C_HEAD, C_DIM, C_SEL, C_MARK, C_SORT, C_BODY = range(1, 10)
+
+#: 256색 팔레트. xterm 색번호다 — 앰버 214 · 본문 회색 252 · 어두운 회색 240 ·
+#: 상승 빨강 203 · 하락 청록 80 · 선택행 바탕 238.
+RICH_BG, RICH_AMBER, RICH_BODY = 16, 214, 252
+RICH_UP, RICH_DOWN, RICH_DIM = 203, 80, 240
+RICH_MARK, RICH_SEL_BG, RICH_SEL_FG = 220, 238, 253
+RICH_SORT_BG, RICH_SORT_FG = 24, 231
 
 #: 색을 쓸 수 있는 터미널인가. curses.window 에는 속성을 붙일 수 없어서
 #: (`scr._colored = ...` 는 AttributeError) 모듈 수준으로 둔다.
 _COLORED = False
+#: 256색 팔레트를 실제로 받아냈는가. 8색으로 내려가면 회색 톤이 없어
+#: "어두운 회색" 을 `A_DIM` 으로 흉내내야 한다.
+_RICH = False
 
 
-def _init_colors() -> bool:
-    global _COLORED
-    _COLORED = False
+def _dim_attr():
+    """비활성 행의 속성 — 8색에서는 어두운 회색이 없어 `A_DIM` 으로 대신한다."""
+    return curses.color_pair(C_DIM) | (0 if _RICH else curses.A_DIM)
+
+
+def _sel_attr():
+    """선택행 — 256색이면 **은은한 바탕**, 8색이면 반전.
+
+    반전은 그 줄만 하얗게 타서 표 전체의 리듬을 끊는다. 다만 8색에는 검정과
+    흰색 사이의 회색이 없어서 흉내낼 수단이 없다 — 그 터미널에서는 선택이
+    보이는 쪽(반전)이 예쁜 쪽보다 낫다.
+    """
+    return curses.color_pair(C_SEL) | curses.A_BOLD
+
+
+def _init_colors(scr=None) -> bool:
+    global _COLORED, _RICH
+    _COLORED = _RICH = False
     # NO_COLOR 표준(no-color.org): **비어 있지 않은** 값으로 설정돼 있으면 색을
     # 쓰지 않는다. 안 보던 시절엔 리다이렉트·로그 캡처에서 색이 그대로 나왔다.
     if os.environ.get("NO_COLOR"):
@@ -80,37 +115,52 @@ def _init_colors() -> bool:
     if not curses.has_colors():
         return False
     curses.start_color()
-    try:
-        curses.use_default_colors()
-        bg = -1
-    except curses.error:
-        bg = curses.COLOR_BLACK
     rich = getattr(curses, "COLORS", 0) >= 256
-    up, down, dim = curses.COLOR_RED, curses.COLOR_CYAN, curses.COLOR_BLUE
     if rich:
         try:
-            curses.init_pair(C_UP, RICH_UP, bg)
-            curses.init_pair(C_DOWN, RICH_DOWN, bg)
-            curses.init_pair(C_DIM, RICH_DIM, bg)
+            # 바탕을 터미널 기본값(-1)이 아니라 **검정**으로 박는다. 이 배색의
+            # 정체성이 검은 바탕이라, 밝은 테마 터미널에서 앰버만 얹으면
+            # 대비가 무너진다(노란 글씨가 흰 종이 위에 뜬다).
+            curses.init_pair(C_BODY, RICH_BODY, RICH_BG)
+            curses.init_pair(C_AMBER, RICH_AMBER, RICH_BG)
+            curses.init_pair(C_UP, RICH_UP, RICH_BG)
+            curses.init_pair(C_DOWN, RICH_DOWN, RICH_BG)
+            curses.init_pair(C_DIM, RICH_DIM, RICH_BG)
+            curses.init_pair(C_MARK, RICH_MARK, RICH_BG)
+            curses.init_pair(C_HEAD, RICH_BG, RICH_AMBER)
+            curses.init_pair(C_SEL, RICH_SEL_FG, RICH_SEL_BG)
+            curses.init_pair(C_SORT, RICH_SORT_FG, RICH_SORT_BG)
         except curses.error:
             rich = False        # 256색이라 말해놓고 못 받는 터미널이 있다
     if not rich:
-        curses.init_pair(C_UP, up, bg)
-        curses.init_pair(C_DOWN, down, bg)
-        curses.init_pair(C_DIM, dim, bg)
-    curses.init_pair(C_AMBER, curses.COLOR_YELLOW, bg)
-    curses.init_pair(C_HEAD, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-    curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
-    curses.init_pair(C_MARK, curses.COLOR_GREEN, bg)
-    curses.init_pair(C_SORT, curses.COLOR_WHITE, curses.COLOR_BLUE)
-    _COLORED = True
+        # 8색 대체. 앰버 자리는 노랑, 본문은 흰색, 어두운 회색은 `A_DIM` 이다.
+        bg = curses.COLOR_BLACK
+        curses.init_pair(C_BODY, curses.COLOR_WHITE, bg)
+        curses.init_pair(C_AMBER, curses.COLOR_YELLOW, bg)
+        curses.init_pair(C_UP, curses.COLOR_RED, bg)
+        curses.init_pair(C_DOWN, curses.COLOR_CYAN, bg)
+        curses.init_pair(C_DIM, curses.COLOR_WHITE, bg)
+        curses.init_pair(C_MARK, curses.COLOR_YELLOW, bg)
+        curses.init_pair(C_HEAD, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        curses.init_pair(C_SORT, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    # 안 쓴 칸까지 검게 — 배경이 반쪽이면 검은 바탕이 아니라 얼룩이 된다.
+    if scr is not None:
+        try:
+            scr.bkgd(" ", curses.color_pair(C_BODY))
+        except curses.error:
+            pass
+    _COLORED, _RICH = True, rich
     return True
 
 
 def _put(scr, y: int, line: str, base, colored: bool, selected: bool = False) -> None:
     """한 줄 그리기 — 숫자 구간만 부호색으로 덧칠한다.
 
-    선택행은 반전이라 덧칠하지 않는다(반전 위에 색을 얹으면 읽기 어렵다).
+    선택행은 덧칠하지 않는다. curses 의 `chgat` 은 색쌍을 통째로 갈아치우므로
+    부호색을 얹는 순간 그 칸만 선택 바탕이 벗겨져 강조 띠에 구멍이 뚫린다
+    (8색에서 반전이던 시절에도 반전 위의 색은 읽기 어려웠다). 부호는 `+`/`-`
+    글자로 그 줄에 그대로 남아 있으므로 사라지는 정보는 없다.
     """
     if y < 0:
         return
@@ -148,13 +198,31 @@ def _hl_sort(scr, y: int, span, col: bool) -> None:
 #: 6줄 터미널에서 헤더 위에 패널이 겹쳐 그려져 표가 사라졌고 설명도 없었다.
 DETAIL_MIN_H = 10
 
+#: 표와 상세 패널 사이 **빈 줄**. 패널이 표 마지막 행에 딱 붙어 있어서 어디까지가
+#: 표인지 눈이 못 끊었다 — 패널의 첫 줄(섹터 이름)이 표의 28번째 행처럼 읽혔다.
+DETAIL_GAP = 1
 
-def layout(h: int, drill: bool = False) -> tuple[int, int, int, int, int]:
-    """세로 배치 — (맨 위 헤더 줄 수, 보이는 표 행 수, 상세 패널 줄 수, 힌트바 y, 푸터 y).
+#: 여백을 넣고도 표에 남아야 할 최소 행 수. 여백은 **가장 먼저 포기하는** 것이다 —
+#: 폭에서 :func:`~kr_quant.tui.flow_view.tier_for` 가 문구를 단계적으로 줄이듯,
+#: 높이에서도 없어도 되는 것부터 뺀다. 빈 줄 하나 때문에 패널 줄이나 표가 잘리면
+#: 읽기 좋아지려던 것이 읽을 것을 없앤 셈이다.
+GAP_MIN_ROWS = 3
+
+
+#: 세로 배치 — 이름으로 꺼낼 수 있어야 필드가 하나 늘 때 호출자가 조용히
+#: 어긋나지 않는다(예전 5-튜플에 여백이 끼어들면서 자리번호가 밀렸다).
+Layout = namedtuple("Layout", "head rows gap detail hint_y foot_y")
+
+
+def layout(h: int, drill: bool = False) -> Layout:
+    """세로 배치 — (맨 위 헤더 줄 수, 보이는 표 행 수, 표·패널 사이 여백,
+    상세 패널 줄 수, 힌트바 y, 푸터 y).
 
     그리는 쪽과 PgUp/PgDn 이 **같은 함수**를 봐야 어긋나지 않는다. 예전엔
     PgDn 이 화면 높이와 무관하게 10줄 고정이라 200x50 에서 반 페이지도 안 갔다.
     힌트바 y 가 음수면 그 줄을 그릴 자리가 없다는 뜻이다.
+
+    자리가 모자랄 때 버리는 순서는 **여백 → 맨 위 헤더 → (그 아래로는 패널)** 이다.
     """
     foot_y = max(h - 1, 0)
     hint_y = h - 2 if h >= 5 else -1
@@ -165,14 +233,18 @@ def layout(h: int, drill: bool = False) -> tuple[int, int, int, int, int]:
     # 오는 질문이 "그럼 누가 받았지" 라, 그 답이 화면을 바꾸지 않고 여기 있다.
     # 자리가 모자라면 뒤에서부터 잘린다.
     if drill or h < DETAIL_MIN_H:
-        detail = 0
+        detail, want_gap = 0, 0
     else:
         detail = 4 if h >= DETAIL_MIN_H + 1 else 3
+        want_gap = DETAIL_GAP
     for head in (2, 1, 0):
-        rows = limit - head - nhead - detail
-        if rows >= 1:
-            return head, rows, detail, hint_y, foot_y
-    return min(max(limit, 0), 2), 0, 0, hint_y, foot_y
+        # 같은 헤더 높이 안에서 **여백을 먼저** 내려놓는다. 헤더를 먼저 버리면
+        # 빈 줄 하나 지키려고 날짜·구간 줄이 사라진다.
+        for gap in (want_gap, 0):
+            rows = limit - head - nhead - gap - detail
+            if rows >= (GAP_MIN_ROWS if gap else 1):
+                return Layout(head, rows, gap, detail, hint_y, foot_y)
+    return Layout(min(max(limit, 0), 2), 0, 0, 0, hint_y, foot_y)
 
 
 # --- 힌트바 ---------------------------------------------------------------
@@ -236,8 +308,14 @@ def _draw(scr, st: State) -> None:
     if st.help:
         lines, total = help_lines(w, st.hrow, h - 1)
         for i, line in enumerate(lines):
-            base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
-                    else curses.A_NORMAL)
+            if col and i == 0:
+                base = curses.color_pair(C_HEAD) | curses.A_BOLD
+            elif col and is_section(line):
+                # 구역 제목은 앰버 — 86줄을 스크롤하는 화면에서 "여기서부터
+                # 다른 이야기" 를 색이 먼저 말한다. 판정은 `flow_view` 가 진다.
+                base = curses.color_pair(C_AMBER) | curses.A_BOLD
+            else:
+                base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
             _put(scr, i, line, base, False)
         more = f" {st.hrow + 1}-{min(st.hrow + h - 2, total)} / {total}"
         _put(scr, h - 1, pad_footer(" ↑↓/PgDn:스크롤  g/G:처음·끝  q·Esc:닫기" + more, w),
@@ -245,7 +323,7 @@ def _draw(scr, st: State) -> None:
         scr.refresh()
         return
 
-    head, rows_avail, dh, hint_y, foot_y = layout(h, st.drill)
+    head, rows_avail, gap, dh, hint_y, foot_y = layout(h, st.drill)
     hdr = header_lines(st, w)
     for i, line in enumerate(hdr[:head]):
         base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
@@ -269,9 +347,9 @@ def _draw(scr, st: State) -> None:
             elif i == 1:
                 base = curses.color_pair(C_HEAD) if col else curses.A_REVERSE
             elif sel:
-                base = curses.color_pair(C_SEL) | curses.A_BOLD if col else curses.A_REVERSE
+                base = _sel_attr() if col else curses.A_REVERSE
             else:
-                base = curses.A_NORMAL
+                base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
             _put(scr, top + i, line, base, col and i > 1, sel)
             if i == 1:
                 _hl_sort(scr, top + i, nspan, col)
@@ -295,11 +373,11 @@ def _draw(scr, st: State) -> None:
             break
         sel = idx == st.row
         if sel:
-            base = curses.color_pair(C_SEL) | curses.A_BOLD if col else curses.A_REVERSE
+            base = _sel_attr() if col else curses.A_REVERSE
         elif thin[idx + nhead]:
-            base = curses.color_pair(C_DIM) if col else curses.A_DIM
+            base = _dim_attr() if col else curses.A_DIM
         else:
-            base = curses.A_NORMAL
+            base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
         # 정렬 표시는 **헤더만** — 본문에 배경을 깔면 부호색이 묻혀 읽기 어렵다.
         _put(scr, top + 1 + j, lines[idx + nhead], base,
              col and not thin[idx + nhead], sel)
@@ -307,11 +385,13 @@ def _draw(scr, st: State) -> None:
 
     # 상세 패널은 **표 바로 아래**에 붙인다. 바닥 고정이던 시절 200x50 에서는
     # 27개 섹터를 다 그리고도 표와 패널 사이에 빈 줄이 14줄 남았다.
+    # 붙이되 **한 줄은 띄운다**(`gap`) — 붙여 놓으니 패널 첫 줄이 표의 다음 행처럼
+    # 읽혔다. 그 한 줄은 자리가 모자라면 `layout` 이 가장 먼저 도로 가져간다.
     if dh:
-        dtop = min(top + 1 + shown, (hint_y if hint_y >= 0 else foot_y) - dh)
+        dtop = min(top + 1 + shown + gap, (hint_y if hint_y >= 0 else foot_y) - dh)
         for i, line in enumerate(detail_lines(st, w)[:dh]):
             base = (curses.color_pair(C_AMBER) | curses.A_BOLD if col and i == 0
-                    else curses.A_NORMAL)
+                    else (curses.color_pair(C_BODY) if col else curses.A_NORMAL))
             _put(scr, dtop + i, line, base, col and i > 0)
     _draw_hint_and_footer(scr, st, w, hint_y, foot_y, col)
     scr.refresh()
@@ -484,7 +564,7 @@ def _loop(scr, data: dict) -> None:
         curses.curs_set(0)
     except curses.error:
         pass
-    _init_colors()
+    _init_colors(scr)
     st = State(data)
     while True:
         _draw(scr, st)
@@ -493,7 +573,7 @@ def _loop(scr, data: dict) -> None:
         except KeyboardInterrupt:
             return
         h, _w = scr.getmaxyx()
-        _head, rows, _dh, _hy, _fy = layout(h, st.drill)
+        rows = layout(h, st.drill).rows
         if not handle_key(st, k, page=rows, help_page=h - 2):
             return
 

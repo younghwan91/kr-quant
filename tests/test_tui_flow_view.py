@@ -368,6 +368,49 @@ def test_help_body_is_not_truncated_at_the_default_ssh_width():
     assert not over, "폭 80 에서 잘리는 도움말 줄: " + repr(over)
 
 
+def test_help_section_headers_are_named_by_the_view_not_guessed_by_the_app():
+    """구역 제목(``── 키 ──``)을 색칠하는 쪽이 문자열을 다시 뜯으면 안 된다.
+
+    주입: `is_section` 이 늘 False 를 내면 첫 단언이, 아무 줄에나 True 를 내면
+    둘째 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_view import HELP, help_lines, is_section
+
+    heads = [d for n, d in HELP if not n and d.strip().startswith("──")]
+    assert heads, "도움말에 구역 제목이 없다 — 검사가 헛돈다"
+    for d in heads:
+        assert is_section(d), f"구역 제목을 못 알아본다: {d!r}"
+    body = help_lines(120, 0, 10 ** 6)[0]
+    marked = [ln for ln in body if is_section(ln)]
+    assert len(marked) == len(heads), f"구역 제목이 아닌 줄까지 골랐다: {marked}"
+
+
+def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
+    """푸터는 **소문자 한 벌**만 적고, 대문자 역방향은 도움말이 진다.
+
+    `w/W m/M a/A s/S` 를 다 적으니 푸터가 길어져 정작 무슨 키가 있는지가 안
+    읽혔다. 그렇다고 그냥 지우면 이 저장소가 이미 버그로 친 상태 — "기능이
+    화면 어디에도 안 적혀 있다" — 로 돌아간다. 그래서 **옮겼는지**를 본다.
+
+    주입: 푸터 단계에 `w/W` 를 되살리면 앞 절반이, 도움말에서 대문자 설명을
+    빼면 뒷 절반이 실패한다.
+    """
+    from kr_quant.tui.flow_view import (
+        FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP, help_desc)
+
+    for ts in (FOOTER_TIERS, FOOTER_DRILL_TIERS):
+        for t in ts:
+            for pair in ("w/W", "m/M", "a/A", "s/S", "g/G", "Enter/l", "h/←"):
+                assert pair not in t, f"푸터에 대문자·동의 키 병기가 남았다: {t}"
+    # 그 대신 도움말에는 남아 있어야 한다 — 키 자체는 그대로 듣는다.
+    for name in ("w W", "m M", "a A", "s S"):
+        assert "역방향" in help_desc(HELP, name), f"도움말이 {name} 의 역방향을 안 적는다"
+    keys = " ".join(n for n, _d in HELP)
+    for token in ("Enter", "l", "h", "Esc", "G", "End", "PgUp"):
+        assert token in keys + " " + " ".join(d for _n, d in HELP), \
+            f"도움말에 {token!r} 가 없다"
+
+
 def test_width_tiers_all_go_through_one_helper():
     """회귀 — 폭 단계 고르기가 네 벌 각자 구현이었고 이미 갈라져 있었다.
 

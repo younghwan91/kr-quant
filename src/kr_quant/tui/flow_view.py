@@ -882,6 +882,16 @@ def hint_line(head: str, desc: str, width: int) -> str:
     return head + " · " + desc
 
 
+def is_section(line: str) -> bool:
+    """도움말에서 **구역 제목 줄**인가 — ``── 키 ──`` ``── 섹터 표 ──``.
+
+    색을 입히는 쪽(`flow_app`)이 문자열을 다시 뜯어 맞히면 문구를 고칠 때
+    조용히 어긋난다. 줄을 만드는 쪽이 판정을 진다 — 이 저장소가 헤더와 셀,
+    히트맵과 색에서 이미 두 번 밟은 자리다.
+    """
+    return line.strip().startswith("──")
+
+
 def help_lines(width: int, offset: int, height: int,
                entries: list[tuple[str, str]] | None = None,
                title_tiers: tuple[str, ...] = HELP_TITLE_TIERS,
@@ -926,18 +936,24 @@ def help_lines(width: int, offset: int, height: int,
 #: 푸터는 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 좁은 터미널에서
 #: 잘렸고(무엇이 잘렸는지도 몰랐고), 넓은 터미널에서는 절반이 비어 있는데도
 #: 대문자 역방향·g/G·PgUp/PgDn·r 이 화면 어디에도 안 적혀 있었다.
+#:
+#: 그 뒤 반대로 기울었다 — ``w/W m/M a/A s/S`` 처럼 **한 키의 두 방향을 다 적으니**
+#: 푸터가 길어져서 정작 무슨 키가 있는지가 안 읽혔다. 이제 푸터는 **소문자 한
+#: 벌만** 적는다. 대문자 역방향·``G``·``l``·``←``·``Esc`` 는 **여전히 듣고**,
+#: :data:`HELP` 의 키 절에 그대로 적혀 있다 — 화면 어디에도 안 적혀 있으면
+#: 없는 기능이라는 원칙은 그대로다. 바뀐 것은 **어느 화면에 적히느냐** 뿐이다.
 FOOTER_TIERS = (
-    " w/W:구간 m/M:시장 a/A:주체 s/S:정렬 r:역순 ↑↓:섹터 g/G:처음/끝"
-    " PgUp/PgDn:쪽 Enter/l:종목 ?:도움말 q:종료",
+    " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 g:처음"
+    " PgUp/PgDn:쪽 Enter:종목 ?:도움말 q:종료",
     " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 Enter:종목 ?:도움말 q:종료",
     " w m a s:바꾸기 r:역순 Enter:종목 ?:전체 키 q:종료",
     " w m a s r:바꾸기 Enter:종목 ?:키 q:종료",
     " ?:키 q:종료",
 )
 FOOTER_DRILL_TIERS = (
-    " ↑↓:종목 s/S:정렬 r:역순 g/G:처음/끝 PgUp/PgDn:쪽 w/W:구간 m:시장 a:주체"
-    " h/←/Esc:돌아가기 ?:도움말 q:종료",
-    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h/←:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 g:처음 PgUp/PgDn:쪽 w:구간 m:시장 a:주체"
+    " h:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h:돌아가기 ?:도움말 q:종료",
     " s:정렬 r:역순 w m a:바꾸기 h:돌아가기 ?:전체 키 q:종료",
     " s r w m a:바꾸기 h:뒤로 ?:키 q:종료",
     " ?:키 h:뒤로 q:종료",
