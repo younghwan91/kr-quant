@@ -1208,6 +1208,29 @@ def test_the_long_explanations_stay_in_the_help(data):
                 f"{header!r} 의 힌트바 문장이 도움말보다 길다 — 두 벌로 나눈 뜻이 없다")
 
 
+def test_dates_are_not_painted_as_negative_numbers(data):
+    """헤더의 `2026-07-31 ~ 2026-08-28` 이 음수로 잡혀 하락색으로 칠해졌다.
+
+    값이 아닌 것이 값처럼 보이면 그건 배색 취향 문제가 아니다. 표·패널의
+    진짜 부호는 그대로 칠해져야 하므로 **양쪽을** 본다.
+
+    주입: `_NUM` 앞에 새로 붙인 "숫자·글자 뒤에서는 안 잡는다" 제한을 지우면
+    첫 단언이 실패한다.
+    """
+    from kr_quant.tui.flow_view import (
+        color_spans, detail_lines, header_lines, table_lines)
+
+    st = State(data)
+    for line in header_lines(st, 200):
+        for start, _w, _role in color_spans(line):
+            # 날짜가 있는 줄에서는 아무 것도 안 칠해야 한다(그 줄에 부호값이 없다).
+            assert False, f"헤더에 색을 칠했다: {line[start:start + 12]!r} · {line!r}"
+    # 그리고 진짜 부호는 여전히 칠한다 — 규칙이 넓어져 다 죽으면 안 된다.
+    lines = table_lines(st, 200, 20)[0][1:] + detail_lines(st, 200)
+    roles = {role for ln in lines for _s, _w, role in color_spans(ln)}
+    assert {"up", "down"} <= roles, f"부호색이 통째로 죽었다: {roles}"
+
+
 def test_help_labels_are_never_truncated():
     """회귀 — 도움말 라벨이 잘리면 **어느 열 설명인지 알 수 없다.**
 
