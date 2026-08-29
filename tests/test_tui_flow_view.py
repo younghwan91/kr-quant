@@ -400,8 +400,11 @@ def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
 
     for ts in (FOOTER_TIERS, FOOTER_DRILL_TIERS):
         for t in ts:
-            for pair in ("w/W", "m/M", "a/A", "s/S", "g/G", "Enter/l", "h/←"):
+            # `g/G` 는 예외다 — `G`(끝)는 `g`(처음)의 역방향이 아니라 별개
+            # 동작이라, 안 적으면 목록 끝으로 가는 길이 화면에서 사라진다.
+            for pair in ("w/W", "m/M", "a/A", "s/S", "Enter/l", "h/←"):
                 assert pair not in t, f"푸터에 대문자·동의 키 병기가 남았다: {t}"
+    assert any("g/G" in t for t in FOOTER_TIERS), "목록 끝으로 가는 G 가 푸터에서 사라졌다"
     # 그 대신 도움말에는 남아 있어야 한다 — 키 자체는 그대로 듣는다.
     for name in ("w W", "m M", "a A", "s S"):
         assert "역방향" in help_desc(HELP, name), f"도움말이 {name} 의 역방향을 안 적는다"
