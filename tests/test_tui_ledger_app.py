@@ -262,3 +262,114 @@ def test_draw_survives_any_terminal_size(h, w):
         for help_open in (False, True):
             mo.help = help_open
             _draw(mo, h=h, w=w)
+
+
+# ------------------------------------------- kq-flow 와 같은 규율(패리티)
+
+def test_hangul_jamo_keys_do_what_their_latin_twins_do():
+    """한영을 켜 두면 `v` 가 `ㅍ` 로, `s` 가 `ㄴ` 으로 도착해 아무 일도 안 했다.
+
+    두 앱이 같은 손버릇을 가르쳐야 하므로 대응표도 **한 벌**이다
+    (`flow_app.JAMO_TO_ASCII`) — 두 벌이면 한쪽만 늘어난다.
+
+    주입: `_read_key`/`normalize_key` 경로를 걷어내고 `getch` 로 되돌리면 실패한다.
+    """
+    from kr_quant.tui.flow_app import JAMO_TO_ASCII
+
+    # `v`(화면)·`d`(β제거)는 **원장에만 있는 키**다 — 공용 표에 없으므로 여기서
+    # 더한다. 그 둘이 빠지면 한글 상태에서 화면조차 못 바꾼다.
+    for jamo, latin in (("ㅍ", "v"), ("ㅇ", "d"), ("ㅈ", "w"), ("ㅁ", "a"),
+                        ("ㄴ", "s"), ("ㅗ", "h"), ("ㅓ", "j"), ("ㅏ", "k"),
+                        ("ㅂ", "q"), ("ㅉ", "W")):
+        a, b = Model(_payload()), Model(_payload())
+        a.row = b.row = 1
+        ka = app._key(a, app.LEDGER_JAMO_KEY(jamo), 10)
+        kb = app._key(b, ord(latin), 10)
+        snap = lambda m: (m.vi, m.wi, m.mi, m.ai, m.si, m.row, m.hrow,   # noqa: E731
+                          m.detrend, m.help, m.help_row)
+        assert (ka, snap(a)) == (kb, snap(b)), f"{jamo!r} 가 {latin!r} 와 다르다"
+    # 공용 표를 **다시 구현하지 않는다** — 늘어난 키는 두 앱이 같이 받아야 한다.
+    for jamo, latin in JAMO_TO_ASCII.items():
+        assert app.LEDGER_JAMO[jamo] == latin, f"공용 표와 갈라졌다: {jamo!r}"
+
+    # 그리고 입력 **경로**가 실제로 그 한 글자를 받는가. `getch` 는 자모를 세
+    # 바이트로 쪼개 주므로 이 자리를 안 고치면 표만 있고 아무 일도 안 일어난다.
+    class _Scr:
+        def __init__(self, out):
+            self.out = out
+
+        def get_wch(self):
+            if isinstance(self.out, Exception):
+                raise self.out
+            return self.out
+
+    assert app._read_key(_Scr("ㅍ")) == ord("v")
+    assert app._read_key(_Scr("ㅈ")) == ord("w")
+    assert app._read_key(_Scr(curses.KEY_DOWN)) == curses.KEY_DOWN
+    # 터미널이 사라졌을 때의 -1 방어가 살아 있어야 한다(예외는 ERR 자리다).
+    assert app._read_key(_Scr(curses.error("gone"))) == -1
+    import inspect
+    assert "setlocale" in inspect.getsource(app.main), \
+        "로케일을 안 따라가면 자모가 다시 바이트로 쪼개진다"
+
+
+def test_no_color_env_turns_the_colours_off(monkeypatch):
+    """`NO_COLOR` 표준(no-color.org)을 원장만 안 보고 있었다 — 리다이렉트·로그
+    캡처에 색이 그대로 나갔다. `kq-flow` 는 이미 본다.
+
+    주입: `_init_colors` 에서 그 검사를 빼면 `curses.has_colors()` 가
+    initscr 없이 불려 예외로 실패한다(= 검사가 살아 있다).
+    """
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert app._init_colors(None) == 0
+    assert app._COLORS == 0
+
+
+def test_dates_in_the_body_are_not_painted_as_negative_numbers(monkeypatch):
+    """한계 화면 §5 의 `2026-04-07` 이 `-04-07` 로 잡혀 하락색으로 칠해졌다.
+
+    원장이 부호 구간 찾기를 **따로 한 벌** 갖고 있어서, `kq-flow` 가 고친 날짜
+    회귀가 여기만 남았다. 이제 두 앱이 `flow_view.color_spans` 하나를 쓴다.
+
+    주입: `_colorize_amounts` 를 되살리거나 `color_spans` 의 앞 제한을 지우면
+    첫 단언이 실패한다.
+    """
+    # 색쌍은 initscr() 뒤에만 잡힌다 — 여기서 보는 것은 **어디를** 칠하느냐다.
+    monkeypatch.setattr(curses, "color_pair", lambda n: n * 256)
+    mo = Model(_payload())
+    mo.vi = [v for v, _ in VIEWS].index("limits")
+    scr = FakeScr(30, 121)
+    app._COLORS = 8
+    app._draw(scr, mo)
+    for y, x, n in scr.chg:
+        painted = "".join(_cells(scr.rows.get(y, ""))[x:x + n])
+        assert not painted.strip().startswith("-0"), \
+            f"날짜에 색을 칠했다: {painted!r} · {scr.rows.get(y, '')!r}"
+    # 진짜 부호는 여전히 칠한다 — 규칙이 넓어져 다 죽으면 안 된다.
+    mo.vi = 0
+    scr = FakeScr(30, 121)
+    app._draw(scr, mo)
+    assert scr.chg, "원장에서 부호색이 통째로 죽었다"
+    app._COLORS = 0
+
+
+def test_the_app_paints_the_sector_name_using_the_coordinates_the_view_gives(
+        monkeypatch):
+    """상태줄에서 섹터 이름만 세운다. 좌표는 뷰가 낸다 — 앱이 문자열을 다시
+    뜯으면 문구를 고칠 때 색이 조용히 어긋난다.
+
+    주입: `_draw` 에서 `status_title_span` 덧칠을 빼면 실패한다.
+    """
+    from kr_quant.tui.ledger_view import status_title_span
+
+    monkeypatch.setattr(curses, "color_pair", lambda n: n * 256)
+    mo = Model(_payload())
+    scr = FakeScr(30, 121)
+    app._COLORS = 8
+    app._draw(scr, mo)
+    s = screen(mo, 120, 30)
+    want = status_title_span(mo, 120)
+    assert want, "뷰가 좌표를 안 냈다 — 검사가 헛돈다"
+    assert (s["status_y"], want[0], want[1]) in scr.chg, \
+        f"상태줄의 이름을 안 세웠다: {[c for c in scr.chg if c[0] == s['status_y']]}"
+    app._COLORS = 0

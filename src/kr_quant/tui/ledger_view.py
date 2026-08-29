@@ -245,6 +245,21 @@ def _corr(a: list[float], b: list[float]) -> float:
     return sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / math.sqrt(va * vb)
 
 
+def neg_frac(values) -> float | None:
+    """**음의 상관 쌍**의 비율 — `nan` 은 분자에서도 분모에서도 뺀다.
+
+    `nan` 은 분산 0 이라 **잴 수 없는** 쌍이다. `nan < 0` 은 False 라 그냥 두면
+    "음수가 아닌 쌍" 으로 세어져 비율이 조용히 낮아진다 — 그리고 이 비율은
+    "로테이션은 우연보다 드물다" 는 판정의 분자다.
+
+    관측(`obs_neg_frac`)·널(`null_neg_frac`)·근거 스크립트(`scripts/ledger_numbers.py`)
+    가 **같은 함수**를 봐야 한다. 스크립트는 화면이 인용하는 실측치를 만드는
+    곳이라, 다른 자로 재면 근거와 주장이 다른 수가 된다.
+    """
+    vals = [v for v in values if v == v]
+    return sum(1 for v in vals if v < 0) / len(vals) if vals else None
+
+
 class Model:
     """화면 상태 + 페이로드에서 뽑은 파생 계열."""
 
@@ -301,6 +316,34 @@ class Model:
     @property
     def sort_key(self) -> str:
         return SORTS[self.si][0]
+
+    @property
+    def has_cursor(self) -> bool:
+        """이 화면에 **행 커서가 있는가** — 원장·전개만 그렇다.
+
+        동시성은 행·열 순서가 평균상관이고 스크롤만 하며(`screen()` 이 커서를
+        안 낸다), 한계는 산문이다. 그런데 상태줄은 그 두 화면에서도
+        ``rows()[row]`` 의 섹터를 이름까지 대고 있었다 — 동시성의 `row` 는 스크롤
+        위치라 화면의 그 행조차 아니다. **화면이 없는 선택을 보고했다.**
+
+        판정을 여기 한 곳에 둔다. 커서를 그리는 쪽과 상태줄이 다른 답을 내면
+        그 순간 다시 거짓말이 된다(``flow_view.State.sortable`` 과 같은 규율).
+        """
+        return self.view in ("ledger", "timeline")
+
+    @property
+    def sortable(self) -> bool:
+        """이 화면에 **정렬이 있는가.**
+
+        동시성의 순서는 평균상관이라 `s` 를 눌러도 행렬이 안 바뀌고(검사가
+        그 사실을 붙들고 있다), 한계는 표가 아니다. 그런데 `s` 는 눌리기는 해서
+        `si` 가 돌았고, 다른 화면으로 돌아가면 정렬이 바뀌어 있었다 — 누른 사람은
+        방금 이 화면에서 무슨 일이 일어났다고 믿는다.
+
+        헤더는 이미 사실을 적고 있었다(`순서[평균상관]`). 그 판단을 키까지 밀고
+        간다 — ``kq-flow`` 가 종합 화면에서 밟은 그 자리다.
+        """
+        return self.has_cursor
 
     def cycle(self, what: str, step: int = 1) -> None:
         if what == "w":
@@ -494,21 +537,17 @@ class Model:
             self._null_cache[key] = None
             return None
         rnd = random.Random(11)
-        neg = tot = 0
+        vals = []
         for _ in range(_NULL_SHIFTS):
             sh = {}
             for s in keys:
                 t = rnd.randrange(n)
                 sh[s] = ser[s][t:] + ser[s][:t]
-            for i, a in enumerate(keys):
-                for b in keys[i + 1:]:
-                    c = _corr(sh[a], sh[b])
-                    if c != c:
-                        continue          # 잴 수 없는 쌍은 관측 쪽과 같이 뺀다
-                    tot += 1
-                    if c < 0:
-                        neg += 1
-        out = neg / tot if tot else None
+            vals += [_corr(sh[a], sh[b])
+                     for i, a in enumerate(keys) for b in keys[i + 1:]]
+        # 잴 수 없는 쌍(nan)을 빼는 것은 `neg_frac` 한 곳이 한다 — 관측 쪽과
+        # 근거 스크립트가 같은 함수를 본다.
+        out = neg_frac(vals)
         self._null_cache[key] = out
         return out
 
@@ -518,11 +557,8 @@ class Model:
         keys, m = self.corr_matrix()
         if len(keys) < 2:
             return None
-        # nan(분산 0 이라 **잴 수 없는** 쌍)은 분모에서도 뺀다. `nan < 0` 은 False
-        # 라서 그냥 두면 "음수가 아닌 쌍"으로 세어져 비율이 조용히 낮아진다.
-        vals = [m[i][j] for i in range(len(keys)) for j in range(i + 1, len(keys))
-                if m[i][j] == m[i][j]]
-        return sum(1 for v in vals if v < 0) / len(vals) if vals else None
+        return neg_frac(m[i][j] for i in range(len(keys))
+                        for j in range(i + 1, len(keys)))
 
 
 # ---------------------------------------------------------------- 렌더
@@ -533,11 +569,11 @@ def header_lines(mo: Model, width: int) -> list[str]:
     l1 = (f" 자금 원장 · {mo.dates[-1]} {chip} · "
           f"{mo.dates[max(0, len(mo.dates) - mo.window)]}~{mo.dates[-1]} "
           f"({mo.window}거래일)")
-    # ⚠️ 동시성 화면에서 `s` 는 **아무 일도 하지 않는다**(정렬 3종의 출력이 동일).
-    # 그런데도 칩이 정렬을 계속 표시하면 화면이 안 듣는 값을 광고하는 것이다.
-    # 그 화면의 순서는 정렬 키가 아니라 평균상관이므로 그렇게 적는다.
-    order = ("순서[평균상관]" if mo.view == "comove"
-             else f"정렬[{SORTS[mo.si][1]}]")
+    # ⚠️ 동시성 화면에는 **정렬이 없다**(순서는 평균상관이다). 칩이 정렬을 계속
+    # 표시하면 화면이 안 듣는 값을 광고하는 것이고, 실제로 `s` 가 라벨만 바꾸던
+    # 시절이 있었다. 판정은 `Model.sortable` **한 곳**이다 — 키를 받는 쪽과
+    # 화면에 적는 쪽이 다른 답을 내면 그 순간 다시 거짓말이 된다.
+    order = (f"정렬[{SORTS[mo.si][1]}]" if mo.sortable else "순서[평균상관]")
     l2 = (f" 화면[{VIEWS[mo.vi][1]}] 구간[{mo.window}일] 시장[{mo.market}]"
           f" 주체[{mo.actor_ko}] {order}")
     return [pad(l1, width), pad(l2, width)]
@@ -695,6 +731,16 @@ TIMELINE_NOTE_TIERS = (
 )
 
 
+def timeline_cols() -> list[tuple[str, int, bool]]:
+    """전개 표의 **전체** 열 정의. 폭에 맞춰 줄이는 것은 :func:`_fit` 이 한다.
+
+    함수로 뽑아 둔 이유는 상태줄이 **"지금 화면에 무슨 열이 있나"** 를 물어야 하기
+    때문이다(:func:`visible_columns`) — 표에 이미 있는 값을 상태줄이 또 적던 자리다.
+    """
+    return [_col("섹터", 13, False), _col("", 1, False),
+            _col("누적[억]", 11), _col("눈금[억]", 11)]
+
+
 def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     """섹터별 **누적** 순매수 스파크라인 — 회전을 보여주되 화살표는 없다.
 
@@ -711,8 +757,7 @@ def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
                  pad(tier_for(TIMELINE_NARROW_TIERS, width), width),
                  pad(narrow_also(width), width)],
                 [False, False, False], 3)
-    cols = _fit([_col("섹터", 13, False), _col("", 1, False),
-                 _col("누적[억]", 11), _col("눈금[억]", 11)], width)
+    cols = _fit(timeline_cols(), width)
     used = sum(c[1] + 1 for c in cols)
     # 남는 칸이 곧 스파크라인 폭이다. 최소값으로 **올려** 잡으면 줄이 폭을 넘어
     # pad 가 뒤를 잘라내고, 구간의 일부만 그려진 채 전부인 척한다.
@@ -1065,6 +1110,9 @@ LEDGER_HELP = [
     ("q", "종료. 단 도움말 안에서는 **닫기만** 한다(한 번 더 눌러야 종료)."),
     ("Esc", "종료가 **아니다** — 느린 SSH 에서 방향키가 Esc 와 나머지로 쪼개져"),
     ("", "           도착하면(ESCDELAY 기본 1초) ↓ 를 눌렀을 뿐인데 앱이 끝난다."),
+    ("", "한영 상태에서도 위 키가 그대로 듣는다. 다만 자판이 Shift 를 구분하지"),
+    ("", "           않는 자리가 있어 **한글에서 역방향은 W(구간)뿐**이다 — 나머지는"),
+    ("", "           소문자 동작으로 떨어진다(v·m·a·s 는 계속 눌러 한 바퀴 돌면 된다)."),
     ("", ""),
     ("", "── 화면 (v) ──"),
     ("원장", "주체 × 섹터 순매수 표. 행이 섹터, 열이 주체다. 간선 하나하나가"),
@@ -1166,7 +1214,10 @@ LEDGER_HELP = [
     ("", "· 생존편향 — 폐지 종목의 마지막 흐름이 빠져 있다. 크기는 거래대금의"),
     ("", "  0.152%(기관 gross 의 0.33%)이고, **코스닥이 아니라 거래소에서 크다**"),
     ("", "  (거래소 0.195% vs 코스닥 0.046%). 종목 수는 코스닥이 많지만(53 vs 20)"),
-    ("", "  빠진 **금액**은 거래소가 4배다. 한계 화면 7번은 아직 옛 문장이다."),
+    # ⚠️ 여기 "한계 화면 7번은 아직 옛 문장이다" 가 붙어 있었다. 한계 §7 은 이미
+    # 같은 실측치로 고쳐져 있는데도 그렇게 적혀 있어서, **화면이 옆 화면의 상태를
+    # 잘못 보고**했다. 두 화면이 같은 숫자를 적고 있는지는 검사가 본다.
+    ("", "  빠진 **금액**은 거래소가 4배다. v 로 한계 화면 7번에 더 적었다."),
     ("", "· 숫자는 리포트 폴더의 payload.json 그대로다. numbers.html 과 같은 값이다."),
 ]
 
@@ -1211,6 +1262,39 @@ def help_screen(mo: "Model", width: int, height: int) -> list[str]:
 _SORT_HELP = {"abs": "절대크기", "name": "섹터",
               "spike": "최대일몫[%]", "n": "종목[수]"}
 
+#: 힌트바 전용 **짧은 설명** — 열 이름 → 한 줄. 없으면 :data:`LEDGER_HELP` 로 떨어진다.
+#:
+#: 왜 두 벌인가: 같은 문장을 길이 제약이 **정반대**인 두 자리에 쓰고 있었다.
+#: 도움말은 전면 모달이라 유래·경고·실측치가 다 들어가도 되지만, 힌트바는 한 줄이라
+#: 그 뒤가 `…` 로 잘려나간다 — 그리고 잘린 설명은 설명이 아니다. 실측(폭 120,
+#: 절대크기 정렬)에서 화면에 늘 떠 있던 줄이 이랬다:
+#: ``정렬 절대크기▼ · 정렬 전용 값 — Σ|4주체|. 열로는 안 보인다. 부호를 지우고 더하므로``
+#:
+#: 규칙: **그 숫자를 읽는 데 필요한 것만** — 분자·분모와 단위까지. 유래·경고·실측치는
+#: `?` 의 일이다. 길이는 폭 80 에서 `…` 로 잘리지 않는 선을 지킨다(검사가 전
+#: 화면 × 전 정렬 × 전 주체 × 폭 80 을 돌며 확인한다). ``kq-flow`` 의
+#: ``HINT_DESC`` 와 같은 규칙이고 고르는 함수도 같은 모양이다.
+LEDGER_HINT_DESC = {
+    "절대크기": "Σ|4주체| — 부호를 지우고 더한 정렬 전용 값. 열로는 없다",
+    "섹터": "벤더 분류(stocks.sector). 가나다순",
+    "최대일몫[%]": "max|일별| ÷ Σ|일별| × 100 [%]. 균등은 100÷구간일수",
+    "종목[수]": "그 (시장,섹터)의 상장 종목 수. ~ 는 10개 미만",
+    # 주체 열 넷 — `s` 가 `선택주체` 면 힌트가 가리키는 헤더가 `a` 따라 바뀐다.
+    "개인[억]": "구간 누적 순매수 [억원] — 수량 × 그날 종가",
+    "외국인[억]": "구간 누적 순매수 [억원] — 롱온리와 헤지 북이 한 칸이다",
+    "기관[억]": "구간 누적 순매수 [억원] — 금투·보험·투신·은행·연기금·사모",
+    "기타법인[억]": "구간 누적 순매수 [억원] — 일반 법인",
+}
+
+
+def hint_desc(header: str) -> str:
+    """힌트바 한 줄 설명 — 짧은 것이 있으면 그것, 없으면 도움말의 긴 설명.
+
+    폴백을 남기는 이유: 열이 하나 늘었는데 여기 안 적히면 힌트바가 **빈다.**
+    긴 설명은 잘리기라도 하지만 빈 줄은 아무 말도 안 한다.
+    """
+    return LEDGER_HINT_DESC.get(header) or help_desc(LEDGER_HELP, header)
+
 #: 동시성 화면의 힌트 — 정렬이 없는 화면이라 열 대신 **읽는 법**을 말한다.
 HINT_COMOVE_TIERS = (
     " 동시성이지 이동이 아니다 — 같이 갔다는 사실일 뿐이다 · d 로 β제거 · ? 로 설명",
@@ -1245,55 +1329,124 @@ def hint_text(mo: "Model", width: int) -> str:
     key = mo.sort_key
     header = _SORT_HELP.get(key) or f"{mo.actor_ko}[억]"
     arrow = "▲" if key == "name" else "▼"
-    desc = help_desc(LEDGER_HELP, header) or "? 로 설명"
+    # 도움말 문장을 그대로 빌려 쓰던 자리다 — 폭 80 은 물론 120 에서도 잘렸다.
+    desc = hint_desc(header) or "? 로 설명"
     return hint_line(f" 정렬 {header}{arrow}", desc, width)
 
 
+def visible_columns(mo: Model, width: int) -> set[str]:
+    """**지금 그 폭에서 실제로 그려지는** 표의 열 이름.
+
+    상태줄이 "표에 이미 있는 값" 을 판정하는 데 쓴다. 목록을 손으로 적으면 열을
+    하나 떨어뜨렸을 때(폭이 좁아 `_fit` 이 버렸을 때, 아예 표를 안 그릴 때)
+    상태줄이 **화면에 없는 값을 숨긴 채로** 남는다 — 그러면 그 값을 볼 데가
+    아무 데도 없다. 그래서 그리는 쪽과 같은 함수(`ledger_cols`·`timeline_cols`)에
+    같은 `_fit` 을 태워서 묻는다.
+    """
+    if mo.view == "ledger" and width >= LEDGER_MIN_W:
+        return {c[0] for c in _fit(ledger_cols(), width) if c[0]}
+    if mo.view == "timeline" and width >= TIMELINE_MIN_W:
+        return {c[0] for c in _fit(timeline_cols(), width) if c[0]}
+    return set()
+
+
+#: 상태줄 첫 칸의 들여쓰기. :func:`status_line` 과 :func:`status_title_span` 이
+#: **같은 상수**를 봐야 색이 글자와 어긋나지 않는다.
+STATUS_INDENT = " "
+
+
+def status_title_span(mo: Model, width: int) -> tuple[int, int] | None:
+    """상태줄에서 **섹터 이름**의 (시작 표시칸, 폭). 세울 이름이 없으면 None.
+
+    이 줄에서 "지금 무엇을 보고 있는가" 를 말하는 건 이름 하나뿐인데, 줄 전체가
+    한 색이라 부속 정보에 묻혀 있었다. 좌표를 **뷰가 낸다** — 앱이 문자열을 다시
+    뜯어 이름 길이를 추측하면 문구를 고칠 때 색이 조용히 어긋난다. 한글이 두 칸이라
+    문자 인덱스가 아니라 **표시 칸**을 낸다(``flow_view.detail_title_span`` 과
+    같은 관용구다).
+    """
+    if not mo.has_cursor:
+        return None
+    r = mo.selected()
+    if not r:
+        return None
+    start = cell_len(STATUS_INDENT)
+    w = min(cell_len(r["sector"]), max(width - start, 0))
+    return (start, w) if w > 0 else None
+
+
 def status_line(mo: Model, width: int) -> str:
-    """커서가 놓인 칸의 전체 수치 — 터미널에 툴팁이 없으니 상태줄이 그 자리다.
+    """커서가 놓인 행에서 **표를 봐도 알 수 없는 것** — 터미널에 툴팁이 없다.
 
     ``최대일몫`` 옆에 **균등 앵커**를 같이 찍는다. 17.9% 가 큰 값인지는 균등
     (=100÷구간일수, 20일이면 5.0%)을 알아야 판단된다 — 그 앵커가 화면 어디에도
     없으면 열 이름만으로는 아무것도 안 잡힌다. 고른 주체도 여기서 이름을 댄다
     (``a`` 를 누르면 그 열만 조용히 바뀌는데 열 헤더에는 주체가 없다).
+
+    ⚠️ **표에 이미 있는 값은 안 적는다.** 예전엔 4주체 금액·잔여·종목수를 늘
+    덧붙였는데, 원장 화면에서는 그게 바로 위 행에 열로 그대로 있는 값이다 — 폭만
+    먹고, 하필 뒤에 붙던 것이 먼저 잘려 나갔다. 다만 **전개 화면에는 그 열들이
+    없으므로** 거기서는 상태줄이 유일한 자리다. 판정은 화면을 그리는 함수에
+    묻는다(:func:`visible_columns`) — 목록을 손으로 적으면 폭이 좁아 열이 떨어진
+    순간 값이 화면에서 통째로 사라진다.
+
+    커서가 없는 화면(동시성·한계)에서는 **아무 행도 안 적는다**(:attr:`Model.has_cursor`).
+    그 자리는 **비운다** — 한때 배너를 넣었는데, 배너는 바로 아래 마지막 줄에 늘
+    있으므로 같은 문장이 인접한 두 줄에 그대로 두 번 찍혔다(실측: 동시성·한계).
+    빈 줄은 표와 하단 사이를 띄우는 일이라도 한다.
     """
-    # ⚠️ 한계 화면 검사가 **먼저**다. 예전엔 `selected()`→`rows()` 를 먼저 부르고
+    # ⚠️ 커서 검사가 **먼저**다. 예전엔 `selected()`→`rows()` 를 먼저 부르고
     # 나서 되돌아왔다 — 안 쓸 표를 매 프레임 만들었다.
-    if mo.view == "limits":
-        return pad(" " + banner_for(width), width)
+    if not mo.has_cursor:
+        return pad("", width)
     r = mo.selected()
     if not r:
-        return pad(" " + banner_for(width), width)
+        return pad("", width)
+    shown = visible_columns(mo, width)
     parts = [r["sector"]]
     if r["spike"] is not None:
+        # 값과 앵커는 **붙어 있어야** 비교가 된다. 값이 표에 있어도 여기 남기는
+        # 이유가 그거다 — 앵커만 적으면 눈이 표와 이 줄을 오가야 한다.
         parts.append(f"최대일몫({mo.actor_ko}) {r['spike']:.1f}%"
                      f" · 균등 {mo.uniform_spike():.1f}%")
-    resid = f"잔여 {fmt_amt(r['resid'])}"
-    if r["resid_pct"] is not None:
-        resid += f" (일별 {r['resid_pct']:.1f}%)"
-    parts.append(resid)
-    parts.append(f"종목 {r['n']}")
-    parts += [f"{ko} {fmt_amt(r[k])}" for k, ko in ACTORS]
+    # 잔여와 잔여몫은 **따로** 판정한다. 폭이 좁으면 `잔여몫[%]` 열만 먼저
+    # 떨어지는데, 한 덩어리로 묶으면 그때 잔여몫이 화면에서 통째로 사라진다.
+    resid = []
+    if "잔여[억]" not in shown:
+        resid.append(f"잔여 {fmt_amt(r['resid'])}")
+    if r["resid_pct"] is not None and "잔여몫[%]" not in shown:
+        resid.append(f"(일별 {r['resid_pct']:.1f}%)" if resid
+                     else f"잔여몫 {r['resid_pct']:.1f}%")
+    if resid:
+        parts.append(" ".join(resid))
+    if "종목[수]" not in shown:
+        parts.append(f"종목 {r['n']}")
+    parts += [f"{ko} {fmt_amt(r[k])}" for k, ko in ACTORS
+              if f"{ko}[억]" not in shown]
     # ⚠️ **우선순위 순서**로 붙이고 안 들어가면 거기서 멈춘다. 예전엔 한 줄로
     # 이어 붙여 `pad` 가 잘랐고, 하필 뒤쪽에 있던 최대1일이 폭 132 에서도
-    # 통째로 잘려 나갔다. 앞의 둘은 **표를 봐도 뜻을 알 수 없는** 값이고
-    # (앵커·주체·일별 기준), 4주체 금액은 표에 열로 이미 있다 — 그래서 뒤다.
+    # 통째로 잘려 나갔다. 앞의 둘은 표를 봐도 뜻을 알 수 없는 값이다(앵커·주체).
     out = ""
     for p in parts:
         cand = f"{out} · {p}" if out else p
-        if cell_len(" " + cand) > width:
+        if cell_len(STATUS_INDENT + cand) > width:
             break
         out = cand
-    return pad(" " + out, width)
+    return pad(STATUS_INDENT + out, width)
 
 
 #: 푸터 — 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 배너와 이어 붙인
 #: 뒤 문자 슬라이스로 잘랐고, 폭 80(SSH 기본)에서는 배너만으로 76칸이라 푸터가
 #: 통째로 사라졌다. 어느 단계에서도 ``?`` 는 남긴다 — 줄어든 안내가 "여기가 전부"
 #: 로 읽히면 안 된다(``flow_view.footer_line`` 과 같은 규칙).
+#:
+#: 그 뒤 반대로 기울었다 — ``v/V w/W m/M a/A s/S`` 처럼 **한 키의 두 방향을 다
+#: 적으니** 푸터가 길어져서 정작 무슨 키가 있는지가 안 읽혔다. 이제 소문자 한 벌만
+#: 적는다. **키는 하나도 안 건드렸다** — 대문자 역방향은 여전히 듣고 :data:`LEDGER_HELP`
+#: 의 키 절에 그대로 적혀 있다. 바뀐 것은 **어느 화면에 적히느냐** 뿐이다
+#: (``flow_view.FOOTER_TIERS`` 와 같은 규칙·같은 이유).
 FOOTER_TIERS = (
-    " v/V:화면 w/W:구간 m/M:시장 a/A:주체 s/S:정렬 d:β제거 ↑↓:섹터"
-    " ?:도움말 q:종료",
+    " v:화면 w:구간 m:시장 a:주체 s:정렬 d:β제거 ↑↓:섹터"
+    " Home:처음 ?:도움말 q:종료",
     " v:화면 w:구간 m:시장 a:주체 s:정렬 d:β제거 ↑↓ ?:도움말 q:종료",
     " v화면 w구간 m시장 a주체 s정렬 ?:도움말 q:종료",
     " v w m a s:바꾸기 ?:도움말 q:종료",
@@ -1335,6 +1488,26 @@ def banner_footer(width: int) -> str:
     return pad(" " + ban + "  " + tier_for(FOOTER_TIERS, room), width)
 
 
+#: 표와 하단 세 줄(힌트·상태줄·배너) 사이 **빈 줄**. 표 마지막 행이 힌트바에 딱
+#: 붙어 있어서 어디까지가 표인지 눈이 못 끊었다 — 힌트바 첫 글자가 표의 다음 행처럼
+#: 읽혔다(``kq-flow`` 가 상세 패널에서 밟은 그 자리다).
+BOTTOM_GAP = 1
+
+#: 여백을 넣고도 본문에 남아야 할 최소 줄 수 — 헤더 2줄 + 열 이름 1줄 + 3행.
+#: 여백은 **가장 먼저 포기하는** 것이다. 폭에서 :func:`tier_for` 가 문구를 단계적으로
+#: 줄이듯 높이에서도 없어도 되는 것부터 뺀다. 빈 줄 하나 때문에 볼 것이 없어지면
+#: 읽기 좋아지려던 것이 읽을 것을 없앤 셈이다.
+GAP_MIN_BODY = 6
+
+
+def bottom_gap(height: int) -> int:
+    """표와 하단 세 줄 사이 여백 — 자리가 모자라면 **0**.
+
+    그리는 쪽과 :func:`screen` 이 같은 함수를 봐야 어긋나지 않는다.
+    """
+    return BOTTOM_GAP if height - 3 - BOTTOM_GAP >= GAP_MIN_BODY else 0
+
+
 def screen(mo: Model, width: int, height: int) -> dict:
     """화면 하나 — 앱은 이걸 그리기만 한다. 길이가 정확히 ``height`` 인 행 목록.
 
@@ -1350,9 +1523,12 @@ def screen(mo: Model, width: int, height: int) -> dict:
         # 도움말은 **전면**이다. 표 위에 반쯤 겹치면 가리는 줄이 하필 지금 읽던
         # 줄이고, 좁은 SSH 창에서는 설명이 두세 줄만 남는다.
         return {"lines": help_screen(mo, width, height), "thin": [], "head": 1,
+                "top_head": 1,
                 "marks": [], "total": help_total(), "cursor": None,
                 "hint_y": None, "status_y": None, "banner_y": None}
-    body_h = max(1, height - 3)          # 힌트 + 상태줄 + 배너
+    # 힌트 + 상태줄 + 배너 3줄, 그리고 그 위 **여백 한 줄**(자리가 있으면).
+    gap = bottom_gap(height)
+    body_h = max(1, height - 3 - gap)
     thin: list[bool] = []
     marks: list[tuple] = []
     if mo.view == "limits":
@@ -1363,14 +1539,20 @@ def screen(mo: Model, width: int, height: int) -> dict:
         lines = body
         top = 0
     else:
-        head_lines = header_lines(mo, width)
-        avail = body_h - len(head_lines)
         if mo.view == "ledger":
             lines, thin, nh = ledger_lines(mo, width)
         elif mo.view == "timeline":
             lines, thin, nh = timeline_lines(mo, width)
         else:
             lines, marks, nh = comove_lines(mo, width)
+        head_lines = header_lines(mo, width)
+        # 자리가 모자라면 **맨 위 헤더부터** 버린다(여백 다음 순서다). 예전엔
+        # 헤더 두 줄을 끝까지 지켜서 낮은 창에서 표가 **한 행도** 안 남았다 —
+        # 무엇을 보는지는 적혀 있는데 볼 것이 없었다. 뒤에서부터 버리므로
+        # 날짜 줄이 마지막까지 남는다(``flow_app.layout`` 과 같은 규율).
+        while head_lines and body_h - len(head_lines) - nh < 1:
+            head_lines = head_lines[:-1]
+        avail = body_h - len(head_lines)
         mo.row = max(0, min(mo.row, max(0, len(lines) - nh - 1)))
         view_h = max(1, avail - nh)
         if mo.view == "comove":
@@ -1379,14 +1561,17 @@ def screen(mo: Model, width: int, height: int) -> dict:
             top = max(0, min(mo.row - view_h + 1, max(0, len(lines) - nh - view_h)))
         sl = slice(nh + top, nh + top + view_h)
         total = len(lines)
-        cursor = None if mo.view == "comove" else len(head_lines) + nh + (mo.row - top)
+        # 커서가 있는 화면인지의 판정은 `Model.has_cursor` 한 곳이다 — 상태줄도
+        # 같은 것을 본다(예전엔 여기서만 알고, 상태줄은 없는 선택을 이름까지 댔다).
+        cursor = (len(head_lines) + nh + (mo.row - top)) if mo.has_cursor else None
         thin = ([False] * len(head_lines) + thin[:nh] + thin[sl]) if thin else []
         lines = lines[:nh] + lines[sl]
 
     body = head_lines + lines
     body = body[:body_h] + [pad("", width)] * max(0, body_h - len(body))
-    out = body + [pad(hint_text(mo, width), width), status_line(mo, width),
-                  banner_footer(width)]
+    out = (body + [pad("", width)] * gap
+           + [pad(hint_text(mo, width), width), status_line(mo, width),
+              banner_footer(width)])
     # 소스의 **강조** 는 읽는 사람 눈에 띄라고 쓴 표기지 화면에 나갈 글자가
     # 아니다. 문자열을 하나씩 쫓으면 다음 문구가 또 새어 나온다(동시성 헤더에서
     # 실제로 새어 나왔다) — **출구 한 곳에서** 뗀다. 폭 계산 뒤에 떼면 줄이
@@ -1398,7 +1583,10 @@ def screen(mo: Model, width: int, height: int) -> dict:
     # 이 화면의 존재 이유가 색인데 그렇다. 좌표 계산은 여기 한 곳에서 끝낸다 —
     # 앱은 받은 y 를 그대로 쓴다(더하지 마라).
     hy = len(head_lines)
-    return {"lines": out, "thin": thin, "head": hy + nh,
+    # `head` 는 **머리 전체**(맨 위 헤더 + 표의 열 이름)이고, `top_head` 는 그 중
+    # 맨 위 헤더 줄 수다. 앱이 두 자리를 다른 색으로 칠하려면 경계를 알아야 하는데,
+    # 문자열을 다시 뜯어 맞히면 문구를 고칠 때 조용히 어긋난다.
+    return {"lines": out, "thin": thin, "head": hy + nh, "top_head": hy,
             "marks": [(hy + y - top, x, w, lv) for y, x, w, lv in marks
                       if hy + nh <= hy + y - top < body_h],
             "total": total, "cursor": cursor, "hint_y": height - 3,
