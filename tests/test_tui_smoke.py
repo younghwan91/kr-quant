@@ -476,6 +476,72 @@ def test_hint_bar_explains_the_column_being_sorted():
     assert "순매수" in hint_text(st), hint_text(st)
 
 
+def _snap(st: State) -> tuple:
+    """키 하나가 무엇을 바꿨는지 볼 상태 사진."""
+    return (st.wi, st.mi, st.ai, st.si, st.nsi, st.row, st.drow,
+            st.drill, st.help, st.hrow, st.rev, st.nrev)
+
+
+def test_hangul_jamo_keys_do_what_their_latin_twins_do():
+    """한영을 켜 두면 `w` 가 `ㅈ` 으로 도착해 아무 일도 안 했다.
+
+    두벌식은 자판 **자리** 대응이라 같은 자리는 같은 일을 해야 한다. 화면
+    표기는 영문 그대로다(사용자가 한글 병기를 원하지 않았다).
+
+    주입: `normalize_key` 가 자모를 그대로 `ord` 하면 전부 실패한다.
+    """
+    from kr_quant.tui.flow_app import normalize_key
+
+    pairs = [("ㅂ", "q"), ("ㅈ", "w"), ("ㅉ", "W"), ("ㄱ", "r"), ("ㄲ", "R"),
+             ("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m"),
+             ("ㅗ", "h"), ("ㅓ", "j"), ("ㅏ", "k"), ("ㅣ", "l")]
+    for jamo, latin in pairs:
+        for drill in (False, True):
+            a, b = _st(), _st()
+            a.drill = b.drill = drill
+            # 커서를 가운데로 — 0 에서는 위·아래가 둘 다 제자리라 j/k 가 안 갈린다.
+            a.row = b.row = 1
+            a.drow = b.drow = 0
+            ka = handle_key(a, normalize_key(jamo))
+            kb = handle_key(b, ord(latin))
+            assert (ka, _snap(a)) == (kb, _snap(b)), (
+                f"{jamo!r} 가 {latin!r} 와 다르게 동작한다(드릴{drill})")
+    # 첫가끝 자모(U+11xx)로 보내는 IME 도 있다 — 둘 다 받는다.
+    assert normalize_key("\u110c") == ord("w")
+
+
+def test_hangul_cannot_tell_some_capitals_apart_so_they_fall_back(): 
+    """두벌식에서 Shift 로 다른 글자가 나오는 자음은 `ㅂㅈㄷㄱㅅ` 뿐이다.
+
+    `A`·`S`·`G`·`M` 은 Shift 를 눌러도 같은 자모라, 터미널에 도착한 뒤에는
+    구분할 정보가 **이미 없다.** 앱이 할 수 있는 일은 소문자 동작으로 떨어뜨리는
+    것뿐이고, 그 사실은 주석과 도움말에 적혀 있어야 한다.
+    """
+    from kr_quant.tui.flow_app import normalize_key
+    from kr_quant.tui.flow_view import HELP
+
+    for jamo, latin in (("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m")):
+        assert normalize_key(jamo) == ord(latin), f"{jamo!r} 가 소문자로 안 떨어진다"
+    # 구분되는 쪽은 역방향이 살아 있어야 한다 — 그게 없으면 한글에서 정렬을
+    # 되돌릴 길이 아예 없어진다.
+    a, b = _st(), _st()
+    handle_key(a, normalize_key("ㅈ"))
+    handle_key(b, normalize_key("ㅉ"))
+    assert a.wi != b.wi, "ㅈ 과 ㅉ 이 같은 방향으로 돈다"
+    said = " ".join(n + " " + d for n, d in HELP)
+    assert "한영" in said, "한글 상태에서도 듣는다는 사실이 화면 어디에도 없다"
+
+
+def test_the_screen_never_prints_the_hangul_keys():
+    """한글 키를 **적지는** 않는다 — 사용자가 병기를 원하지 않았다."""
+    from kr_quant.tui.flow_view import FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP
+
+    text = " ".join(FOOTER_TIERS + FOOTER_DRILL_TIERS
+                    + tuple(n + " " + d for n, d in HELP))
+    for jamo in "ㅂㅈㅉㄱㄲㅁㄴㅎㅡㅗㅓㅏㅣ":
+        assert jamo not in text, f"화면에 자모 {jamo!r} 가 적혀 있다"
+
+
 def test_footer_grows_and_shrinks_with_the_width():
     """푸터가 한 줄 고정이라 넓은 화면에서 절반이 비고 좁은 화면에서 잘렸다."""
     from kr_quant.tui.flow_view import cell_len as _w, footer_line

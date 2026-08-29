@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import curses
 import json
+import locale
 import os
 import re
 from collections import namedtuple
@@ -448,6 +449,76 @@ def _toggle_rev(st: State) -> None:
         st.rev = not st.rev
 
 
+# --- 한글 입력 상태의 키 ---------------------------------------------------
+#
+# 한영을 켜 둔 채 `w` 를 누르면 터미널에는 `ㅈ` 이 들어온다. 예전엔 그 순간
+# 아무 일도 안 일어났다 — 화면을 보다가 정렬 하나 바꾸려면 한영을 껐다 켜야
+# 했다. 두벌식은 자판 **자리** 대응이라 `w`→`ㅈ` 는 기계적이고, 그 대응만
+# 넣으면 한글 상태에서도 같은 키가 같은 일을 한다.
+#
+# ⚠️ **대문자 역방향은 절반이 원리적으로 불가능하다.** 두벌식에서 Shift 로
+# 다른 글자가 나오는 자음은 `ㅂㅈㄷㄱㅅ`(→`ㅃㅉㄸㄲㅆ`)뿐이다. 그래서
+# `W`(=`ㅉ`)·`R`(=`ㄲ`)은 구분되지만 `A`·`S`·`G`·`M` 은 Shift 를 눌러도
+# `ㅁ`·`ㄴ`·`ㅎ`·`ㅡ` 그대로라 소문자와 **같은 글자**가 온다. 터미널에 도착한
+# 뒤에는 정보가 이미 없으므로 앱이 할 수 있는 일이 없다. 구분 안 되는 것은
+# 소문자 동작으로 떨어뜨린다 — 나중에 "한글에서 A 가 왜 안 되냐" 를 묻는
+# 사람은 이 주석이 답이다. (정렬 역순은 `r`(`ㄱ`)이 있고, 목록 끝은 `End` 가
+# 있다. 즉 한글 상태에서 못 하는 것은 **역방향 순회**뿐이다.)
+#
+# 실측(pty 에 UTF-8 을 그대로 흘려 넣어 확인): `getch` 는 `ㅈ` 을 227·133·136
+# 세 바이트로 쪼개 준다 — 그래서 `ord("w")` 와 비교하는 구조로는 **절대**
+# 안 잡힌다. `get_wch` 는 `'ㅈ'`(U+3148) 한 글자로 준다. 그래서 입력 루프만
+# `get_wch` 로 옮기고(:func:`_read_key`), `handle_key` 는 여전히 int 를 받는다 —
+# 키 하나가 무엇을 했는지 보는 검사 수십 개가 `ord("w")` 를 넘기고 있고,
+# 그 규약을 흔드는 것보다 **경계에서 정규화**하는 편이 변경면적이 작다.
+#
+# 호환 자모(U+31xx)와 첫가끝 자모(U+11xx)를 **둘 다** 받는다. 리눅스 ibus 는
+# 앞의 것을 보내지만(실측) IME·터미널 조합마다 다르고, 표 하나 더 적는 값이
+# 싸다. 완성형 음절(`자`)은 안 건드린다 — 자음+모음이 조합된 것이라 어느
+# 키를 누른 것인지가 한 가지로 정해지지 않는다.
+JAMO_TO_ASCII = {
+    # 구분되는 것 — Shift 로 쌍자음이 나오는 자리
+    "ㅂ": "q", "ㅃ": "q", "ㅈ": "w", "ㅉ": "W", "ㄱ": "r", "ㄲ": "R",
+    # 구분 안 되는 것 — 소문자 동작으로 떨어진다
+    "ㅁ": "a", "ㄴ": "s", "ㅎ": "g", "ㅡ": "m",
+    # vim 이동
+    "ㅗ": "h", "ㅓ": "j", "ㅏ": "k", "ㅣ": "l",
+    # 첫가끝 자모(U+11xx) — 같은 자리를 다른 코드로 보내는 IME 대비
+    "\u1107": "q", "\u1108": "q", "\u110c": "w", "\u110d": "W",
+    "\u1100": "r", "\u1101": "R", "\u1106": "a", "\u1102": "s",
+    "\u1112": "g", "\u1173": "m", "\u1169": "h", "\u1165": "j",
+    "\u1161": "k", "\u1175": "l",
+}
+
+
+def normalize_key(k) -> int:
+    """`get_wch` 가 준 것을 `handle_key` 가 아는 **int** 로.
+
+    특수키는 이미 int 로 온다(방향키·PgUp·F1). 글자는 한 글자 문자열로 오는데,
+    한글 자모면 두벌식에서 같은 자리인 ASCII 키로 바꾼다. 나머지는 그대로
+    `ord` 다 — 모르는 글자는 `handle_key` 가 어느 분기에도 안 걸려 무시한다.
+    """
+    if isinstance(k, int):
+        return k
+    if not k:
+        return -1
+    return ord(JAMO_TO_ASCII.get(k, k)) if len(k) == 1 else -1
+
+
+def _read_key(scr) -> int:
+    """키 하나 — 한글 자모까지 온전한 한 글자로 받아 int 로 정규화한다.
+
+    `get_wch` 는 `getch` 의 ERR(-1) 자리에 **예외**(`curses.error`)를 쓴다.
+    터미널이 사라졌을 때(SSH 끊김·창 닫힘) 그걸 아무 분기에도 안 태우면
+    draw→읽기→실패 로 100% CPU 를 태우며 영원히 돈다 — 끊긴 세션마다 서버에
+    좀비가 쌓인다. 그래서 예외를 예전과 **같은 뜻의 -1** 로 되돌린다.
+    """
+    try:
+        return normalize_key(scr.get_wch())
+    except curses.error:
+        return -1
+
+
 def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
     """키 하나를 상태에 적용한다. 계속 돌면 True, 종료면 False.
 
@@ -572,7 +643,7 @@ def _loop(scr, data: dict) -> None:
     while True:
         _draw(scr, st)
         try:
-            k = scr.getch()
+            k = _read_key(scr)
         except KeyboardInterrupt:
             return
         h, _w = scr.getmaxyx()
@@ -582,6 +653,13 @@ def _loop(scr, data: dict) -> None:
 
 
 def main() -> None:
+    # `get_wch` 가 한글을 한 글자로 주려면 로케일이 **와이드 문자를 아는** 상태여야
+    # 한다. 파이썬은 C 로케일로 시작하므로 여기서 사용자 환경을 따라간다 —
+    # 안 하면 `ㅈ` 이 다시 바이트로 쪼개진다. 실패해도 앱은 뜬다(영문 키는 듣는다).
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        pass
     ap = argparse.ArgumentParser(description="섹터 자금흐름 TUI")
     ap.add_argument("--dir", default=DEFAULT_DIR, help="리포트 폴더")
     a = ap.parse_args()
