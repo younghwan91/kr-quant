@@ -31,7 +31,8 @@ import os
 import random
 
 from kr_quant.tui.flow_view import (
-    MARKET_ORDER, cell_len, cell_width, fmt_amt, pad, tier_for)
+    HELP_TITLE_TIERS, MARKET_ORDER, cell_len, cell_width, fmt_amt, help_desc,
+    help_lines, hint_line, pad, tier_for)
 
 ACTORS = (("indiv", "개인"), ("forgn", "외국인"), ("inst", "기관"), ("etc", "기타법인"))
 ACTOR_KEYS = tuple(k for k, _ in ACTORS)
@@ -92,10 +93,18 @@ def load(report_dir: str) -> dict:
             f"  리포트를 다시 생성하라 — scripts/daily_report.sh") from None
     # 방어가 행 수준(.get)에만 있으면 문서가 통째로 다른 형식일 때 curses 안에서
     # 생 트레이스백으로 터진다. 문 앞에서 잡는다.
-    missing = [k for k in ("dates", "sectors", "markets", "flows") if not d.get(k)]
+    # ⚠️ 여기서 안 보는 키는 나중에 **대괄호로** 집힌다 — `cap`·`n_by_sector` 가
+    # 없으면 curses 안에서 생 KeyError 로 터진다. 문 앞 검사는 대괄호로 집는
+    # 것들과 같은 목록이어야 한다.
+    missing = [k for k in ("dates", "sectors", "markets", "flows", "cap",
+                           "n_by_sector") if not d.get(k)]
     if missing:
         raise SystemExit(f"{path} 의 데이터에 없는 키: {', '.join(missing)} — "
                          f"리포트 형식이 바뀌었나?\n  있는 키: {sorted(d)}")
+    no_flow = [m for m in d["markets"] if m not in d["flows"]]
+    if no_flow:
+        raise SystemExit(f"{path}: 시장 {', '.join(no_flow)} 의 흐름이 없다 — "
+                         f"markets 와 flows 가 어긋난다.")
     return d
 
 
@@ -203,6 +212,11 @@ class Model:
         self.row = 0
         self.hrow = 0
         self.detrend = False
+        # 도움말은 **화면이 아니라 겹쳐 뜨는 모달**이다. VIEWS 에 넣으면 v 로
+        # 순환할 때 끼어들어 표 사이를 오가는 손버릇을 망가뜨리고, 닫았을 때
+        # 어디로 돌아갈지도 정해지지 않는다.
+        self.help = False
+        self.help_row = 0
         self._corr_cache: dict = {}
         self._null_cache: dict = {}
 
@@ -449,6 +463,33 @@ def col_span(cols, header: str) -> tuple[int, int] | None:
     return None
 
 
+#: 좁아서 표를 못 그릴 때의 안내 — 넓은 것부터. 잘린 안내는 안내가 아니다.
+#: 예전엔 한 줄 고정이라 `pad` 가 잘랐고, 하필 **전개 안내는 어떤 폭에서도**
+#: 온전히 안 나왔다(54칸이 필요한데 48칸 미만에서만 뜨는 문구였다).
+LEDGER_NARROW_TIERS = (
+    " 4주체와 잔여는 함께 봐야 한다(잔여 = −Σ4주체). 창을 넓혀라.",
+    " 4주체와 잔여는 함께 봐야 한다. 창을 넓혀라.",
+    " 잔여는 4주체와 같이 봐야 한다.",
+    " 창을 넓혀라",
+    " 좁다",
+)
+TIMELINE_NARROW_TIERS = (
+    " 스파크라인이 잘리면 구간의 일부를 전부인 척 보여준다.",
+    " 잘린 스파크라인은 일부를 전부인 척한다.",
+    " 잘린 그림은 거짓말을 한다.",
+    " 창을 넓혀라",
+    " 좁다",
+)
+
+
+def _too_narrow(what: str, width: int, minw: int) -> str:
+    """"안 그리는 이유" 첫 줄 — 폭에 맞춰 단계별로."""
+    return tier_for((f" 폭이 {width}칸이라 {what} 안 그린다 — 최소 {minw}칸.",
+                     f" {what} 안 그린다 — 최소 {minw}칸",
+                     f" {what} 안 그린다({minw}칸)",
+                     f" 최소 {minw}칸", " 좁다"), width)
+
+
 def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     """(행, 얇은섹터 여부, 헤더 줄 수).
 
@@ -457,10 +498,9 @@ def ledger_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     안 된다. 행렬은 같은 정보를 주면서 정렬·비교·정확한 수치를 동시에 준다.
     """
     if width < LEDGER_MIN_W:
-        return ([pad(f" 폭이 {width}칸이라 원장을 안 그린다 — 최소 {LEDGER_MIN_W}칸.",
-                     width),
-                 pad(" 4주체와 잔여는 함께 봐야 한다(잔여 = −Σ4주체). 창을 넓혀라.",
-                     width)], [False, False], 2)
+        return ([pad(_too_narrow("원장을", width, LEDGER_MIN_W), width),
+                 pad(tier_for(LEDGER_NARROW_TIERS, width), width)],
+                [False, False], 2)
     # 폭이 모자라면 **열 경계에서** 떨어뜨린다. 줄을 통째로 자르면 숫자가
     # 자릿수 중간에서 끊겨 -1,360 이 -1 로 보인다 — 안 보이는 것보다 나쁘다.
     cols = _fit(ledger_cols(), width)
@@ -508,9 +548,8 @@ def timeline_lines(mo: Model, width: int) -> tuple[list[str], list[bool], int]:
     ``진폭[억]`` 열을 옆에 둔다 — 그림의 세로 눈금이 행마다 다르다는 걸 숫자가 알려준다.
     """
     if width < TIMELINE_MIN_W:
-        return ([pad(f" 폭이 {width}칸이라 전개를 안 그린다 — 최소 {TIMELINE_MIN_W}칸.",
-                     width),
-                 pad(" 스파크라인이 잘리면 구간의 일부를 전부인 척 보여준다.", width)],
+        return ([pad(_too_narrow("전개를", width, TIMELINE_MIN_W), width),
+                 pad(tier_for(TIMELINE_NARROW_TIERS, width), width)],
                 [False, False], 2)
     cols = _fit([_col("섹터", 13, False), _col("", 1, False),
                  _col("누적[억]", 11), _col("진폭[억]", 11)], width)
@@ -712,6 +751,197 @@ def limits_lines(width: int, top: int, height: int) -> tuple[list[str], int]:
     return body[top:top + height], len(body)
 
 
+# ---------------------------------------------------------------- 도움말 · 힌트
+
+#: 라벨 열의 표시 폭. ``기타법인[억]``(12칸)이 잘리지 않는 최소값이다.
+#: ⚠️ ``flow_view.HELP`` 는 아직 10 이라 ``순매수상위[억]`` 이 ``순매수상위`` 로
+#: 잘려 있다 — 그쪽은 이어쓰기 들여쓰기가 10 에 맞춰져 있어 같이 옮겨야 한다.
+HELP_LABEL_W = 12
+
+#: 원장 도움말 — **키와 열의 뜻**. 렌더는 ``flow_view.help_lines`` 가 한다.
+#: 형식은 ``(이름, 설명)``, 이름이 비면 앞 항목의 이어쓰기다(``kq-flow`` 와 같다).
+#:
+#: 한계(:data:`LIMITS`)는 여기 안 옮긴다. 둘은 답하는 질문이 다르다 —
+#: 도움말은 **"이 숫자가 뭐냐"**, 한계는 **"이 숫자가 무엇을 주장하지 않느냐"** 다.
+#: 한 모달에 합치면 60줄이 넘어 키를 찾으러 온 사람이 스크롤을 세 번 해야 하고,
+#: 한계는 지금 **스스로 화면 하나**(v 로 도달)라서 옮기면 그 화면이 빈다.
+LEDGER_HELP = [
+    ("", "── 키 ──"),
+    ("↑↓ j k", "한 줄 이동. Home 맨 위 · Space·PgDn 한 화면 아래 · PgUp 위."),
+    ("v V", "화면 바꾸기 — 원장·전개·동시성·한계. 대문자는 역방향."),
+    ("w W", "구간 5·20·60·120·260 거래일. 대문자는 역방향."),
+    ("m M", "시장 전체·거래소·코스닥. 대문자는 역방향."),
+    ("a A", "주체 개인·외국인·기관·기타법인. 대문자는 역방향."),
+    ("", "           고른 주체만 막대·최대1일·전개·동시성에 쓰인다. 원장 표의"),
+    ("", "           금액 열 넷은 주체 선택과 무관하게 늘 넷 다 나온다."),
+    ("s S", "정렬 절대크기·선택주체·섹터명·최대1일·종목수. 대문자는 역방향."),
+    ("", "           역순 토글은 없다 — 섹터명만 오름차순, 나머지는 내림차순이다."),
+    ("d", "동시성 화면의 β제거 토글. 다른 화면에서는 아무 일도 하지 않는다."),
+    ("? F1", "이 도움말. 안에서 ↑↓·PgUp/PgDn·g·G 로 훑고, q·Esc·?·Enter 로"),
+    ("", "           닫는다. 도움말은 겹쳐 뜨는 모달이라 뒤의 화면은 그대로 있다."),
+    ("q", "종료. 단 도움말 안에서는 **닫기만** 한다(한 번 더 눌러야 종료)."),
+    ("Esc", "종료가 **아니다** — 느린 SSH 에서 방향키가 Esc 와 나머지로 쪼개져"),
+    ("", "           도착하면(ESCDELAY 기본 1초) ↓ 를 눌렀을 뿐인데 앱이 끝난다."),
+    ("", ""),
+    ("", "── 화면 (v) ──"),
+    ("원장", "주체 × 섹터 순매수 표. 행이 섹터, 열이 주체다. 간선 하나하나가"),
+    ("", "           실측인 **이분 그래프의 인접행렬**이다."),
+    ("전개", "섹터별 **누적** 순매수 스파크라인 — 구간 안에서 언제 들어왔나."),
+    ("동시성", "섹터쌍 상관 히트맵 + 순환이동 널. 같이 움직였나만 본다."),
+    ("한계", "이 화면이 주장하지 않는 것 여덟 가지. ↑↓ 로 스크롤한다."),
+    ("", "           도움말과 답하는 질문이 다르다 — 여기는 뜻, 저기는 주장의 범위다."),
+    ("", ""),
+    ("", "── 원장 열 ──"),
+    ("섹터", "벤더 분류(stocks.sector). KRX 업종 분류와 다르다."),
+    ("~", "그 (시장,섹터)의 종목이 10개 미만 — '섹터'로 읽으면 안 된다"),
+    ("", "           (부동산 3종목). 색이 없어도 남도록 **글자로 둔** 1칸 열이다."),
+    ("개인[억]", "구간 누적 순매수 [억원] = Σ(그날 순매매 수량 × 그날 종가)."),
+    ("", "           DB 는 **수량만** 주므로 금액은 종가 환산 근사다(참값은 VWAP"),
+    ("", "           가중). 방향과 상대 크기를 보는 값이지 원 단위 정확도가 아니다."),
+    ("외국인[억]", "같은 계산. 롱온리 자금과 헤지 북이 이 한 칸에 같이 들어 있다."),
+    ("기관[억]", "같은 계산. 금투·보험·투신·은행·연기금·사모의 합이다."),
+    ("기타법인[억]", "같은 계산. 일반 법인이다 — 빼면 그만큼 잔여로 넘어간다."),
+    ("잔여[억]", "**오차가 아니라 다섯 번째 주체다.** 이름에 속지 마라 — 한국어에서"),
+    ("", "           '잔여'는 나머지·오차로 읽히지만 이 값은 KRX 주체 분류 중 우리가"),
+    ("", "           안 싣는 주체(기타외국인 등)의 **순매수 추정치**다."),
+    ("", "           식은 −(개인+외국인+기관+기타법인). 전 주체의 순매수 합은 수량"),
+    ("", "           기준으로 정확히 0 이라, 가진 넷의 합을 뒤집으면 나머지가 된다."),
+    ("", "           결측·종가환산 오차도 여기 섞여 든다."),
+    ("", "           4주체에 안분해 0 으로 만들지 않는다 — 그러면 **측정되지 않은**"),
+    ("", "           **주체가 측정된 주체의 옷을 입는다.**"),
+    ("", "           크기는 분모를 정해야 말할 수 있다(260일 실측): 거래대금 대비"),
+    ("", "           0.0076%, (시장,섹터,일) 칸의 gross 가중 평균 0.330%. 다만 그건"),
+    ("", "           평균이고 **최악의 한 칸은 37.7%** 다(거래소/금속/2026-04-07)."),
+    ("최대1일[%]", "그 구간 총량 중 **하루가 차지한 비중** = max|일별| ÷ Σ|일별| × 100."),
+    ("", "           분자·분모 모두 **고른 주체·고른 시장**의 값이고 부호는 절댓값으로"),
+    ("", "           죽인다. 매일 고르게 들어왔다면 100 ÷ 구간일수 다 — 20일이면 5%."),
+    ("", "           그래서 17.9%(20일 전기/전자 개인, 실측)는 **추세가 아니라 사건**"),
+    ("", "           이라는 뜻이다. 하루짜리 블록딜 하나로 구간 합이 만들어진다."),
+    ("", "           구간 총량이 0 이면 '—' 다."),
+    ("종목[수]", "그 (시장,섹터)의 상장 종목 수. 10 미만이면 ~ 마커가 붙는다."),
+    ("절대크기", "정렬 전용 값 — Σ|4주체|. 열로는 안 보인다. 부호를 지우고 더하므로"),
+    ("", "           서로 반대로 큰 주체가 있는 섹터가 위로 온다."),
+    ("막대", "오른쪽 끝의 '−  주체  +' 열 — 고른 주체의 순매수. 한쪽 끝이 지금"),
+    ("", "           화면 안의 최대 절댓값이라 **화면이 바뀌면 눈금도 바뀐다.**"),
+    ("", "           반칸(▌▐) 해상도이고 넘치면 끝 칸이 █ 로 찬다. 폭이 좁으면"),
+    ("", "           아예 안 그린다."),
+    ("", ""),
+    ("", "── 전개 열 ──"),
+    ("누적[억]", "구간 누적 순매수 [억원] — 고른 주체. 원장의 그 주체 칸과 같다."),
+    ("진폭[억]", "누적 경로의 최고−최저 [억원]. 늘 양수라 부호를 안 붙인다."),
+    ("", "           스파크라인의 눈금이 행마다 다르다는 걸 이 숫자가 알려준다."),
+    ("추이", "구간 동안 순매수가 **누적된 경로**. 왼쪽이 구간 시작, 오른쪽이 끝이다."),
+    ("", "           올라가면 들어오는 중 · 내려가면 빠져나가는 중 · 평평하면 멈췄다."),
+    ("", "           높이는 **그 행 안에서** 최저~최고를 8단계(▁▂▃▄▅▆▇█)에 편 것이라"),
+    ("", "           **행끼리 비교되지 않는다** — 크기는 진폭[억] 열이 말한다."),
+    ("", "           구간이 칸보다 길면 묶어서 각 묶음의 **끝점**을 찍는다(앞을 안 버린다)."),
+    ("", ""),
+    ("", "── 동시성 ──"),
+    ("칸", "두 섹터의 상관 = 부호 + 세기(·░▒▓█). +█ 은 같이 샀다/팔았다,"),
+    ("", "           -█ 은 반대로 갔다. 세기는 |r| 0.1 마다 한 단계, 0.5 이상이 █ 이다."),
+    ("", "           색은 **보조**다 — 부호를 글자에 박아 무색·평문에서도 남는다."),
+    ("상관", "섹터 시총으로 나눈 일별 흐름(%p)의 피어슨 상관. 고른 주체·구간."),
+    ("", "           구간이 20일 미만이면 상관을 아예 내지 않는다."),
+    ("널", "각 계열을 **무작위로 순환이동**해 20번 다시 잰 음의 상관 쌍 비율."),
+    ("", "           순수 노이즈면 50% 다. **주체마다 다르다** — 개인·기관·외국인은"),
+    ("", "           17~34% 로 널보다 낮다(섹터는 반대가 아니라 **같이** 움직인다)."),
+    ("", "           기타법인은 45~54% 로 **널과 구분되지 않는다.** 판정줄이 화면에서"),
+    ("", "           그때그때 말해 주니 숫자를 외우지 말고 그 줄을 읽어라."),
+    ("", "           그리고 상관은 **동시성이지 이동이 아니다.** 돈에 꼬리표가 없다."),
+    ("β제거 (d)", "시총가중 시장요인을 회귀로 뺀 잔차. 기본은 꺼둔다 — 켜면 가장 음인"),
+    ("", "           쌍이 전부 전기/전자↔나머지라 **구성적 인공물**과 구분이 안 된다."),
+    ("", ""),
+    ("", "── 알아둘 것 ──"),
+    ("", "· 관측되는 것은 (날짜, 시장, 섹터, 주체)의 순매수 금액뿐이다."),
+    ("", "  섹터→섹터 이동과 주체→주체 이전은 **그리지 않는다** — 주변합으로는"),
+    ("", "  쌍별 흐름이 결정되지 않는다. v 로 '한계' 화면에 자세히 적었다."),
+    ("", "· '순매수'는 소유권 이전이지 시장에 자금이 들어온 것이 아니다."),
+    ("", "· 생존편향 — 폐지 종목의 마지막 흐름이 빠져 있다. 크기는 거래대금의"),
+    ("", "  0.152%(기관 gross 의 0.33%)이고, **코스닥이 아니라 거래소에서 크다**"),
+    ("", "  (거래소 0.195% vs 코스닥 0.046%). 종목 수는 코스닥이 많지만(53 vs 20)"),
+    ("", "  빠진 **금액**은 거래소가 4배다. 한계 화면 7번은 아직 옛 문장이다."),
+    ("", "· 숫자는 리포트 폴더의 payload.json 그대로다. numbers.html 과 같은 값이다."),
+]
+
+
+def help_body(width: int, offset: int = 0, height: int = 10**6):
+    """도움말 본문 — 렌더는 ``flow_view.help_lines`` 를 **그대로** 쓴다.
+
+    ``kq-flow`` 와 ``kq-ledger`` 는 같은 제품이다. 도움말 렌더가 두 벌이면
+    라벨 폭·이어쓰기 들여쓰기·``**`` 떼기·스크롤 하한이 반드시 갈라진다 —
+    이 저장소는 오늘 폭 단계 고르기가 네 벌로 갈라져 있던 걸 하나로 합쳤다.
+    **내용만** 다르고 기제는 하나다.
+    """
+    return help_lines(width, offset, height, LEDGER_HELP, HELP_TITLE_TIERS,
+                      label_w=HELP_LABEL_W)
+
+
+def help_total() -> int:
+    """도움말 전체 줄 수 — 스크롤 하한. 폭과 무관한 항목 수다."""
+    return len(LEDGER_HELP)
+
+
+HELP_FOOT_TIERS = (
+    " ↑↓/PgDn:스크롤  Home:처음  q·Esc·?·Enter:닫기 (종료는 닫은 뒤 q 를 한 번 더)",
+    " ↑↓/PgDn:스크롤  q·Esc·?:닫기 (종료는 한 번 더)",
+    " ↑↓:스크롤  q:닫기(종료는 한 번 더)",
+    " q:닫기(종료는 한 번 더)",
+    " q:닫기",
+)
+
+
+def help_screen(mo: "Model", width: int, height: int) -> list[str]:
+    """전면 도움말 — 정확히 ``height`` 줄. 제목·본문·위치표시 푸터."""
+    lines, total = help_body(width, mo.help_row, max(1, height - 1))
+    shown = max(0, len(lines) - 1)
+    pos = f"  {mo.help_row + 1}-{mo.help_row + shown} / {total}"
+    foot = tier_for(HELP_FOOT_TIERS, max(0, width - cell_len(pos))) + pos
+    out = lines + [pad("", width)] * max(0, height - 1 - len(lines))
+    return out[:height - 1] + [pad(foot, width)]
+
+
+#: 정렬 키 → 도움말 항목 이름. 열이 없는 정렬(절대크기)도 항목이 있다.
+_SORT_HELP = {"abs": "절대크기", "name": "섹터",
+              "spike": "최대1일[%]", "n": "종목[수]"}
+
+#: 동시성 화면의 힌트 — 정렬이 없는 화면이라 열 대신 **읽는 법**을 말한다.
+HINT_COMOVE_TIERS = (
+    " 동시성이지 이동이 아니다 — 같이 갔다는 사실일 뿐이다 · d 로 β제거 · ? 로 설명",
+    " 동시성이지 이동이 아니다 · d 로 β제거 · ? 로 설명",
+    " 동시성 ≠ 이동 · ? 로 설명",
+    " 동시성 ≠ 이동 · ?",
+    " ? 로 설명",
+)
+#: 한계 화면의 힌트.
+HINT_LIMITS_TIERS = (
+    " 한계 — ↑↓ 로 스크롤 · v 로 표로 돌아간다 · ? 는 키와 열의 뜻(다른 화면이다)",
+    " 한계 — ↑↓ 스크롤 · v 로 표 · ? 는 키와 열",
+    " 한계 — ↑↓ 스크롤 · ? 는 키와 열",
+    " ↑↓ 스크롤 · ? 키와 열",
+    " ? 키와 열",
+)
+
+
+def hint_text(mo: "Model", width: int) -> str:
+    """푸터 위 **항상 보이는 한 줄** — 지금 줄세운 열의 뜻.
+
+    ``?`` 는 전면 모달이라 "이 숫자가 뭐냐" 를 물은 사람이 **그 숫자를 보면서**
+    답을 읽을 수 없다. ``kq-flow`` 가 같은 이유로 힌트바를 뒀다. 원장에도 맞는가 —
+    맞다. 상태줄은 커서가 놓인 **행의 값**을 말하지 그 열이 **무슨 뜻인지**는
+    말하지 않는데, 원장에서 설명이 가장 필요한 두 열(``잔여``·``최대1일``)이
+    바로 이름만으로는 오해되는 열이다.
+    """
+    if mo.view == "comove":
+        return tier_for(HINT_COMOVE_TIERS, width)
+    if mo.view == "limits":
+        return tier_for(HINT_LIMITS_TIERS, width)
+    key = mo.sort_key
+    header = _SORT_HELP.get(key) or f"{mo.actor_ko}[억]"
+    arrow = "▲" if key == "name" else "▼"
+    desc = help_desc(LEDGER_HELP, header) or "? 로 설명"
+    return hint_line(f" 정렬 {header}{arrow}", desc, width)
+
+
 def status_line(mo: Model, width: int) -> str:
     """커서가 놓인 칸의 전체 수치 — 터미널에 툴팁이 없으니 상태줄이 그 자리다."""
     r = mo.selected()
@@ -725,7 +955,52 @@ def status_line(mo: Model, width: int) -> str:
     return pad(" " + " · ".join(parts), width)
 
 
-FOOTER = " v화면 w구간 m시장 a주체 s정렬 d β제거 ↑↓ ?한계 q종료"
+#: 푸터 — 폭에 맞춰 **단계별로** 줄인다. 예전엔 한 줄 고정이라 배너와 이어 붙인
+#: 뒤 문자 슬라이스로 잘랐고, 폭 80(SSH 기본)에서는 배너만으로 76칸이라 푸터가
+#: 통째로 사라졌다. 어느 단계에서도 ``?`` 는 남긴다 — 줄어든 안내가 "여기가 전부"
+#: 로 읽히면 안 된다(``flow_view.footer_line`` 과 같은 규칙).
+FOOTER_TIERS = (
+    " v/V:화면 w/W:구간 m/M:시장 a/A:주체 s/S:정렬 d:β제거 ↑↓:섹터"
+    " ?:도움말 q:종료",
+    " v:화면 w:구간 m:시장 a:주체 s:정렬 d:β제거 ↑↓ ?:도움말 q:종료",
+    " v화면 w구간 m시장 a주체 s정렬 ?:도움말 q:종료",
+    " v w m a s:바꾸기 ?:도움말 q:종료",
+    " ?:도움말 q:종료",
+    " ?:키 q:종료",
+)
+#: 예전 이름 — 중간 단계가 기본이다.
+FOOTER = FOOTER_TIERS[1]
+
+
+def footer_line(width: int) -> str:
+    """폭에 **온전히** 들어가는 가장 자세한 푸터."""
+    return tier_for(FOOTER_TIERS, width)
+
+
+def banner_footer(width: int) -> str:
+    """마지막 줄 — 배너(본문) + 푸터(키). 정확히 ``width`` 칸.
+
+    예전엔 앱이 ``(" " + BANNER + "   " + FOOTER)[:w]`` 로 **문자 슬라이스**해
+    붙였다. 두 가지가 틀렸다 — (1) 폭 80(SSH 기본)에서 배너만으로 77칸이라
+    푸터가 통째로 사라져 ``?`` 가 화면 어디에도 없었고, (2) 문자 수로 자르니
+    한글이 섞인 줄에서 표시 칸과 어긋났다.
+
+    배너가 **먼저** 자리를 잡는다(이 화면이 존재하는 이유가 그 경고다). 그래도
+    푸터가 한 단계도 못 들어가면 배너를 한 단계 줄인다 — 배너는 어느 단계에서도
+    "미관측" 을 지키므로 줄여도 경고는 남지만, 키는 없으면 아예 못 찾는다.
+    """
+    short = FOOTER_TIERS[-1]
+    ban = banner_for(width)
+    room = width - 1 - cell_len(ban) - 2
+    if room < cell_len(short):
+        for b in BANNER_TIERS:
+            r = width - 1 - cell_len(b) - 2
+            if r >= cell_len(short):
+                ban, room = b, r
+                break
+        else:
+            return pad(" " + ban, width)
+    return pad(" " + ban + "  " + tier_for(FOOTER_TIERS, room), width)
 
 
 def screen(mo: Model, width: int, height: int) -> dict:
@@ -738,8 +1013,14 @@ def screen(mo: Model, width: int, height: int) -> dict:
     동시성은 색칠 지시). 튜플로 돌려주면 호출부가 화면 종류를 알고 언패킹해야 해서
     "무엇을 그릴지"가 앱으로 새어 나간다.
     """
-    height = max(4, height)
-    body_h = height - 2                  # 상태줄 + 배너
+    height = max(4, height)          # 본문 1줄 + 힌트·상태줄·배너 3줄
+    if mo.help:
+        # 도움말은 **전면**이다. 표 위에 반쯤 겹치면 가리는 줄이 하필 지금 읽던
+        # 줄이고, 좁은 SSH 창에서는 설명이 두세 줄만 남는다.
+        return {"lines": help_screen(mo, width, height), "thin": [], "head": 1,
+                "marks": [], "total": help_total(), "cursor": None,
+                "hint_y": None, "status_y": None, "banner_y": None}
+    body_h = max(1, height - 3)          # 힌트 + 상태줄 + 배너
     thin: list[bool] = []
     marks: list[tuple] = []
     if mo.view == "limits":
@@ -772,15 +1053,23 @@ def screen(mo: Model, width: int, height: int) -> dict:
 
     body = head_lines + lines
     body = body[:body_h] + [pad("", width)] * max(0, body_h - len(body))
-    out = body + [status_line(mo, width), pad(" " + banner_for(width), width)]
+    out = body + [pad(hint_text(mo, width), width), status_line(mo, width),
+                  banner_footer(width)]
     # 소스의 **강조** 는 읽는 사람 눈에 띄라고 쓴 표기지 화면에 나갈 글자가
     # 아니다. 문자열을 하나씩 쫓으면 다음 문구가 또 새어 나온다(동시성 헤더에서
     # 실제로 새어 나왔다) — **출구 한 곳에서** 뗀다. 폭 계산 뒤에 떼면 줄이
     # 짧아지므로, 뗀 만큼 다시 채워 표시 폭을 유지한다.
     out = [pad(ln.replace("**", ""), width) if "**" in ln else ln for ln in out]
-    return {"lines": out, "thin": thin, "head": len(head_lines) + nh,
-            "marks": [(y - top, x, w, lv) for y, x, w, lv in marks],
-            "total": total, "cursor": cursor,
+    # marks 는 **최종 화면 좌표**다. 예전엔 뷰가 `y - top` 을 내보내고 앱이
+    # 다시 `head + my` 를 더했다 — 둘 다 자기가 헤더를 더한다고 믿어서 색이
+    # nh 줄만큼 밀렸고(실측 4줄), 부호 글자와 색이 **서로 다른 쌍**을 가리켰다.
+    # 이 화면의 존재 이유가 색인데 그렇다. 좌표 계산은 여기 한 곳에서 끝낸다 —
+    # 앱은 받은 y 를 그대로 쓴다(더하지 마라).
+    hy = len(head_lines)
+    return {"lines": out, "thin": thin, "head": hy + nh,
+            "marks": [(hy + y - top, x, w, lv) for y, x, w, lv in marks
+                      if hy + nh <= hy + y - top < body_h],
+            "total": total, "cursor": cursor, "hint_y": height - 3,
             "status_y": height - 2, "banner_y": height - 1}
 
 
@@ -807,6 +1096,11 @@ def render_text(mo: Model, width: int = 100) -> str:
                 out += comove_lines(mo, width)[0]
         out.append("")
     mo.vi = keep
+    # 도움말도 **평문 경로에 싣는다.** 키와 열의 뜻은 인쇄·공유용 산출물에서
+    # 오히려 더 필요하다(그 사람에게는 ``?`` 를 누를 터미널이 없다).
+    out.append("### 키와 열")
+    out += help_body(width, 0, 10**6)[0][1:]     # 제목 줄(닫기 안내)은 뺀다
+    out.append("")
     out.append(banner_for(width))
     # screen() 과 같은 이유로 여기서도 뗀다 — 평문 경로는 screen() 을 안 거친다.
     return "\n".join(line.replace("**", "").rstrip() for line in out)

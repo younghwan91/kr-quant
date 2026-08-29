@@ -7,6 +7,10 @@
 가속·포텐셜)을 보여주고, 여기는 **회계**를 보여준다. 누가 얼마를 넘겼고 얼마가 미분류로
 남았나. 그래서 이 화면에는 파생 지표가 없고 원 금액과 잔여만 있다.
 
+``?`` 는 **키와 열의 뜻**(``ledger_view.LEDGER_HELP``)을 전면 모달로 띄운다.
+한계는 없어지지 않았다 — ``v`` 로 도는 네 화면 중 하나로 그대로 있다. 둘은 답하는
+질문이 다르다: 도움말은 "이 숫자가 뭐냐", 한계는 "이 숫자가 무엇을 주장하지 않느냐".
+
 기존 TUI 는 8색만 썼다. 여기는 상관 히트맵 때문에 **256색 발산 팔레트**를 쓰되,
 색이 없어도 그림이 남도록 부호를 글자에 박아 뒀다(``ledger_view.heat_cell``).
 
@@ -22,9 +26,7 @@ import curses
 
 from kr_quant.tui.flow_view import cell_width
 from kr_quant.tui.ledger_view import (
-    BANNER, FOOTER, VIEWS, Model, load, render_text, screen, status_line)
-
-_LIMITS_VI = [v for v, _ in VIEWS].index("limits")
+    Model, help_total, load, render_text, screen)
 
 DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
 
@@ -115,11 +117,23 @@ def _draw(scr, mo: Model) -> None:
     scr.erase()
     h, w = scr.getmaxyx()
     w = max(w - 1, 1)
-    s = screen(mo, w, h - 1)
+    # 화면 전체를 `screen()` 이 만든다 — 앱은 색만 고른다. 예전엔 `h - 1` 을
+    # 넘겨 놓고 마지막 두 줄을 앱이 **다시** 만들었다. 같은 줄을 두 곳이
+    # 만들면 갈라지고, 실제로 갈라졌다(배너를 문자 슬라이스로 잘랐다).
+    s = screen(mo, w, h)
     lines, thin, marks = s["lines"], s["thin"], s["marks"]
 
+    if mo.help:
+        for y, line in enumerate(lines[:h]):
+            edge = (y == 0 or y == len(lines) - 1)
+            attr = (curses.color_pair(C_HEAD) | curses.A_BOLD if _COLORS and edge
+                    else (curses.A_REVERSE if edge else curses.A_NORMAL))
+            _put(scr, y, line, attr)
+        scr.refresh()
+        return
+
     for y, line in enumerate(lines):
-        if y >= h - 2:
+        if y >= h - 3:
             break
         selected = (s["cursor"] == y)
         if selected:
@@ -136,18 +150,19 @@ def _draw(scr, mo: Model) -> None:
         if _COLORS and not selected and y >= s["head"] and mo.view != "comove":
             _colorize_amounts(scr, y, line)
 
+    # marks 의 y 는 **이미 최종 화면 좌표**다(`screen()` 의 계약). 여기서
+    # head 를 더하면 색이 그만큼 밀린다 — 실제로 그랬다.
     for my, mx, mw, lv in marks:
-        y = s["head"] + my
-        if 0 <= y < h - 2:
+        if 0 <= my < h - 3:
             try:
-                scr.chgat(y, mx, mw, _heat_attr(lv))
+                scr.chgat(my, mx, mw, _heat_attr(lv))
             except curses.error:
                 pass
 
-    _put(scr, h - 2, status_line(mo, w),
-         curses.color_pair(C_DIM) if _COLORS else curses.A_DIM)
-    ban = (" " + BANNER + "   " + FOOTER)[:w]
-    _put(scr, h - 1, ban.ljust(w),
+    dim = curses.color_pair(C_DIM) if _COLORS else curses.A_DIM
+    _put(scr, s["hint_y"], lines[s["hint_y"]], dim)
+    _put(scr, s["status_y"], lines[s["status_y"]], dim)
+    _put(scr, s["banner_y"], lines[s["banner_y"]],
          curses.color_pair(C_BAN) if _COLORS else curses.A_REVERSE)
     scr.refresh()
 
@@ -158,7 +173,29 @@ def _key(mo: Model, ch: int, page: int) -> bool:
     ESC 는 종료가 **아니다.** 느린 SSH 에서 방향키는 ESC 와 나머지로 쪼개져
     도착하고(ESCDELAY 기본 1초), ESC 가 종료면 ↓ 를 눌렀을 뿐인데 앱이 끝난다.
     ``flow_app`` 이 같은 이유로 뺐다.
+
+    도움말이 열려 있으면 **먼저** 가로챈다. 그리고 거기서 ``q`` 는 **닫기**지
+    종료가 아니다 — 키를 배우러 연 화면에서 확인 없이 앱이 끝나면 안 된다.
+    ``flow_app.handle_key`` 와 같은 규칙이고, 같은 문구로 화면에 적혀 있다.
+    두 앱이 다른 손버릇을 가르치면 안 되기 때문이다.
     """
+    if mo.help:
+        bottom = max(help_total() - page, 0)
+        if ch in (curses.KEY_DOWN, ord("j")):
+            mo.help_row = min(mo.help_row + 1, bottom)
+        elif ch in (curses.KEY_UP, ord("k")):
+            mo.help_row = max(mo.help_row - 1, 0)
+        elif ch in (curses.KEY_NPAGE, ord(" ")):
+            mo.help_row = min(mo.help_row + page, bottom)
+        elif ch == curses.KEY_PPAGE:
+            mo.help_row = max(mo.help_row - page, 0)
+        elif ch in (ord("g"), curses.KEY_HOME):
+            mo.help_row = 0
+        elif ch in (ord("G"), curses.KEY_END):
+            mo.help_row = bottom
+        elif ch in (ord("q"), 27, ord("?"), curses.KEY_ENTER, 10, 13):
+            mo.help = False
+        return True
     if ch == ord("q"):
         return False
     scroll = "hrow" if mo.view == "limits" else "row"
@@ -187,7 +224,12 @@ def _key(mo: Model, ch: int, page: int) -> bool:
     elif ch == ord("d"):
         mo.detrend = not mo.detrend
     elif ch in (ord("?"), curses.KEY_F1):
-        mo.vi = _LIMITS_VI
+        # ``?`` 는 이제 **도움말**이다. 예전엔 한계 화면으로 갔는데, ``?`` 를
+        # 누른 사람이 첫 번째로 알고 싶은 건 보통 "이 키가 뭐고 이 열이 뭐냐"
+        # 다. 한계는 지우지 않았다 — ``v`` 로 도는 네 화면 중 하나로 그대로
+        # 있고, 도움말과 배너와 힌트바가 그리로 가는 길을 말한다.
+        mo.help = True
+        mo.help_row = 0
     return True
 
 
