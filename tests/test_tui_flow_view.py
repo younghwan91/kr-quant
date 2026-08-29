@@ -1730,8 +1730,8 @@ def test_fund_detail_columns_are_not_the_institution_total_rescaled(data):
     w["invtrt"], w["penfnd_etc"] = 1548.6, 4614.2      # 기관은 그대로 −50.0
     st = State(d)
     t = next(t for t in st.names() if t["code"] == "000660")
-    assert t["invtrt_amt"] == 1548.6
-    assert t["penfnd_amt"] == 4614.2
+    assert t["invtrt"] == 1548.6
+    assert t["penfnd"] == 4614.2
     assert t["flow"] == -50.0
 
 
@@ -1785,3 +1785,110 @@ def test_the_curses_last_cell_rule_lives_in_one_place():
     src = inspect.getsource(flow_app._draw)
     assert "view_width(" in src, "앱이 폭 규칙을 안 부른다"
     assert not re.search(r"\bw\s*-\s*1\b", src), "앱에 −1 이 다시 나타났다"
+
+
+def test_recent_concentration_is_hidden_on_rows_that_do_not_move_the_sector(data):
+    """값이 틀린 게 아니라, 볼 이유가 없는 줄이 화면에서 **가장 큰 숫자**를 달고 있었다.
+
+    실측(건설 20일): 금호건설은 순매수 +3억(섹터 총유량의 0.049%)인데 최근집중이
+    −287 로 떠서, 눈이 그 줄로 끌려갔다. 화면이 중요하지 않은 것을 크게 말한 것이다.
+    목록 안에서의 몫이 :data:`CONC_MIN_SHARE` 미만이면 비운다.
+    """
+    import copy
+
+    from kr_quant.tui.flow_view import CONC_MIN_SHARE
+
+    d = copy.deepcopy(data)
+    # 섹터를 압도하는 종목 하나를 넣어 나머지의 몫을 임계 아래로 민다.
+    d["names"]["005930"]["win"]["20"]["inst"] = 500000.0
+    d["names"]["005930"]["win"]["5"]["inst"] = 200000.0
+    st = State(d)
+    rows = {t["code"]: t for t in st.names()}
+    tot = sum(abs(t["flow"]) for t in rows.values())
+    big, small = rows["005930"], rows["000990"]         # DB하이텍 +5억
+    assert abs(big["flow"]) / tot * 100 >= CONC_MIN_SHARE
+    assert abs(small["flow"]) / tot * 100 < CONC_MIN_SHARE
+    assert big["conc"] is not None, "섹터를 움직인 행의 최근집중까지 지우면 안 된다"
+    assert small["conc"] is None, (
+        f"몫 {abs(small['flow']) / tot * 100:.3f}% 인 행에 최근집중 "
+        f"{small['conc']} 이 떴다")
+
+
+def test_the_recent_concentration_gate_is_a_share_not_an_amount(data):
+    """회귀 — 고정 금액 임계를 쓰면 얇은 섹터가 통째로 빈다.
+
+    섹터 규모는 세 자릿수 배로 갈린다(실측: 누적 80% 를 처음 넘긴 행의 |순매수| 가
+    거래소/제조 0.8억 · 전기/전자 2,435억). 고정 10억을 걸면 자기 섹터를 실제로
+    움직인 행의 7.7% 가 함께 지워진다. 작은 섹터에서도 **1등 종목은 보여야** 한다.
+    """
+    import copy
+
+    d = copy.deepcopy(data)
+    for code in ("005930", "000660", "066570", "009150", "000990"):
+        for w, v in d["names"][code]["win"].items():
+            v["inst"] = v["inst"] / 1000.0             # 섹터 전체를 1/1000 로
+    st = State(d)
+    rows = st.names()
+    assert all(abs(t["flow"]) < 1.0 for t in rows), "축소가 안 됐다 — 검사가 헛돈다"
+    # 금액으로는 전부 1억 미만이지만 몫은 그대로다. 반올림 하한(CONC_MIN_DEN)이
+    # 걸려 비는 것은 맞고, **몫 때문에** 비어서는 안 된다.
+    st2 = State(data)
+    shares = {t["code"]: abs(t["flow"]) for t in st2.names()}
+    top = max(shares, key=shares.get)
+    assert next(t for t in st2.names() if t["code"] == top)["conc"] is not None
+
+
+def test_blanked_concentration_sorts_to_the_back_not_to_zero(data):
+    """'값이 없는 것은 작은 값이 아니다' — 비운 칸은 정렬에서도 결측이어야 한다.
+
+    가두기(−100~+200 클리핑)를 안 고른 이유가 여기 있다. 경계값을 넣으면 그것이
+    진짜 값처럼 정렬에 끼어들어 새 거짓말이 된다.
+    """
+    import copy
+
+    d = copy.deepcopy(data)
+    d["names"]["005930"]["win"]["20"]["inst"] = 500000.0
+    d["names"]["005930"]["win"]["5"]["inst"] = 200000.0
+    st = State(d)
+    st.nsi = [k for k, _ in NAME_SORTS].index("conc")
+    vals = [t["conc"] for t in st.names()]
+    assert None in vals, "픽스처에 비워진 행이 없다 — 이 검사가 헛돈다"
+    first_none = vals.index(None)
+    assert all(v is None for v in vals[first_none:]), f"결측이 중간에 섞였다: {vals}"
+
+
+def test_an_old_report_says_so_instead_of_showing_four_blank_columns(data):
+    """옛 페이로드로 띄우면 새 열 넷이 통째로 `—` 다.
+
+    하위호환 경로가 제대로 작동한 결과라 화면은 안 깨지는데, 보는 사람에게는
+    **빈 열이 넷 늘어난 것**으로만 보인다 — "고장났나" 로 읽힌다(실제로 사용자가
+    그렇게 봤다). 화면이 왜 비는지 스스로 말해야 한다.
+    """
+    import copy
+
+    from kr_quant.tui.flow_view import names_lines
+
+    d = copy.deepcopy(data)
+    for nmv in d["names"].values():
+        for w in nmv["win"].values():
+            for k in ("invtrt", "penfnd_etc", "ret"):
+                w.pop(k, None)
+    old, new = State(d), State(data)
+    assert old.legacy_names and not new.legacy_names
+    for width in (80, 120, 170):
+        assert "옛 리포트" in names_lines(old, width)[0][0], width
+        assert "옛 리포트" not in names_lines(new, width)[0][0], width
+        for ln in names_lines(old, width)[0]:
+            assert _w(ln) == width, (width, repr(ln))
+
+
+def test_a_quiet_day_is_not_called_an_old_report(data):
+    """키가 **없는 것**과 있는데 0 인 것은 다르다. 값이 0 인지로 판정하면 정말로
+    전부 0 인 조용한 날에 화면이 "옛 리포트" 라고 거짓말을 한다."""
+    import copy
+
+    d = copy.deepcopy(data)
+    for nmv in d["names"].values():
+        for w in nmv["win"].values():
+            w["invtrt"] = w["penfnd_etc"] = w["ret"] = 0.0
+    assert not State(d).legacy_names
