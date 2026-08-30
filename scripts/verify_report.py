@@ -10,6 +10,7 @@
   E. 화면   — **그려진 글자**가 열 정의가 내는 값과 같은가(폭 80·120·200)
   F. 독립   — **DB 원자료에서 처음부터 다시 만든 값**과 페이로드가 같은가
   G. 원장   — ``kq-ledger`` 화면의 값·그림, 그리고 flow 와 같은 수를 말하는가
+  H. 화면·키 — **듣는 키와 화면에 적힌 키**가 같은가(값이 아니라 조작을 본다)
 
 A~D 는 전부 *파일 안의 값끼리* 정합한지만 본다. 그래서 producer 가 임펄스를
 통째로 잘못 계산해도(수량을 금액으로 착각, `flu_rt` 의 bp 단위를 놓침 — 둘 다
@@ -1341,6 +1342,684 @@ def layer_f(P: dict, db: str | None) -> None:
     con.close()
 
 
+
+# ─────────────────────────────────────────────── H. 화면·키
+#
+# A~G 는 **값**을 본다. 이 층은 값이 아니라 "화면과 키가 실제로 그렇게 동작하는가"
+# 를 본다. 오늘 실제로 나온 결함 넷은 전부 이 부류였고 값 검산은 하나도 못 잡았다:
+#
+#   1. 새 화면(`t`)의 키를 푸터 **다섯 단계 중 하나에만** 적었다 — 넓은 터미널을
+#      쓰는 사람에게 그 키가 안 보였다.
+#   2. 자모 표에 `ㅅ` 이 없어 한영을 켜 둔 채로는 `t` 가 안 먹었다.
+#   3. 그 화면에서 `w`·`m`·`a` 가 통째로 죽어 있었다 — "위 공통 분기가 처리한다"
+#      는 주석이 거짓이었다.
+#   4. 검사는 폭 80 으로 묻고 화면은 79 로 그렸다.
+#
+# 공통점은 **코드가 서로를 검사하지 않는 자리**다. 그래서 이 층은 어느 쪽도
+# 손으로 적은 목록을 믿지 않는다 — 듣는 키는 `handle_key` 를 실제로 태워서 상태
+# 변화로 판정하고, 적힌 키는 푸터·도움말 **문자열을 파싱해서** 꺼낸다. 둘을
+# 맞춘다. 손으로 적은 표는 다음 화면이 생길 때 조용히 낡는다.
+
+#: 화면에 적히는 키 표기 → 키 이름. 푸터·도움말이 쓰는 글자 그대로다.
+_KEY_WORDS = {
+    "↑↓": ("KEY_UP", "KEY_DOWN"), "↑": ("KEY_UP",), "↓": ("KEY_DOWN",),
+    "←": ("KEY_LEFT",), "→": ("KEY_RIGHT",),
+    "PgUp": ("KEY_PPAGE",), "PgDn": ("KEY_NPAGE",),
+    "Enter": ("KEY_ENTER",), "Esc": ("ESC",), "Home": ("KEY_HOME",),
+    "End": ("KEY_END",), "Space": ("SPACE",), "F1": ("F1",),
+}
+
+#: 한글 한 글자 범위 — 푸터 토큰에서 설명(`w:구간`·`v화면`)을 떼어낼 때 쓴다.
+_HANGUL = "가-힣㄰-㆏"
+
+
+def _advertised(text: str) -> set:
+    """화면에 적힌 한 줄이 **광고하는 키** 이름 집합.
+
+    ``w:구간``·``v화면``·``g/G:처음/끝``·``q·Esc·?·Enter:닫기`` 를 전부 같은
+    규칙으로 읽는다 — 콜론이나 한글이 나오면 거기서 끊고, 남은 것을 ``/``·``·``
+    로 쪼갠다. 화면 문구를 고치면 이 파서가 따라온다(손으로 적은 목록이 아니다).
+    """
+    out = set()
+    for tok in text.split():
+        head = re.split(r"[:%s]" % _HANGUL, tok, 1)[0]
+        for part in re.split(r"[/·]", head):
+            part = part.strip()
+            if part in _KEY_WORDS:
+                out.update(_KEY_WORDS[part])
+            elif len(part) == 1 and part.isascii() and (part.isalpha() or part == "?"):
+                out.add(part)
+    return out
+
+
+def _key_ints():
+    import curses  # noqa: PLC0415
+    d = {c: ord(c) for c in
+         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?"}
+    d.update({"KEY_UP": curses.KEY_UP, "KEY_DOWN": curses.KEY_DOWN,
+              "KEY_LEFT": curses.KEY_LEFT, "KEY_RIGHT": curses.KEY_RIGHT,
+              "KEY_PPAGE": curses.KEY_PPAGE, "KEY_NPAGE": curses.KEY_NPAGE,
+              "KEY_HOME": curses.KEY_HOME, "KEY_END": curses.KEY_END,
+              "KEY_ENTER": curses.KEY_ENTER, "ESC": 27, "SPACE": ord(" "),
+              "F1": curses.KEY_F1})
+    return d
+
+
+def _live(make, apply, fields, keys) -> set:
+    """실제로 **듣는** 키 — `handle_key` 를 태워 상태가 달라지는가로 판정한다.
+
+    소스를 파싱하지 않는다. "위 공통 분기가 처리한다" 같은 주석은 거짓일 수 있고,
+    실제로 거짓이었다. 상태를 직접 보는 쪽만 그걸 못 속인다.
+    """
+    def snap(o):
+        return tuple(getattr(o, f, None) for f in fields)
+    out = set()
+    for name, k in keys.items():
+        o = make()
+        before = snap(o)
+        cont = apply(o, k)
+        if not cont or snap(o) != before:
+            out.add(name)
+    return out
+
+
+def _help_key_text(entries) -> str:
+    """도움말의 **키 절**(`── 키 ──` 부터 다음 구역 전까지) 전체 글자.
+
+    라벨만 보면 안 된다 — `G`(끝)·`Home`·`PgUp` 은 설명 쪽에 적혀 있다.
+    """
+    out, on = [], False
+    for name, desc in entries:
+        if desc.strip().startswith("──"):
+            if on:
+                break
+            on = "키" in desc
+            continue
+        if on:
+            out.append(name + " " + desc)
+    return " ".join(out)
+
+
+
+#: 합성 페이로드 — 경계는 **실데이터에 기대면 CI 에서 조용히 무력해진다.**
+#: 오늘의 리포트에 우연히 27개 섹터가 다 있고 관문 통과 종목이 있어서 초록인
+#: 검사는, 어느 날 그게 아닌 리포트를 만나면 그때 처음 터진다. 경계는 여기서
+#: 손으로 만든다.
+#: **두벌식 자판 배열** — 앱의 자모 표가 맞는지 보는 기준이다. 앱의 표를 앱의
+#: 표로 검사하면 한 줄이 빠져도 통과한다(실측: `ㅅ` 을 빼도 `ㅆ` 이 남아 초록).
+#: 무시프트 자리와, Shift 로 **다른 글자**가 나오는 다섯 자리(ㅂㅈㄷㄱㅅ)다.
+_DUBEOL = dict(zip("qwertyuiop", "ㅂㅈㄷㄱㅅㅛㅕㅑㅐㅔ"))
+_DUBEOL.update(dict(zip("asdfghjkl", "ㅁㄴㅇㄹㅎㅗㅓㅏㅣ")))
+_DUBEOL.update(dict(zip("zxcvbnm", "ㅋㅌㅊㅍㅠㅜㅡ")))
+_DUBEOL.update(dict(zip("QWERTOP", "ㅃㅉㄸㄲㅆㅒㅖ")))
+
+#: 호환 자모(U+31xx) → 첫가끝 자모(U+11xx). IME·터미널 조합에 따라 뒤엣것이 온다.
+_COMPAT_TO_JAMO = dict(zip(
+    "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ",
+    [chr(0x1100 + i) for i in range(19)]))
+_COMPAT_TO_JAMO.update(dict(zip(
+    "ㅏㅐㅑㅒㅓㅔㅕㅖㅗ", [chr(0x1161 + i) for i in range(9)])))
+_COMPAT_TO_JAMO.update({"ㅛ": "\u116d", "ㅜ": "\u116e", "ㅠ": "\u1172",
+                        "ㅡ": "\u1173", "ㅣ": "\u1175"})
+
+
+def _DUBEOL_JAMO(key: str):
+    """ASCII 키 → 그 자리에서 나오는 자모들(호환·첫가끝). 없는 자리면 빈 목록."""
+    c = _DUBEOL.get(key)
+    if not c:
+        return []
+    return [c] + ([_COMPAT_TO_JAMO[c]] if c in _COMPAT_TO_JAMO else [])
+
+
+def _synth_flow():
+    """(이름, ``numbers.html`` 의 D 와 같은 모양의 dict) 목록."""
+    def name(code, sector, pick_ok=True):
+        return (code, {"name": f"종목{code}", "sector": sector, "market": "전체",
+                       "cap": 1000.0,
+                       "win": {"20": {"inst": 10.0 if pick_ok else -10.0,
+                                      "forgn": -1.0, "indiv": -8.0, "etc": -1.0,
+                                      "tv": 500.0, "invtrt": 5.0,
+                                      "penfnd_etc": 5.0, "ret": 1.0}}})
+
+    def row(sector, **kw):
+        base = {"sector": sector, "inst": 100.0, "forgn": -50.0, "indiv": -40.0,
+                "etc": -10.0, "tv": 5000.0, "cap": 200000.0, "cap_idx": 200000.0,
+                "accel": 0.05, "ret": 1.5, "n_all": 42, "thin": False,
+                "pct1y": {"inst": 80.0}, "spark": {"inst": [1.0, 2.0, 3.0]},
+                "a_idx": 0.05, "exp": 1.0, "x": 0.5, "U": 0.1, "xdot": 0.1,
+                "xddot": 0.2, "G": 0.7, "G_pass": True, "P": 0.1}
+        base.update(kw)
+        return base
+
+    def doc(rows, names):
+        return {"asof": "2026-01-31", "finalized": True,
+                "dates": ["2026-01-%02d" % (i + 1) for i in range(31)],
+                "n_by_sector": {}, "names": dict(names),
+                "blocks": {"20|전체": {"rows": rows, "from": "2026-01-01",
+                                       "to": "2026-01-31", "k": 12.0, "b": 0.1,
+                                       "t": 3.0}}}
+
+    out = [
+        # 표가 **한 줄도 없는** 블록. 커서·상세 패널·전 종목이 전부 빈 목록 위를 돈다.
+        ("빈 블록", doc([], {})),
+        # 섹터 하나 · 종목 하나. 순위 분모가 N−1=0 이 되는 자리다.
+        ("1섹터 1종목", doc([row("금속")], [name("000001", "금속")])),
+        # 섹터 점수가 **전멸**(G 없음) — 전 종목 화면이 한 줄도 못 만든다.
+        ("관문 전멸", doc([row("금속", G=None), row("제약", G=None)],
+                          [name("000001", "금속"), name("000002", "제약")])),
+        # 옛 리포트 — 새 열(투신·연기금·종목수익률)이 통째로 없다.
+        ("결측 열", doc([{"sector": "제약", "inst": 1.0}],
+                        [("000003", {"name": "옛종목", "sector": "제약",
+                                     "market": "전체",
+                                     "win": {"20": {"inst": 1.0}}})])),
+        # 이름이 **아주 긴** 종목·섹터. `pad` 가 자르는 자리(설계다)에서 줄 폭이
+        # 어긋나지 않는지 본다 — 한글은 두 칸이라 홀수 폭에서 한 칸이 남는다.
+        ("긴 이름", doc([row("아주아주긴섹터이름입니다정말로")],
+                        [("000004", {"name": "아주아주긴종목이름입니다정말로그렇습니다",
+                                     "sector": "아주아주긴섹터이름입니다정말로",
+                                     "market": "전체", "cap": 10.0,
+                                     "win": {"20": {"inst": 1.0, "tv": 1.0,
+                                                    "invtrt": 1.0,
+                                                    "penfnd_etc": 1.0,
+                                                    "ret": 1.0}}})])),
+    ]
+    return out
+
+
+def layer_h(D: dict, P: dict) -> None:
+    """H. **화면·키** — 듣는 키와 화면에 적힌 키가 같은가.
+
+    두 방향을 다 본다. **적혔는데 안 듣는 키**가 더 나쁘다 — 없는 기능을 찾아
+    누르게 만들기 때문이다. 반대로 **듣는데 안 적힌 키**는 발견 불가능한 기능이라
+    없는 것과 같다(이 저장소가 `r`·`G` 에서 이미 밟았다).
+    """
+    print("\nH. 화면·키 — 듣는 키와 적힌 키가 같은가")
+    import curses  # noqa: PLC0415
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src"))
+    try:
+        from kr_quant.tui import flow_app as FA  # noqa: PLC0415
+        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
+        from kr_quant.tui import ledger_app as LA  # noqa: PLC0415
+        from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+    except ImportError as e:                      # pragma: no cover
+        chk("H", "TUI 모듈을 읽을 수 있는가", False, str(e))
+        return
+
+    KEYS = _key_ints()
+    FF = ("wi", "mi", "ai", "si", "nsi", "row", "drow", "arow", "hrow",
+          "drill", "allv", "help", "rev", "nrev")
+    LF = ("wi", "mi", "ai", "si", "vi", "row", "hrow", "help_row", "help", "detrend")
+
+    def fst(**kw):
+        def mk():
+            st = FA.State(D)
+            st.row = st.drow = st.arow = st.hrow = 3
+            for k, v in kw.items():
+                setattr(st, k, v)
+            return st
+        return mk
+
+    def lmo(view, help_=False):
+        def mk():
+            mo = LV.Model(P)
+            mo.vi = [v for v, _ in LV.VIEWS].index(view)
+            mo.row = mo.hrow = mo.help_row = 3
+            mo.help = help_
+            return mo
+        return mk
+
+    fapply = lambda st, k: FA.handle_key(st, k)          # noqa: E731
+    lapply = lambda mo, k: LA._key(mo, k, 10)            # noqa: E731
+    comb = FV.WINDOWS.index("종합")
+
+    #: (앱, 화면 이름, 상태 생성기, 키 적용, 상태 필드, 푸터 단계) — 곱집합의 축.
+    SCREENS = [
+        ("flow", "섹터 표", fst(), fapply, FF, FV.footer_tiers(False, False)),
+        ("flow", "종합", fst(wi=comb), fapply, FF, FV.footer_tiers(False, False)),
+        ("flow", "드릴다운", fst(drill=True), fapply, FF, FV.footer_tiers(True, False)),
+        ("flow", "전 종목(t)", fst(allv=True), fapply, FF, FV.footer_tiers(False, True)),
+        ("flow", "도움말", fst(help=True), fapply, FF, FV.HELP_FOOT_TIERS),
+        ("ledger", "원장", lmo("ledger"), lapply, LF, LV.FOOTER_TIERS),
+        ("ledger", "전개", lmo("timeline"), lapply, LF, LV.FOOTER_TIERS),
+        ("ledger", "동시성", lmo("comove"), lapply, LF, LV.FOOTER_TIERS),
+        ("ledger", "한계", lmo("limits"), lapply, LF, LV.FOOTER_TIERS),
+        ("ledger", "도움말", lmo("ledger", True), lapply, LF, LV.HELP_FOOT_TIERS),
+    ]
+    live = {(app, name): _live(mk, ap, f, KEYS) for app, name, mk, ap, f, _t in SCREENS}
+
+    # --- 푸터 단계는 **단조**인가 ------------------------------------------
+    # 오늘 밟은 자리다 — 새 화면의 `t` 를 다섯 단계 중 하나에만 적어서, 가장
+    # 자세한 단계를 받는 **넓은 터미널**에서 그 키가 화면에서 사라졌다. 좁은
+    # 단계가 키를 버리는 것은 설계지만, 넓은 단계가 좁은 단계보다 적게 적는 것은
+    # 언제나 실수다.
+    bad = []
+    seen_tiers = set()
+    for app, name, _mk, _ap, _f, tiers in SCREENS:
+        if id(tiers) in seen_tiers:
+            continue
+        seen_tiers.add(id(tiers))
+        for i in range(len(tiers) - 1):
+            wide, narrow = _advertised(tiers[i]), _advertised(tiers[i + 1])
+            if not (narrow <= wide):
+                bad.append(f"{app}/{name} 단계{i}⊉단계{i+1}: "
+                           f"{sorted(narrow - wide)}")
+            if FV.cell_len(tiers[i]) < FV.cell_len(tiers[i + 1]):
+                bad.append(f"{app}/{name} 단계{i} 가 단계{i+1} 보다 짧다")
+    chk("H", "푸터 단계가 단조인가 (넓은 단계가 좁은 단계의 키를 다 담는가)",
+        not bad, "; ".join(bad[:3]))
+
+    # --- 적혔는데 안 듣는 키 ------------------------------------------------
+    #
+    # ⚠️ **설계된 비활성이 딱 한 부류 있다.** 정렬이 없는 화면(flow 의 종합,
+    # 원장의 동시성·한계)에서 `s`·`r` 은 일부러 아무 일도 안 한다 — 예전엔
+    # `si` 가 돌아서 헤더 라벨과 힌트바만 따라 움직이고 표는 그대로였다.
+    # 그 예외는 **화면이 스스로 적어야** 성립한다(아래 검사가 그걸 본다).
+    # 여기 없는 화면에서 안 듣는 키가 적혀 있으면 그건 그냥 거짓말이다 —
+    # 전 종목 화면이 섹터 표 푸터를 그리며 `s`·`r`·`Enter` 를 광고하던 자리다.
+    INERT = {("flow", "종합"): {"s", "r"},
+             ("ledger", "동시성"): {"s"}, ("ledger", "한계"): {"s"}}
+    bad = []
+    for app, name, _mk, _ap, _f, tiers in SCREENS:
+        got = live[(app, name)] | INERT.get((app, name), set())
+        for i, t in enumerate(tiers):
+            for k in sorted(_advertised(t) - got):
+                bad.append(f"{app}/{name} 단계{i} 가 적은 {k!r} 이 안 듣는다")
+    chk("H", "푸터·도움말푸터가 적은 키가 그 화면에서 실제로 듣는가",
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:4]))
+
+    # 그 예외는 화면이 적는가 — 헤더가 "정렬이 없다" 를 말해야 한다.
+    bad = []
+    st = fst(wi=comb)()
+    if "정렬없음" not in " ".join(FV.header_lines(st, 120)):
+        bad.append("flow/종합 헤더가 정렬 없음을 안 적는다")
+    if "정렬" not in FA.hint_text(st, 120):
+        bad.append("flow/종합 힌트바가 정렬 없음을 안 적는다")
+    # 전 종목 화면은 **곱 내림차순 고정**이다. 예전엔 섹터 표의 힌트를 그대로
+    # 그려서 `정렬 가속[%p]▼(내림차순, r 로 뒤집기)` 라고 적혀 있었다 — 표는 곱
+    # 순인데 힌트는 가속으로 줄세웠다 하고, `r` 은 여기서 안 듣는다. "정렬" 이라는
+    # 글자가 있는지만 보면 그 거짓말이 그대로 통과하므로 **무엇을 말하는지**를 본다.
+    for w2 in (40, 80, 120, 200):
+        t2 = FA.hint_text(fst(allv=True)(), w2)
+        if "고정" not in t2:
+            bad.append(f"flow/전 종목 힌트({w2})가 순서 고정을 안 적는다: {t2.strip()!r}")
+        if "뒤집기" in t2 or "▼" in t2:
+            bad.append(f"flow/전 종목 힌트({w2})가 없는 정렬을 광고한다: {t2.strip()!r}")
+    for v in ("comove", "limits"):
+        mo = lmo(v)()
+        if "순서[" not in " ".join(LV.header_lines(mo, 120)):
+            bad.append(f"ledger/{v} 헤더가 정렬 없음을 안 적는다")
+    chk("H", "정렬이 죽은 화면은 화면 스스로 그 사실을 적는가", not bad,
+        "; ".join(bad))
+
+    # --- 듣는데 안 적힌 키 --------------------------------------------------
+    # 화면 어디에도 안 적힌 기능은 없는 것과 같다. 푸터는 폭 때문에 줄어드니
+    # **도움말 키 절**을 기준으로 본다 — 거기가 전부를 적는 자리다.
+    bad = []
+    for app, entries in (("flow", FV.HELP), ("ledger", LV.LEDGER_HELP)):
+        doc = _advertised(_help_key_text(entries))
+        for a, name in [(a, n) for a, n, *_ in SCREENS if a == app]:
+            for k in sorted(live[(a, name)] - doc):
+                bad.append(f"{app}/{name} 의 {k!r} 이 도움말 키 절에 없다")
+    chk("H", "듣는 키가 도움말 키 절에 전부 적혀 있는가",
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:4]))
+
+    # --- 자모로도 닿는가 ----------------------------------------------------
+    # 한영을 켜 둔 채로는 `t` 가 안 먹어 그 화면이 **존재하지 않는 것과 같았다**.
+    # 표에 한 줄 빠뜨린 것을 사람이 다시 눈으로 세지 않게 한다.
+    #: 두벌식에서 Shift 로 **다른 글자**가 나오는 자음 — ㅂㅈㄷㄱㅅ 자리뿐이다.
+    #: 나머지 대문자는 터미널에 도착한 뒤에는 구분할 정보가 이미 없다.
+    SHIFT_DISTINCT = set("qwert")
+    bad, detail, pairs = 0, [], 0
+    for app, name, mk, ap, f, _t in SCREENS:
+        jam = LA.LEDGER_JAMO if app == "ledger" else FA.JAMO_TO_ASCII
+        norm = LA.LEDGER_JAMO_KEY if app == "ledger" else FA.normalize_key
+        for k in sorted(live[(app, name)]):
+            if not (len(k) == 1 and k.isalpha()):
+                continue
+            if k.isupper() and k.lower() not in SHIFT_DISTINCT:
+                # 구분 불가능한 대문자(A·S·G·M·V…). 한글에서는 소문자로 떨어지는
+                # 것이 **맞는 동작**이다 — 소문자 쪽 검사가 그걸 이미 본다.
+                continue
+            want_j = [j for j in _DUBEOL_JAMO(k) if j]
+            if not want_j:
+                bad += 1
+                detail.append(f"{app}/{name} {k!r} 은 두벌식 자판에 없는 자리다")
+                continue
+            # ⚠️ **자판이 기준이다.** 앱의 표를 앱의 표로 검사하면 "ㅅ 한 줄이
+            # 빠졌는데 ㅆ 이 남아 있어" 통과한다 — 실제로 그렇게 통과했다
+            # (한영을 켜면 `t` 가 안 먹던 그 결함이 검사를 그냥 지나갔다).
+            # 두벌식 자판 배열을 여기 적고, 앱의 표가 그걸 덮는지 본다.
+            for j in want_j:
+                pairs += 1
+                if j not in jam:
+                    bad += 1
+                    detail.append(f"{app}/{name} {k!r} 자리의 {j!r} 이 자모 표에 없다")
+                    continue
+                o1, o2 = mk(), mk()
+                c1 = ap(o1, ord(k))
+                c2 = ap(o2, norm(j))
+                s1 = (c1,) + tuple(getattr(o1, x, None) for x in f)
+                s2 = (c2,) + tuple(getattr(o2, x, None) for x in f)
+                if s1 != s2:
+                    bad += 1
+                    detail.append(f"{app}/{name} {j!r}({k!r}) 가 다른 일을 한다")
+    chk("H", "듣는 키마다 두벌식 자모(호환 U+31xx·첫가끝 U+11xx)가 같은 일을 하는가",
+        not bad, f"{pairs}쌍 · {bad}건  " + "; ".join(detail[:3]))
+
+    # 구분 불가능한 대문자는 **소문자 동작으로 떨어지는가.** 한글 상태에서
+    # `A` 를 눌러도 `ㅁ` 이 오므로 역방향이 원리적으로 불가능한데, 그때 아무 일도
+    # 안 하면 "키가 고장난 것" 으로 읽힌다. 도움말이 그 한계를 적는지도 본다.
+    bad = []
+    for app, entries in (("flow", FV.HELP), ("ledger", LV.LEDGER_HELP)):
+        jam = LA.LEDGER_JAMO if app == "ledger" else FA.JAMO_TO_ASCII
+        norm = LA.LEDGER_JAMO_KEY if app == "ledger" else FA.normalize_key
+        for j, asc in jam.items():
+            if norm(j) != ord(asc):
+                bad.append(f"{app} {j!r} → {asc!r} 정규화 실패")
+        txt = _help_key_text(entries)
+        if "한영" not in txt:
+            bad.append(f"{app} 도움말이 한글 입력 상태를 안 적는다")
+    chk("H", "자모가 두벌식 같은 자리의 ASCII 로 정규화되고 그 한계가 적혀 있는가",
+        not bad, "; ".join(bad[:3]))
+
+    # --- 화면마다 같은 키가 같은 뜻인가 -------------------------------------
+    bad = []
+    for app, name, mk, ap, f, _t in SCREENS:
+        doc = "도움말" in name
+        # q — 도움말에서는 **닫기**, 나머지에서는 종료. 그 예외는 화면이 적는다.
+        o = mk()
+        quit_ = not ap(o, ord("q"))
+        if quit_ == doc:
+            bad.append(f"{app}/{name} q")
+        if doc and o.help:
+            bad.append(f"{app}/{name} q 가 도움말을 안 닫는다")
+        # Esc — 어느 화면에서도 종료가 아니다(느린 SSH 에서 방향키가 쪼개진다).
+        if not ap(mk(), 27):
+            bad.append(f"{app}/{name} Esc 가 종료한다")
+        # ? — 도움말이 아니면 연다, 도움말이면 닫는다.
+        o = mk()
+        ap(o, ord("?"))
+        if o.help == doc:
+            bad.append(f"{app}/{name} ? 가 도움말을 토글 안 한다")
+    chk("H", "q·Esc·? 가 모든 화면에서 같은 뜻인가", not bad, "; ".join(bad[:4]))
+
+    # g/G — 커서가 있는 화면이면 처음/끝이다.
+    bad = []
+    for app, name, mk, ap, f, _t in SCREENS:
+        cur = {"flow": {"섹터 표": "row", "종합": "row", "드릴다운": "drow",
+                        "전 종목(t)": "arow", "도움말": "hrow"},
+               "ledger": {"원장": "row", "전개": "row", "동시성": "row",
+                          "한계": "hrow", "도움말": "help_row"}}[app][name]
+        for k, want_zero in ((ord("g"), True), (curses.KEY_HOME, True),
+                             (ord("G"), False), (curses.KEY_END, False)):
+            o = mk()
+            ap(o, k)
+            if app == "ledger":
+                # 원장은 행 수를 **그리는 쪽만** 안다 — 루프가 그러듯 한 번 그려
+                # 잘라 되돌려 적게 한 뒤에 본다(끝을 지나 쌓이던 자리다).
+                LV.screen(o, 100, 30)
+            v = getattr(o, cur)
+            if want_zero and v != 0:
+                bad.append(f"{app}/{name} {chr(k) if k < 256 else 'Home'} → {cur}={v}")
+            if not want_zero and v <= 3:
+                bad.append(f"{app}/{name} G/End 가 끝으로 안 간다 ({cur}={v})")
+    chk("H", "g·Home 은 처음 · G·End 는 끝 — 커서가 있는 모든 화면에서",
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:4]))
+
+    # t — 전 종목 화면을 여는 키. 도움말이 화면을 가리지 않는 한 어디서나 같다.
+    bad = []
+    for name in ("섹터 표", "종합", "드릴다운"):
+        o = [s for s in SCREENS if s[1] == name and s[0] == "flow"][0][2]()
+        FA.handle_key(o, ord("t"))
+        if not o.allv or o.drill:
+            bad.append(f"flow/{name} 에서 t 가 전 종목 화면을 안 연다")
+    o = fst(allv=True)()
+    FA.handle_key(o, ord("t"))
+    if o.allv:
+        bad.append("flow/전 종목 에서 t 가 안 닫는다")
+    chk("H", "t 가 어느 화면에서나 전 종목 화면을 여닫는가", not bad, "; ".join(bad))
+
+    # w·m·a — 상태를 바꾸는 키는 도움말 말고는 어디서나 듣는다.
+    bad = []
+    for app, name, mk, ap, f, _t in SCREENS:
+        if "도움말" in name:
+            continue
+        for k in "wma":
+            if k not in live[(app, name)]:
+                bad.append(f"{app}/{name} 에서 {k!r} 이 죽어 있다")
+    chk("H", "w·m·a 가 도움말 밖 모든 화면에서 듣는가", not bad, "; ".join(bad[:4]))
+
+    # --- 커서가 상태 변경에서 살아남는가 -----------------------------------
+    bad = []
+    for k in "wWmMaAsSr":
+        for name, cur, size in (("섹터 표", "row", lambda st: len(st.rows())),
+                                ("드릴다운", "drow", lambda st: len(st.names())),
+                                ("전 종목(t)", "arow", lambda st: len(st.all_picks()))):
+            st = [s for s in SCREENS if s[1] == name][0][2]()
+            FA.handle_key(st, ord(k))
+            n = size(st)
+            v = getattr(st, cur)
+            if not (0 <= v < max(n, 1)):
+                bad.append(f"{name}/{k} → {cur}={v} (행 {n})")
+    chk("H", "구간·시장·주체·정렬을 바꿔도 커서가 범위 안에 있는가",
+        not bad, "; ".join(bad[:4]))
+
+    # --- 폭·높이 전수 ------------------------------------------------------
+    #
+    # "검사는 폭 80 으로 묻고 화면은 79 로 그렸다" 가 이 저장소의 실제 사고다.
+    # 그래서 폭은 **한 칸씩** 훑는다 — 열이 떨어지는 경계는 늘 한 칸 사이에 있다.
+    # 그리고 `KQ_AMBIGUOUS_WIDE` 를 **켠 채로 한 번 더** 돈다: `…`·`·`·`▼` 는
+    # East Asian Width 가 `A` 라 그 환경에서 폭이 두 배가 되고, 실제로 힌트바가
+    # 딱 한 칸씩 넘쳤다(폭 24~200 중 54개 폭). 환경 하나를 안 돌면 그 부류는
+    # 영원히 안 보인다.
+    bad, seen = [], 0
+    ambi0 = FV.AMBIGUOUS_WIDE
+    try:
+        for ambi in (False, True):
+            FV.AMBIGUOUS_WIDE = ambi
+            tag = "AMBIGUOUS_WIDE=1 " if ambi else ""
+            for term in range(40, 201):
+                w = FV.view_width(term)
+                for name, mk in (("섹터 표", fst()), ("종합", fst(wi=comb)),
+                                 ("드릴다운", fst(drill=True)),
+                                 ("전 종목(t)", fst(allv=True)),
+                                 ("도움말", fst(help=True))):
+                    st = mk()
+                    seen += 1
+                    if name == "도움말":
+                        lines = FV.help_lines(w, 0, 40)[0]
+                    elif name == "전 종목(t)":
+                        lines = FV.all_lines(st, w)[0]
+                    elif name == "드릴다운":
+                        lines = FV.names_lines(st, w)[0]
+                    else:
+                        lines = FV.table_lines(st, w, 40)[0]
+                    lines = list(lines) + FV.header_lines(st, w)
+                    for ln in lines:
+                        if FV.cell_len(ln) != w:
+                            bad.append(f"{tag}{term}/{name} 본문 "
+                                       f"{FV.cell_len(ln)} != {w}")
+                            break
+                    # 힌트바·푸터는 `pad` 가 자르기 **전에** 폭 안이어야 한다 —
+                    # 잘린 안내문은 "여기가 전부" 로 읽힌다. 마지막 단계만은
+                    # 예외다(그보다 짧게 쓸 문장이 없다는 뜻이라 잘림을 감수한다).
+                    for what, s2, tiers in (
+                            ("힌트", FA.hint_text(st, w), None),
+                            ("푸터", FV.footer_line(w, st.drill, st.allv),
+                             FV.footer_tiers(st.drill, st.allv))):
+                        if FV.cell_len(s2) > w and (tiers is None
+                                                    or s2 != tiers[-1]):
+                            bad.append(f"{tag}{term}/{name} {what} "
+                                       f"{FV.cell_len(s2)} > {w}: {s2[:24]!r}")
+    finally:
+        FV.AMBIGUOUS_WIDE = ambi0
+    chk("H", "폭 40~200 × 5화면 × (기본·KQ_AMBIGUOUS_WIDE) 에서 줄이 폭을 안 넘는가",
+        not bad, f"{seen}조합 · {len(bad)}건  " + "; ".join(bad[:3]))
+
+    # 높이 — 앱이 죽지 않는 하한부터. `layout` 이 음수 행이나 화면 밖 y 를 내면
+    # curses 가 그 자리에서 터진다(SSH 창을 줄이다 죽는 부류다).
+    bad = []
+    for h in range(1, 61):
+        for drill in (False, True):
+            L = FA.layout(h, drill)
+            if not (0 <= L.foot_y < max(h, 1)) or L.rows < 0 or L.detail < 0:
+                bad.append(f"h={h} drill={drill} {L}")
+            if L.hint_y >= 0 and not (L.hint_y < h and L.hint_y < L.foot_y):
+                bad.append(f"h={h} drill={drill} hint_y={L.hint_y}")
+    for hh in range(1, 61):
+        for vi in range(len(LV.VIEWS)):
+            mo = LV.Model(P)
+            mo.vi = vi
+            s2 = LV.screen(mo, 80, hh)
+            if len(s2["lines"]) != max(4, hh):
+                bad.append(f"ledger h={hh}/{LV.VIEWS[vi][0]} 줄수 {len(s2['lines'])}")
+    chk("H", "높이 1~60 에서 배치가 화면 밖을 안 가리키는가", not bad,
+        "; ".join(bad[:3]))
+
+    # --- 도움말 모달의 마지막 줄 -------------------------------------------
+    # 키 안내는 잘려도 "여기가 전부" 로 읽힐 뿐이지만, **위치 표시가 잘리면
+    # 다른 숫자가 된다**(전체 200줄이 20줄로 읽힌다). 그래서 위치가 먼저 자리를
+    # 잡는지를 폭마다 본다.
+    bad = []
+    for w2 in range(20, 201):
+        for total in (7, 52, 200, 1234):
+            ln = FA.help_foot(0, 20, total, w2)
+            if FV.cell_len(ln) != w2:
+                bad.append(f"폭 {w2} 줄폭 {FV.cell_len(ln)}")
+            elif f"/ {total}" not in ln and w2 >= len(f" 1-20 / {total}") + 2:
+                bad.append(f"폭 {w2}/전체 {total}: 위치가 잘렸다 {ln.strip()[-14:]!r}")
+    chk("H", "도움말 마지막 줄의 위치 표시가 어느 폭에서도 안 잘리는가", not bad,
+        f"{len(bad)}건  " + "; ".join(bad[:3]))
+
+    # --- 한계 화면의 스크롤이 끝을 지나 쌓이지 않는가 -----------------------
+    # 커서가 없는 화면은 그리는 쪽이 잘라 쓰기만 하고 상태를 안 고쳐서, PgDn 을
+    # 끝에서 더 누르면 그만큼 쌓였다. 그러면 ↑ 가 **죽은 것처럼** 보인다.
+    bad = []
+    for view, attr in (("limits", "hrow"), ("ledger", "row"),
+                       ("timeline", "row"), ("comove", "row")):
+        mo = lmo(view)()
+        seen2 = []
+        for i in range(60):
+            LA._key(mo, curses.KEY_NPAGE, 24)
+            LV.screen(mo, 100, 30)      # 루프가 그러듯 매번 그린다
+            if i in (29, 59):
+                seen2.append(getattr(mo, attr))
+        if seen2[0] != seen2[1]:
+            bad.append(f"{view}: PgDn 30번 {attr}={seen2[0]} · 60번 {seen2[1]} "
+                       f"— 끝을 지나 쌓인다")
+        # 쌓였으면 ↑ 를 그만큼 눌러야 돌아온다. 한 번에 움직여야 한다.
+        v0 = getattr(mo, attr)
+        LA._key(mo, curses.KEY_UP, 24)
+        LV.screen(mo, 100, 30)
+        if getattr(mo, attr) != v0 - 1:
+            bad.append(f"{view}: 끝에서 ↑ 한 번에 {attr} 가 {v0}→"
+                       f"{getattr(mo, attr)}")
+    chk("H", "끝까지 내린 뒤 스크롤이 쌓이지 않고 ↑ 한 번에 되돌아오는가",
+        not bad, "; ".join(bad))
+
+    # --- 전 종목 화면(t): 그려진 글자 = 열 정의가 내는 값 -------------------
+    #
+    # 이 화면에는 여태 **아무 검사도 없었다.** E 층이 섹터 표와 종목 목록에 하는
+    # 것을 그대로 한다 — 종목명·섹터명은 `pad` 가 자르는 게 설계지만 숫자 열은
+    # 하나도 잘리면 안 된다(`-1,360` 이 `-1` 로 보이는 것이 표적이다).
+    TEXT = {"종목", "섹터"}
+
+    def cells(line, widths, i):
+        a, wd = FV.span_at(widths, i)
+        cur, buf = 0, []
+        for ch in line:
+            if a <= cur < a + wd:
+                buf.append(ch)
+            cur += FV.cell_width(ch)
+        return "".join(buf).strip()
+
+    bad_v, bad_w, seen = [], [], 0
+    for term in (80, 120, 200):
+        w = FV.view_width(term)
+        for wi in range(len(FV.WINDOWS)):
+            for ai in range(4):
+                st = FA.State(D)
+                st.wi, st.ai, st.allv = wi, ai, True
+                seen += 1
+                lines, nh = FV.all_lines(st, w)
+                for ln in lines:
+                    if FV.cell_len(ln) != w:
+                        bad_w.append(f"{term}/{FV.WINDOWS[wi]} "
+                                     f"{FV.cell_len(ln)} != {w}")
+                        break
+                cols = FV._fit(FV.all_cols(), w)
+                widths = [c.width for c in cols]
+                picks = st.all_picks()
+                # ⚠️ **열 정의를 열 정의로 검산하지 않는다.** `c.fn` 이 낸 값과
+                # 그려진 글자를 맞추면 정의가 틀렸을 때 양쪽이 같이 틀려서 통과한다
+                # (곱을 소수 한 자리로 찍게 바꿔도 검사가 초록이었다). 세 열은
+                # 여기서 **따로 셈해** 기대값을 만든다 — G 층이 이미 같은 규율이다.
+                mine = {"곱": lambda t: f"{t['gsec'] * t['pick']:.2f}",
+                        "섹터선정": lambda t: f"{t['gsec']:.2f}",
+                        "종목선정": lambda t: f"{t['pick']:.2f}"}
+                for ln, t in zip(lines[nh:], picks):
+                    for i, c in enumerate(cols):
+                        if c.header in TEXT:
+                            continue
+                        want = (mine[c.header](t) if c.header in mine
+                                else c.fn(t, st).strip())
+                        if cells(ln, widths, i) != want:
+                            bad_v.append(f"{term}/{FV.WINDOWS[wi]} {c.header!r} "
+                                         f"{cells(ln, widths, i)!r} != {want!r}")
+                order = [t["both"] for t in picks]
+                if any(b > a + 1e-12 for a, b in zip(order, order[1:])):
+                    bad_v.append(f"{term}/{FV.WINDOWS[wi]} 곱 내림차순이 아니다")
+    chk("H", "전 종목 화면: 모든 줄의 표시 폭 = view_width", not bad_w,
+        f"{len(bad_w)}건  " + "; ".join(bad_w[:2]))
+    chk("H", "전 종목 화면: 그려진 글자 = 열 정의가 내는 값 · 곱 = 두 층의 곱 · 내림차순",
+        not bad_v, f"{len(bad_v)}건  " + "; ".join(bad_v[:2]))
+    chk("H", "전 종목 화면에서 검사한 (폭,구간,주체) 조합", seen >= 60, f"{seen}개")
+
+    # 제목이 **무엇과 무엇을 곱했는지**를 어느 폭에서도 말하는가. 종합에서는 두
+    # 층이 다른 구간을 본다 — 잘려서 `20일 기준` 만 남으면 섹터 쪽도 20일인 것처럼
+    # 읽힌다(그 문구를 단계로 만든 이유가 그거다).
+    bad = []
+    for term in range(40, 201):
+        w = FV.view_width(term)
+        st = FA.State(D)
+        st.allv, st.wi = True, comb
+        title = FV.all_lines(st, w)[0][0]
+        if "…" in title or ("종합" not in title and "20" not in title):
+            bad.append(f"{term}: {title.strip()[:40]!r}")
+    chk("H", "전 종목 제목이 어느 폭에서도 곱한 대상을 잘린 채로 말하지 않는가",
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:2]))
+
+    # --- 합성 페이로드 — 경계는 실데이터에 기대면 CI 에서 조용히 무력해진다 --
+    bad = []
+    for label, synth in _synth_flow():
+        for term in (40, 80, 200):
+            w = FV.view_width(term)
+            try:
+                st = FA.State(synth)
+                for name in ("섹터 표", "드릴다운", "전 종목(t)"):
+                    st.drill = name == "드릴다운"
+                    st.allv = name == "전 종목(t)"
+                    if name == "전 종목(t)":
+                        lines = FV.all_lines(st, w)[0]
+                    elif name == "드릴다운":
+                        lines = FV.names_lines(st, w)[0]
+                    else:
+                        lines = FV.table_lines(st, w, 20)[0]
+                    lines = list(lines) + FV.header_lines(st, w) + [
+                        FV.footer_line(w, st.drill, st.allv)]
+                    for ln in lines[:-1]:
+                        if FV.cell_len(ln) != w:
+                            bad.append(f"{label}/{term}/{name} 폭 {FV.cell_len(ln)}")
+                            break
+                    for k in "wmastrgGjkl":
+                        FA.handle_key(FA.State(synth), ord(k))
+            except Exception as e:                     # noqa: BLE001
+                bad.append(f"{label}/{term} {type(e).__name__}: {e}")
+    chk("H", "합성 페이로드(빈 블록·1섹터·관문 전멸·결측 열)에서 안 죽는가",
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:3]))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="리포트 폴더(numbers.html·payload.json)")
@@ -1362,6 +2041,7 @@ def main() -> int:
     layer_d(D, payload, html)
     layer_e(D)
     layer_g(payload, D)
+    layer_h(D, payload)
     if a.db_check:
         layer_f(payload, a.db)
 
