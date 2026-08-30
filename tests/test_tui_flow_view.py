@@ -2312,3 +2312,21 @@ def test_the_cross_sector_title_never_loses_what_it_multiplied(data):
         assert "…" not in title, (w, title)
         # 두 층을 곱했다는 사실은 어느 단계에서도 남는다.
         assert "×" in title, f"폭 {w} 에서 곱한 대상이 사라졌다: {title!r}"
+
+
+def test_the_html_report_calls_the_score_the_same_name_as_the_tui():
+    """HTML 리포트와 TUI 가 **같은 값을 같은 이름**으로 불러야 한다.
+
+    회귀 — 섹터 점수를 `G[0~1]` → `선정` 으로 바꾸면서 TUI 만 고치고
+    `scripts/templates/sector_numbers.html` 을 안 고쳤다. 같은 리포트를 두 도구가
+    다른 이름으로 부르면, 화면에서 배운 이름으로 HTML 을 찾을 수 없다.
+    """
+    from pathlib import Path
+
+    from kr_quant.tui.flow_view import SORT_COL
+
+    tpl = Path(__file__).resolve().parents[1] / "scripts" / "templates" / "sector_numbers.html"
+    html = tpl.read_text(encoding="utf-8")
+    assert f'"{SORT_COL["G"]}"' in html, (
+        f"HTML 표의 열 이름이 TUI 의 '{SORT_COL['G']}' 와 다르다")
+    assert "성장 G" not in html, "옛 이름이 남아 있다"
