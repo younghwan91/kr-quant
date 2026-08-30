@@ -2258,3 +2258,17 @@ def test_the_cross_sector_list_drops_a_stock_whose_sector_failed_its_gate():
         for r in B["rows"]:
             r["G"] = None          # 섹터 점수 없음 = 관문 탈락
     assert State(killed).all_picks() == [], "섹터가 탈락했는데 종목이 남았다"
+
+
+def test_every_footer_tier_that_names_enter_also_names_the_all_stocks_screen():
+    """`Enter:종목` 을 적는 단계는 `t:전종목` 도 적는다.
+
+    회귀 — 새 화면을 만들고 푸터 **한 단계에만** 넣었다. 넓은 터미널은 다른
+    단계를 쓰므로, 정작 화면이 넓은 사람에게 그 키가 안 보였다. 이 코드베이스는
+    "듣는데 화면 어디에도 안 적혀 있다" 를 버그로 취급해 왔다.
+    """
+    from kr_quant.tui.flow_view import FOOTER_TIERS
+
+    for tier in FOOTER_TIERS:
+        if "종목" in tier and "Enter" in tier:
+            assert "t:전종목" in tier, f"이 단계에 t 가 없다: {tier}"

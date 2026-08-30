@@ -1610,10 +1610,10 @@ def help_lines(width: int, offset: int, height: int,
 #: 없는 기능이라는 원칙은 그대로다. 바뀐 것은 **어느 화면에 적히느냐** 뿐이다.
 FOOTER_TIERS = (
     " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 g/G:처음/끝"
-    " PgUp/PgDn:쪽 Enter:종목 ?:도움말 q:종료",
+    " PgUp/PgDn:쪽 Enter:종목 t:전종목 ?:도움말 q:종료",
     " w:구간 m:시장 a:주체 s:정렬 r:역순 ↑↓:섹터 Enter:종목 t:전종목 ?:도움말 q:종료",
-    " w m a s:바꾸기 r:역순 Enter:종목 ?:전체 키 q:종료",
-    " w m a s r:바꾸기 Enter:종목 ?:키 q:종료",
+    " w m a s:바꾸기 r:역순 Enter:종목 t:전종목 ?:전체 키 q:종료",
+    " w m a s r:바꾸기 Enter:종목 t:전종목 ?:키 q:종료",
     " ?:키 q:종료",
 )
 FOOTER_DRILL_TIERS = (

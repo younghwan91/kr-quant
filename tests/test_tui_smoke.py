@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import pty
@@ -832,3 +833,27 @@ def test_ledger_question_mark_shows_keys_and_columns():
         assert "── 키 ──" in screen, "키 목록이 없다"
         assert "오차가 아니라" in screen, "스크롤해도 열 사전이 안 나온다"
         assert "닫기" in screen
+
+
+def test_every_letter_key_the_app_listens_for_has_a_jamo_route():
+    """앱이 듣는 **모든 글자 키**가 두벌식 자모에서도 닿아야 한다.
+
+    회귀 — `t`(전 종목 화면)를 새로 만들면서 자모 표에 `ㅅ` 을 안 넣었다. 한영을
+    켜 둔 사람에게는 그 화면이 **존재하지 않는 것과 같았다.** 키를 하나 더할
+    때마다 표를 손으로 맞추는 대신, 코드가 서로를 검사하게 한다.
+
+    표의 값에서 역으로 훑는다 — `handle_key` 가 `ord("x")` 로 비교하는 글자를
+    소스에서 뽑아, 그 글자에 닿는 자모가 표에 있는지 본다.
+    """
+    import re
+
+    from kr_quant.tui import flow_app as A
+
+    src = inspect.getsource(A.handle_key)
+    letters = {m.group(1) for m in re.finditer(r'ord\("([a-zA-Z])"\)', src)}
+    assert letters, "handle_key 에서 글자 키를 못 찾았다 — 이 검사가 헛돈다"
+    routed = set(A.JAMO_TO_ASCII.values())
+    missing = sorted(c for c in letters if c not in routed and c.upper() not in routed
+                     and c.lower() not in routed)
+    assert not missing, (
+        f"자모에서 못 닿는 키: {missing} — JAMO_TO_ASCII 에 두벌식 자리를 넣어라")
