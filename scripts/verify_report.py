@@ -655,6 +655,49 @@ def layer_e(D: dict) -> None:
                     bad.append(f"{w}/{r['sector']}/{t['code']}")
     chk("E", "상대수익 = 종목 수익률 − 섹터 표의 수익률", not bad, "; ".join(bad[:3]))
 
+    # ── 전 종목 화면(`t`) — 두 층을 곱한 목록 ────────────────────────────
+    #
+    # 이 화면은 섹터 표에도 드릴다운에도 없는 값을 만든다(`곱`). 그런데 그 값은
+    # **다른 두 화면에서 이미 보이는 값의 곱**이라, 세 화면이 서로 어긋날 수 있다.
+    # 어긋나면 사용자는 같은 종목을 세 자리에서 세 가지로 읽는다.
+    bad_mul, bad_ord, bad_g, bad_p, bad_dead = [], [], [], [], []
+    combos = 0
+    for wi in range(len(FV.WINDOWS)):
+        for mi in range(3):
+            for ai in range(len(FV.ACTORS)):
+                st = FV.State(D)
+                st.wi, st.mi, st.ai = wi, mi, ai
+                rows = st.all_picks()
+                tag = f"{st.window}/{st.market}/{st.actor}"
+                combos += 1
+                gmap = {r["sector"]: r.get("G") for r in st.rows()}
+                for t in rows:
+                    if abs(t["both"] - t["gsec"] * t["pick"]) > 1e-12:
+                        bad_mul.append(f"{tag}/{t['code']}")
+                    if t["gsec"] != gmap.get(t["sector"]):
+                        bad_g.append(f"{tag}/{t['code']}")
+                    if gmap.get(t["sector"]) is None:
+                        bad_dead.append(f"{tag}/{t['code']}")
+                vals = [t["both"] for t in rows]
+                if vals != sorted(vals, reverse=True):
+                    bad_ord.append(tag)
+                # 종목 점수는 그 섹터 드릴다운이 내는 값과 **같은 수**여야 한다.
+                for ri, r in enumerate(st.rows()):
+                    if r.get("G") is None:
+                        continue
+                    st.row = ri
+                    pm = {t["code"]: t.get("pick") for t in st.names()}
+                    for t in rows:
+                        if t["sector"] == r["sector"] and pm.get(t["code"]) != t["pick"]:
+                            bad_p.append(f"{tag}/{t['code']}")
+    chk("E", "전 종목: 곱 = 섹터선정 × 종목선정", not bad_mul, "; ".join(bad_mul[:3]))
+    chk("E", "전 종목: 곱 내림차순 고정", not bad_ord, "; ".join(bad_ord[:3]))
+    chk("E", "전 종목: 섹터선정 = 섹터 표의 그 값", not bad_g, "; ".join(bad_g[:3]))
+    chk("E", "전 종목: 종목선정 = 드릴다운의 그 값", not bad_p, "; ".join(bad_p[:3]))
+    chk("E", "전 종목: 관문 탈락 섹터의 종목은 안 나온다", not bad_dead,
+        "; ".join(bad_dead[:3]))
+    chk("E", "전 종목: 검사한 (창,시장,주체) 조합", combos >= 60, f"{combos}개")
+
 
 
 # ─────────────────────────────────────────────── G. 원장 화면
