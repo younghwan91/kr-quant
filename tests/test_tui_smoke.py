@@ -857,3 +857,23 @@ def test_every_letter_key_the_app_listens_for_has_a_jamo_route():
                      and c.lower() not in routed)
     assert not missing, (
         f"자모에서 못 닿는 키: {missing} — JAMO_TO_ASCII 에 두벌식 자리를 넣어라")
+
+
+def test_the_all_stocks_screen_still_listens_to_window_market_actor():
+    """전 종목 화면에서도 `w`·`m`·`a` 가 들어야 한다.
+
+    회귀 — 이 화면을 만들면서 "구간·시장·주체는 위 공통 분기가 처리한다" 고
+    적어 뒀는데 **그런 분기는 없었다.** 그래서 화면 안에서 세 키가 통째로 죽어,
+    구간을 바꾸려면 나갔다 다시 들어와야 했다. 드릴다운이 같은 이유로 이미
+    세 키를 듣는다("예전엔 조용히 무시돼서 나갔다 들어오는 동안 커서를 잃었다").
+    """
+    from kr_quant.tui.flow_app import handle_key
+    from kr_quant.tui.flow_view import State
+
+    st = State(MINIMAL)
+    st.allv = True
+    for key, attr in (("w", "window"), ("m", "market"), ("a", "actor")):
+        before = getattr(st, attr)
+        handle_key(st, ord(key))
+        assert getattr(st, attr) != before, f"'{key}' 가 전 종목 화면에서 안 듣는다"
+        assert st.allv, f"'{key}' 가 화면을 닫아버렸다"

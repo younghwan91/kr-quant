@@ -604,6 +604,16 @@ class State:
         for t, a, c, r, p in zip(cand, ra, rc, rr, rp):
             t["pick"] = (a + c + r + p) / 4.0
 
+    def combined_windows(self) -> list[str]:
+        """종합축이 실제로 섞은 창 — 상수가 아니라 **데이터가 정한다.**
+
+        `sector_numbers` 가 "G 가 하나라도 나오는 창" 만 고른다. 5일은 ẍ 가 2차
+        차분이라 최소 9거래일을 요구해 점수가 안 나오므로 저절로 빠진다. 오늘
+        3개인 것은 규칙이 아니라 관측 결과라, 화면이 세어서 말한다.
+        """
+        c = (self.d.get("combined") or {}).get(self.market) or {}
+        return [str(w) for w in (c.get("windows") or [])]
+
     def all_picks(self) -> list[dict]:
         """**전 섹터의 종목을 한 화면에** — `섹터선정 × 종목선정` 내림차순.
 
@@ -1200,9 +1210,26 @@ def all_lines(st: State, width: int) -> tuple[list[str], int]:
     """
     rows = st.all_picks()
     cols = _fit(all_cols(), width)
-    title = (f" 전 종목 · {len(rows)}개 · 양쪽 관문 통과 · "
-             f"{'20일' if st.window == '종합' else st.window + '일'} 기준"
-             f" · 곱 내림차순 고정")
+    # ⚠️ 종합에서는 **두 층이 다른 구간을 본다.** 섹터 점수는 세 창(20·60·120)의
+    # 등가중 평균인데, 종목 점수는 그 섹터의 20일 목록에서 나온다(`State.names`).
+    # 곱이 뜻을 가지려면 무엇과 무엇을 곱했는지가 화면에 있어야 한다 — 예전엔
+    # `20일 기준` 이라고만 적어서, 섹터 쪽도 20일인 것처럼 읽혔다.
+    if st.window == "종합":
+        wins = "·".join(st.combined_windows())
+        bases = [f"섹터 종합({wins}일) × 종목 20일 기준",
+                 "섹터 종합 × 종목 20일",
+                 "종합×20일"]
+    else:
+        bases = [f"{st.window}일 기준", f"{st.window}일", f"{st.window}일"]
+    # 폭에 맞춰 **단계적으로** 줄인다. 한 줄 고정이면 좁은 화면에서 잘리는데,
+    # 잘린 설명은 설명이 아니다 — "섹터 종합(20·60·120일) × 종목 20일" 이
+    # "…섹터 종합(20·60" 으로 끝나면 곱한 대상을 오히려 잘못 읽힌다.
+    tiers = tuple(f" 전 종목 · {len(rows)}개 · {tail}"
+                  for tail in (f"양쪽 관문 통과 · {bases[0]} · 곱 내림차순 고정",
+                               f"관문 통과 · {bases[1]} · 곱순",
+                               f"{bases[2]} · 곱순",
+                               bases[2]))
+    title = tier_for(tiers, width)
     head = pad(" ".join(pad(c.header, c.width, c.right) for c in cols), width)
     out = [pad(title, width), head]
     for t in rows:

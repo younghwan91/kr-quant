@@ -642,11 +642,23 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
         return True
 
     if st.allv:
-        # 전 종목 화면 — 커서와 토글만 듣는다. 구간·시장·주체는 위 공통 분기가
-        # 이미 처리했고, 정렬은 이 화면에 없다(곱 내림차순 고정).
+        # 전 종목 화면. 구간·시장·주체는 **여기서도 들어야 한다** — 드릴다운이
+        # 같은 이유로 이미 그렇게 한다("예전엔 조용히 무시돼서 나갔다 들어오는
+        # 동안 커서를 잃었다"). 처음엔 "위 공통 분기가 처리한다" 고 적어 뒀는데
+        # 그런 분기는 없었고, 그래서 이 화면에서 w·m·a 가 통째로 죽어 있었다.
+        # 정렬만 없다 — 곱 내림차순 고정이고 헤더가 그렇게 적는다.
         m = max(len(st.all_picks()), 1)
         if k in (ord("t"), 27, curses.KEY_LEFT, ord("h")):
             st.allv = False
+        elif k in (ord("w"), ord("W")):
+            st.cycle("w", 1 if k == ord("w") else -1)
+            st.arow = 0
+        elif k in (ord("m"), ord("M")):
+            st.cycle("m", 1 if k == ord("m") else -1)
+            st.arow = 0
+        elif k in (ord("a"), ord("A")):
+            st.cycle("a", 1 if k == ord("a") else -1)
+            st.arow = 0
         elif k in (curses.KEY_DOWN, ord("j")):
             st.arow = min(st.arow + 1, m - 1)
         elif k in (curses.KEY_UP, ord("k")):

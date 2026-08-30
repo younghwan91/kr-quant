@@ -2272,3 +2272,43 @@ def test_every_footer_tier_that_names_enter_also_names_the_all_stocks_screen():
     for tier in FOOTER_TIERS:
         if "종목" in tier and "Enter" in tier:
             assert "t:전종목" in tier, f"이 단계에 t 가 없다: {tier}"
+
+
+def test_the_cross_sector_title_says_which_windows_it_multiplied(data):
+    """종합에서는 **두 층이 다른 구간을 본다** — 제목이 그것을 적어야 한다.
+
+    섹터 점수는 종합축(세 창의 등가중 평균)인데 종목 점수는 그 섹터의 20일
+    목록에서 나온다. 예전엔 `20일 기준` 이라고만 적어서 섹터 쪽도 20일인 것처럼
+    읽혔다. 곱이 뜻을 가지려면 무엇과 무엇을 곱했는지가 화면에 있어야 한다.
+    """
+    from kr_quant.tui.flow_view import State, all_lines
+
+    st = State(data)
+    while st.window != "종합":
+        st.cycle("w", 1)
+    title = all_lines(st, 200)[0][0]
+    assert "섹터 종합" in title and "종목 20일" in title, title
+    # 일반 구간에서는 한 구간뿐이라 그 말을 안 붙인다 — 없는 구분을 만들지 않는다.
+    st.cycle("w", 1)
+    assert st.window != "종합"
+    assert "섹터 종합" not in all_lines(st, 200)[0][0]
+
+
+def test_the_cross_sector_title_never_loses_what_it_multiplied(data):
+    """제목은 어느 폭에서도 **곱한 대상**을 잃지 않는다.
+
+    한 줄 고정이면 좁은 화면에서 `pad` 가 뒤를 자른다 — "섹터 종합(20·60·120일)
+    × 종목 20일" 이 "…섹터 종합(20·60" 으로 끝나면 무엇을 곱했는지가 오히려
+    잘못 읽힌다. 잘린 설명은 설명이 아니다.
+    """
+    from kr_quant.tui.flow_view import State, all_lines, cell_len, view_width
+
+    st = State(data)
+    while st.window != "종합":
+        st.cycle("w", 1)
+    for w in range(40, 160):
+        title = all_lines(st, view_width(w))[0][0]
+        assert cell_len(title) <= view_width(w), (w, title)
+        assert "…" not in title, (w, title)
+        # 두 층을 곱했다는 사실은 어느 단계에서도 남는다.
+        assert "×" in title, f"폭 {w} 에서 곱한 대상이 사라졌다: {title!r}"
