@@ -25,7 +25,8 @@ import re
 from collections import namedtuple
 
 from kr_quant.tui.flow_view import (
-    NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
+    HELP_FOOT_TIERS, NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS,
+    State, cell_len as view_cell_len, color_spans,
     detail_lines, detail_title_span, footer_line, header_lines, help_lines,
     hint_desc, hint_line,
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for,
@@ -285,6 +286,19 @@ HINT_COMBINED_TIERS = (
     " 종합 · 정렬 없다 ?",
 )
 
+#: 전 종목 화면의 힌트바 — 이 화면도 정렬이 **없다**(곱 내림차순 고정). 예전엔
+#: 섹터 표의 힌트를 그대로 그려서 ``정렬 가속[%p]▼(내림차순, r 로 뒤집기)`` 라고
+#: 적혀 있었다. 표는 곱 순인데 힌트는 가속으로 줄세웠다고 말했고, `r` 은 이 화면에서
+#: 안 듣는다 — 화면이 자기가 무엇을 하는지 틀리게 말한 것이다. 종합 화면이 같은
+#: 이유로 자기 힌트를 가진다.
+HINT_ALL_TIERS = (
+    " 전 종목 — 섹터선정 × 종목선정 의 곱 내림차순 고정. 정렬·역순이 없다 · ? 로 열 설명",
+    " 전 종목 — 곱(섹터선정×종목선정) 내림차순 고정. 정렬·역순 없다 · ? 로 설명",
+    " 전 종목 — 곱 내림차순 고정. 정렬·역순 없다 · ? 로 설명",
+    " 전 종목 — 곱순 고정. 정렬 없다 · ? 로 설명",
+    " 곱순 고정 · 정렬 없다 ?",
+)
+
 
 def hint_text(st: State, width: int = 200) -> str:
     """푸터 위 **항상 보이는 한 줄** — 지금 정렬 중인 열의 뜻.
@@ -297,6 +311,9 @@ def hint_text(st: State, width: int = 200) -> str:
         key = st.name_sort
         header = NAME_SORT_COL.get(key) or dict(NAME_SORTS).get(key, key)
         arrow = "▲" if st.nrev else "▼"
+    elif st.allv:
+        # 전 종목은 곱 내림차순 **고정**이다 — 없는 정렬을 있는 척하지 않는다.
+        return tier_for(HINT_ALL_TIERS, width)
     elif st.window == "종합":
         # 종합은 페이로드 순서 그대로다 — 없는 정렬을 있는 척하지 않는다.
         return tier_for(HINT_COMBINED_TIERS, width)
@@ -334,8 +351,7 @@ def _draw(scr, st: State) -> None:
             else:
                 base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
             _put(scr, i, line, base, False)
-        more = f" {st.hrow + 1}-{min(st.hrow + h - 2, total)} / {total}"
-        _put(scr, h - 1, pad_footer(" ↑↓/PgDn:스크롤  g/G:처음·끝  q·Esc:닫기" + more, w),
+        _put(scr, h - 1, help_foot(st.hrow, h - 2, total, w),
              curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
         scr.refresh()
         return
@@ -365,6 +381,9 @@ def _draw(scr, st: State) -> None:
                 base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
                 _put(scr, top + i, line, base, col, sel)
         _draw_hint_and_footer(scr, st, w, hint_y, foot_y, col)
+        # 다른 세 갈래는 전부 여기서 refresh 한다. 이 갈래만 빠져 있었다 —
+        # `get_wch` 가 암묵적으로 refresh 해 줘서 **우연히** 보였을 뿐이다.
+        scr.refresh()
         return
     if st.drill:
         lines, nhead = names_lines(st, w)
@@ -437,12 +456,32 @@ def _draw(scr, st: State) -> None:
     scr.refresh()
 
 
+def help_foot(hrow: int, shown: int, total: int, width: int) -> str:
+    """도움말 모달의 마지막 줄 — 키 안내 + **어디까지 읽었나**. 정확히 ``width`` 칸.
+
+    ⚠️ **위치 표시가 먼저 자리를 잡는다.** 예전엔 이 줄이 한 줄 고정 문자열이라
+    키 안내가 폭을 다 먹고 위치가 뒤에서 잘렸다 — 폭 50 에서 ``1-20 / 200`` 이
+    ``1-20 / 20`` 으로 보였다. **잘린 숫자는 다른 숫자다**(전체 200줄이 20줄로
+    읽힌다). 잘린 안내문은 "여기가 전부" 로 읽히지만 잘린 숫자는 아예 거짓말이라,
+    둘 중 양보하는 쪽은 안내문이어야 한다.
+
+    앱 안에 박아 두면 폭을 넘겨 검사할 수가 없어서 순수 함수로 뺀다 — 원장은
+    이미 같은 모양이다(``ledger_view.help_screen``).
+    """
+    more = f" {hrow + 1}-{min(hrow + shown, total)} / {total}"
+    room = max(0, width - view_cell_len(more))
+    return pad_footer(tier_for(HELP_FOOT_TIERS, room) + more, width)
+
+
 def _draw_hint_and_footer(scr, st: State, w: int, hint_y: int, foot_y: int,
                           col: bool) -> None:
     if hint_y >= 0:
         _put(scr, hint_y, pad_footer(hint_text(st, w), w),
              curses.color_pair(C_AMBER) if col else curses.A_DIM, False)
-    _put(scr, foot_y, pad_footer(footer_line(w, st.drill), w),
+    # 어느 화면이 어느 푸터를 쓰는지의 판정은 **뷰 한 곳**이다(`footer_tiers`).
+    # 여기서 `if` 로 고르던 시절, 화면이 하나 늘었는데 그 `if` 를 안 늘려서
+    # 전 종목 화면이 섹터 표의 푸터를 그렸다 — 안 듣는 키를 광고하면서.
+    _put(scr, foot_y, pad_footer(footer_line(w, st.drill, st.allv), w),
          curses.color_pair(C_HEAD) if col else curses.A_REVERSE, False)
 
 
@@ -639,6 +678,12 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
             _keep_selection(st, lambda: st.cycle("m", 1 if k == ord("m") else -1))
         elif k in (ord("a"), ord("A")):
             _keep_selection(st, lambda: st.cycle("a", 1 if k == ord("a") else -1))
+        elif k == ord("t"):
+            # 전 종목 화면은 **여기서도 열린다.** 도움말은 늘 `t` 를 조건 없이
+            # 적어 왔는데 이 분기가 그냥 삼켜서, 드릴다운에서만 없는 키였다.
+            # 두 층이 겹쳐 보이지는 않으므로(전 종목은 전 섹터를 본다) 드릴다운을
+            # 닫고 연다 — 돌아오는 곳이 섹터 표라는 것은 푸터와 도움말이 적는다.
+            st.allv, st.drill, st.arow = True, False, 0
         return True
 
     if st.allv:

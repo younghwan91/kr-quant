@@ -629,7 +629,16 @@ class State:
 
         관문은 각 층이 이미 걸었다 — 어느 한쪽이라도 점수가 없으면 곱도 없다.
         그래서 이 목록에 뜨는 것은 **양쪽 관문을 다 통과한 종목**뿐이다.
+
+        ⚠️ **캐시한다.** 이 목록은 27개 섹터를 돌며 섹터마다 `names()` 를 다시
+        만든다(2,600여 종목 전수). 캐시가 없으면 이 화면은 **키를 누를 때마다,
+        아니 프레임마다** 그걸 처음부터 다시 했다 — `rows()` 가 같은 이유로 이미
+        캐시를 갖고 있다. 캐시 키에는 목록을 바꾸는 상태가 **전부** 들어가야
+        한다(`rows()` 가 rev 를 빠뜨려 한 번 밟은 자리다).
         """
+        ck = (self.wi, self.mi, self.ai, self.si, self.rev)
+        if getattr(self, "_picks_ck", None) == ck:
+            return self._picks_v
         out: list[dict] = []
         keep_row, keep_drill = self.row, self.drill
         try:
@@ -650,6 +659,7 @@ class State:
         finally:
             self.row, self.drill = keep_row, keep_drill
         out.sort(key=lambda t: -t["both"])
+        self._picks_ck, self._picks_v = ck, out
         return out
 
     def _gate_conc(self, rows: list[dict]) -> None:
@@ -1320,8 +1330,10 @@ HELP = [
     ("s S", "정렬 열 바꾸기. 대문자는 역방향. 드릴다운에서는 종목 정렬."),
     ("r", "정렬 역순 토글. ▼ 내림차순(큰 것 먼저) · ▲ 오름차순 —"),
     ("", "        **순매도 상위**(가장 많이 판 쪽)는 이걸 켜야 위로 온다."),
-    ("t", "전 종목 화면 — 전 섹터를 곱 순으로 한 화면에. h·←·Esc 로 돌아온다."),
-    ("? F1", "이 도움말. q·Esc·?·Enter 로 닫는다."),
+    ("t", "전 종목 화면 — 전 섹터를 곱 순으로 한 화면에. 섹터 표에서도"),
+    ("", "        드릴다운에서도 열리고, t·h·←·Esc 로 섹터 표로 돌아온다."),
+    ("? F1", "이 도움말. 안에서 ↑↓·PgUp/PgDn·Space·g·G·Home·End 로 훑고,"),
+    ("", "        q·Esc·?·Enter 로 닫는다."),
     ("q", "종료. 단 도움말 안에서는 **닫기만** 한다(한 번 더 눌러야 종료)."),
     ("", "한영 상태에서도 위 키가 그대로 듣는다. 다만 자판이 Shift 를 구분하지"),
     ("", "        않는 자리가 있어 **대문자 역방향은 w·r 만** 된다(끝으로는 End)."),
@@ -1557,19 +1569,28 @@ def hint_line(head: str, desc: str, width: int) -> str:
     아니다. ``kq-flow`` 와 ``kq-ledger`` 가 같은 자리에 같은 줄을 그리므로
     자르기 규칙도 한 곳에 둔다 — 예전에 flow 쪽만 폭을 안 봐서 폭 40 에서
     78칸짜리 줄이 나갔고, 그 실수를 원장에서 다시 하지 않으려면 함수가 하나여야 한다.
+
+    ⚠️ 말줄임표 자리를 **한 칸으로 못박지 않는다.** ``…``(U+2026)는 East Asian
+    Width 가 `A`(Ambiguous) 라 ``KQ_AMBIGUOUS_WIDE=1`` 이나 한글 로케일 터미널
+    에서는 **두 칸**이다. 1 로 박아 두면 그 환경에서 이 줄만 정확히 한 칸을
+    넘쳐서, 두 앱의 힌트바 끝 글자가 통째로 잘려 나갔다(실측: 폭 24~200 중
+    54개 폭에서 발생). 폭 계산을 하는 함수가 자기가 쓸 글자의 폭을 다시 손으로
+    세면 이렇게 어긋난다 — `cell_width` 에 묻는다.
     """
+    ell = "…"
+    ew = cell_width(ell)
     room = width - cell_len(head) - 4          # " · " 세 칸 + 여유 한 칸
-    if room < 2:
+    if room < ew + 1:
         return pad(head, width)
     if cell_len(desc) > room:
         cut, used = "", 0
         for ch in desc:
             w2 = cell_width(ch)
-            if used + w2 > room - 1:
+            if used + w2 > room - ew:
                 break
             cut += ch
             used += w2
-        desc = cut.rstrip() + "…"
+        desc = cut.rstrip() + ell
     return head + " · " + desc
 
 
@@ -1645,21 +1666,61 @@ FOOTER_TIERS = (
 )
 FOOTER_DRILL_TIERS = (
     " ↑↓:종목 s:정렬 r:역순 g/G:처음/끝 PgUp/PgDn:쪽 w:구간 m:시장 a:주체"
-    " h:돌아가기 ?:도움말 q:종료",
-    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 h:돌아가기 ?:도움말 q:종료",
+    " t:전종목 h:돌아가기 ?:도움말 q:종료",
+    " ↑↓:종목 s:정렬 r:역순 w:구간 m:시장 a:주체 t:전종목 h:돌아가기 ?:도움말 q:종료",
     " s:정렬 r:역순 w m a:바꾸기 h:돌아가기 ?:전체 키 q:종료",
     " s r w m a:바꾸기 h:뒤로 ?:키 q:종료",
     " ?:키 h:뒤로 q:종료",
+)
+#: 전 종목 화면(``t``)의 푸터. **이 화면은 자기 푸터를 가져야 한다** — 예전엔
+#: 섹터 표의 푸터를 그대로 그렸고, 그 줄은 여기서 **안 듣는** ``s``(정렬)·``r``
+#: (역순)·``Enter``(종목)를 광고하면서 정작 **돌아가는 키**(``h``·``←``·``Esc``)는
+#: 한 글자도 안 적었다. 적혔는데 안 듣는 키가 안 적힌 키보다 나쁘다 — 없는 기능을
+#: 찾아 누르게 만들기 때문이다. 게다가 ``t:전종목`` 이라 적혀 있었는데 이 화면에서
+#: ``t`` 는 **나가기**였다(같은 글자가 같은 줄에서 반대 뜻).
+#:
+#: 정렬이 없는 것은 설계다(곱 내림차순 고정) — 힌트바가 그 사실을 적는다
+#: (:data:`flow_app.HINT_ALL_TIERS`), 종합 화면이 정렬 없음을 적는 것과 같은 규칙이다.
+FOOTER_ALL_TIERS = (
+    " ↑↓:종목 g/G:처음/끝 PgUp/PgDn:쪽 w:구간 m:시장 a:주체"
+    " t·h:섹터 표로 ?:도움말 q:종료",
+    " ↑↓:종목 w:구간 m:시장 a:주체 t·h:섹터 표로 ?:도움말 q:종료",
+    " w m a:바꾸기 t·h:돌아가기 ?:전체 키 q:종료",
+    " w m a:바꾸기 h:뒤로 ?:키 q:종료",
+    " ?:키 h:뒤로 q:종료",
+)
+#: 도움말 모달의 마지막 줄. 예전엔 :mod:`flow_app` 안에 **한 줄 고정 문자열**로
+#: 박혀 있었다 — 폭 50 에서 위치 표시 ``1-20 / 200`` 이 ``1-20 / 20`` 으로 잘렸다.
+#: 잘린 숫자는 다른 숫자다(전체 200줄이 20줄로 읽힌다). 원장은 이미 단계로
+#: 갖고 있었으므로(``ledger_view.HELP_FOOT_TIERS``) 같은 자리에 같은 모양으로 둔다.
+HELP_FOOT_TIERS = (
+    " ↑↓/PgUp/PgDn/Space:스크롤  g/G·Home/End:처음·끝  q·Esc·?·Enter:닫기",
+    " ↑↓/PgDn/Space:스크롤  g/G:처음·끝  q·Esc·?:닫기",
+    " ↑↓/PgDn:스크롤  g/G:처음·끝  q:닫기",
+    " ↑↓:스크롤  q:닫기",
+    " q:닫기",
 )
 #: 예전 이름 — 중간 단계가 기본이다.
 FOOTER = FOOTER_TIERS[1]
 FOOTER_DRILL = FOOTER_DRILL_TIERS[1]
 
 
-def footer_line(width: int, drill: bool = False) -> str:
+def footer_tiers(drill: bool = False, allv: bool = False) -> tuple[str, ...]:
+    """이 화면이 쓰는 푸터 단계 — **어느 화면이 어느 푸터를 쓰는지의 유일한 판정**.
+
+    앱이 `if` 로 고르면 화면이 하나 늘 때 그 `if` 를 빠뜨리고, 실제로 빠뜨렸다
+    (전 종목 화면이 섹터 표 푸터를 그렸다). 검사도 여기 묻는다 — 검사와 화면이
+    다른 표를 보면 검사가 통과하면서 아무것도 확인 못 한다.
+    """
+    if allv and not drill:
+        return FOOTER_ALL_TIERS
+    return FOOTER_DRILL_TIERS if drill else FOOTER_TIERS
+
+
+def footer_line(width: int, drill: bool = False, allv: bool = False) -> str:
     """폭에 **온전히** 들어가는 가장 자세한 푸터.
 
     어느 단계에서도 ``?`` 는 남긴다 — 줄어든 푸터가 "여기가 전부" 로 읽히면
     안 되기 때문이다. 나머지 키는 ``?`` 뒤에 전부 적혀 있다.
     """
-    return tier_for(FOOTER_DRILL_TIERS if drill else FOOTER_TIERS, width)
+    return tier_for(footer_tiers(drill, allv), width)
