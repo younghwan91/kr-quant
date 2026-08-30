@@ -9,6 +9,7 @@
   D. 부류   — 계산에 들어가는 두 값이 같은 집합·시점·파라미터에서 나오는가
   E. 화면   — **그려진 글자**가 열 정의가 내는 값과 같은가(폭 80·120·200)
   F. 독립   — **DB 원자료에서 처음부터 다시 만든 값**과 페이로드가 같은가
+  G. 원장   — ``kq-ledger`` 화면의 값·그림, 그리고 flow 와 같은 수를 말하는가
 
 A~D 는 전부 *파일 안의 값끼리* 정합한지만 본다. 그래서 producer 가 임펄스를
 통째로 잘못 계산해도(수량을 금액으로 착각, `flu_rt` 의 bp 단위를 놓침 — 둘 다
@@ -652,6 +653,309 @@ def layer_e(D: dict) -> None:
     chk("E", "상대수익 = 종목 수익률 − 섹터 표의 수익률", not bad, "; ".join(bad[:3]))
 
 
+
+# ─────────────────────────────────────────────── G. 원장 화면
+
+#: 원장 화면을 훑을 폭. 좁은 경계(48·51·71)를 일부러 넣는다 — 스파크라인의
+#: 마지막 점이 밀리던 자리가 폭 51 이었고, 열이 떨어지는 경계가 71 이다.
+LEDGER_WIDTHS = (48, 51, 71, 79, 80, 119, 120, 199)
+
+
+def layer_g(P: dict, D: dict) -> None:
+    """G. **자금 원장 화면**(``kq-ledger``) — 값·그림·두 앱의 대조.
+
+    A~F 는 ``kq-flow`` 의 표(``numbers.html`` 의 ``D``)만 본다. 원장은 같은
+    페이로드를 **다른 함수로** 읽어 다른 화면을 그리므로, flow 가 초록이어도
+    원장이 틀릴 수 있다. 실제로 그랬다 — ``downsample`` 이 부동소수 반올림으로
+    구간의 마지막 날을 버렸고(폭 51·60일), ``종목[수]`` 가 flow 와 다른 수를
+    말했다(324칸 중 49칸).
+
+    ⚠️ **``Model`` 의 값을 ``Model`` 로 검산하지 않는다.** 기대값은 페이로드의
+    ``flows`` 를 여기서 직접 더해 만들고(F 층과 같은 규율), 화면 값은 **그려진
+    문자열을 다시 파싱해** 꺼낸다. 같은 함수를 두 번 부르면 같은 버그를 두 번
+    통과시킨다.
+    """
+    print("\nG. 원장 화면 — 값·그림·kq-flow 와의 대조")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src"))
+    try:
+        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
+        from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+    except ImportError as e:                      # pragma: no cover
+        chk("G", "ledger_view 를 읽을 수 있는가", False, str(e))
+        return
+
+    AK = LV.ACTOR_KEYS
+    mo = LV.Model(P)
+    dates, secs = P["dates"], P["sectors"]
+
+    def span(line: str, a: int, w: int) -> str:
+        """줄에서 (시작 표시칸, 폭) 구간의 글자 — 한글 2칸을 센다."""
+        cur, buf = 0, []
+        for ch in line:
+            if a <= cur < a + w:
+                buf.append(ch)
+            cur += FV.cell_width(ch)
+        return "".join(buf).strip()
+
+    def cells(line: str, widths: list[int], i: int) -> str:
+        return span(line, *FV.span_at(widths, i))
+
+    def series(mkts, sector, key, w):
+        """(시장들, 섹터)의 일별 계열 — **페이로드에서 직접** 더한다."""
+        arr = [0.0] * len(dates)
+        for m in mkts:
+            c = P["flows"][m].get(sector)
+            if c is None:
+                continue
+            for i, v in enumerate(c[key]):
+                arr[i] += v
+        return arr[len(arr) - w:]
+
+    # ── ① 표의 값: 페이로드 직접 재집계 ──
+    pairs, bad_gate = [], []
+    for mi, mk in enumerate(mo.markets):
+        mkts = P["markets"] if mk == "전체" else [mk]
+        for wi, W in enumerate(LV.WINDOWS):
+            w = min(W, len(dates))
+            for ai in range(len(LV.ACTORS)):
+                mo.mi, mo.wi, mo.ai = mi, wi, ai
+                rows = {r["sector"]: r for r in mo.rows()}
+                for s in secs:
+                    d4 = [series(mkts, s, k, w) for k in AK]
+                    exp = {k: sum(a) for k, a in zip(AK, d4)}
+                    gross = sum(abs(x) for a in d4 for x in a)
+                    rabs = sum(abs(sum(a[i] for a in d4)) for i in range(w))
+                    ag = sum(abs(x) for x in d4[ai])
+                    tag = f"{mk}/{W}/{LV.ACTORS[ai][0]}/{s}"
+                    r = rows[s]
+                    for k in AK:
+                        pairs.append((f"{tag}/{k}", r[k], exp[k]))
+                    pairs.append((f"{tag}/잔여", r["resid"], -sum(exp.values())))
+                    pairs.append((f"{tag}/절대크기", r["abs"],
+                                  sum(abs(v) for v in exp.values())))
+                    pairs.append((f"{tag}/잔여몫", r["resid_pct"],
+                                  rabs / gross * 100
+                                  if gross >= LV._MIN_RATIO_GROSS else None))
+                    pairs.append((f"{tag}/최대일몫", r["spike"],
+                                  max(abs(x) for x in d4[ai]) / ag * 100
+                                  if ag >= LV._MIN_RATIO_GROSS else None))
+                    # 비율은 **분모가 클 때만** 뜻이 있다 — 값이 있으면 분모도 있어야.
+                    if r["resid_pct"] is not None and gross < LV._MIN_RATIO_GROSS:
+                        bad_gate.append(f"{tag} 잔여몫 분모 {gross:.3f}억")
+                    if r["spike"] is not None and ag < LV._MIN_RATIO_GROSS:
+                        bad_gate.append(f"{tag} 최대일몫 분모 {ag:.3f}억")
+    bad, worst = [], 0.0
+    for label, x, y in pairs:
+        if (x is None) != (y is None):
+            bad.append(f"{label} {x} vs {y}")
+        elif x is not None:
+            worst = max(worst, abs(x - y))
+            if abs(x - y) > TOL_EXACT:
+                bad.append(f"{label} {x} vs {y}")
+    chk("G", "원장 표의 값 = 페이로드 직접 재집계 (시장×구간×주체×섹터×8값)",
+        not bad, f"{len(pairs)}칸 · 최대오차 {worst:.3e}  " + "; ".join(bad[:2]))
+    chk("G", "비율 열은 분모가 1억 이상일 때만 값을 낸다", not bad_gate,
+        f"{len(bad_gate)}건  " + "; ".join(bad_gate[:2]))
+
+    # ── ② 그려진 글자 = 열 정의 · 스파크라인 역산 ──
+    lvl = {g: k for k, g in LV.SPARK_SIGNED.items()}
+    bad_w, bad_v, bad_sp, bad_sc, seen = [], [], [], [], 0
+    for width in LEDGER_WIDTHS:
+        for mi in range(len(mo.markets)):
+            for wi in range(len(LV.WINDOWS)):
+                for ai in range(len(LV.ACTORS)):
+                    mo.mi, mo.wi, mo.ai = mi, wi, ai
+                    seen += 1
+                    tag = f"{width}/{mo.market}/{mo.window}/{mo.actor}"
+                    rows = mo.rows()
+                    unif = mo.uniform_spike()
+                    lines, _t, _nh = LV.ledger_lines(mo, width)
+                    tl, _t2, tnh = LV.timeline_lines(mo, width)
+                    cm, marks, cnh = LV.comove_lines(mo, width)
+                    for ln in lines + tl + cm + LV.header_lines(mo, width):
+                        if FV.cell_len(ln) != width:
+                            bad_w.append(f"{tag} {FV.cell_len(ln)}!={width}")
+                    if width >= LV.LEDGER_MIN_W:
+                        cols = LV._fit(LV.ledger_cols(), width)
+                        ws = [c[1] for c in cols]
+                        for ln, r in zip(lines[1:], rows):
+                            sp, rp = r["spike"], r["resid_pct"]
+                            mark = ("!" if sp is not None
+                                    and sp >= LV.SPIKE_MARK_MULT * unif else "")
+                            want = (["", "~" if r["n"] < LV.THIN_N else ""]
+                                    + [FV.fmt_amt(r[k]) for k in AK]
+                                    + [FV.fmt_amt(r["resid"]),
+                                       f"{rp:.1f}" if rp is not None else "—",
+                                       f"{sp:.1f}{mark}" if sp is not None else "—",
+                                       str(r["n"])])
+                            for i, c in enumerate(cols):
+                                if c[0] in ("섹터", ""):
+                                    continue
+                                got = cells(ln, ws, i)
+                                if got != want[i].strip():
+                                    bad_v.append(f"원장 {tag} {c[0]} "
+                                                 f"{got!r}!={want[i]!r}")
+                    if width >= LV.TIMELINE_MIN_W:
+                        cols = LV._fit(LV.timeline_cols(), width)
+                        ws = [c[1] for c in cols]
+                        sw = min(mo.window, width - sum(c[1] + 1 for c in cols))
+                        for ln, r in zip(tl[tnh:], rows):
+                            v = series(P["markets"] if mo.market == "전체"
+                                       else [mo.market], r["sector"], mo.actor,
+                                       mo.window)
+                            cum, acc = [], 0.0
+                            for x in v:
+                                acc += x
+                                cum.append(acc)
+                            show = LV.downsample(cum, sw)
+                            # 그림의 오른쪽 끝은 **구간의 마지막 날**이다.
+                            if show and show[-1] != cum[-1]:
+                                bad_sp.append(f"{tag} 끝점이 구간 끝이 아니다")
+                            want = ["", "~" if r["n"] < LV.THIN_N else "",
+                                    FV.fmt_amt(acc), f"{max(abs(x) for x in show):,.0f}"
+                                    if show else "0"]
+                            for i, c in enumerate(cols):
+                                if c[0] in ("섹터", ""):
+                                    continue
+                                got = cells(ln, ws, i)
+                                if got != want[i].strip():
+                                    bad_v.append(f"전개 {tag} {c[0]} "
+                                                 f"{got!r}!={want[i]!r}")
+                            if len(cols) > 3:
+                                sc = float(cells(ln, ws, 3).replace(",", ""))
+                                if sc + 1 < abs(acc):
+                                    bad_sc.append(f"{tag} 눈금 {sc} < |누적| {acc}")
+                            drawn = [ch for ch in ln if ch in LV.SPARK]
+                            if len(drawn) != len(show):
+                                bad_sp.append(f"{tag} 점 {len(drawn)}!={len(show)}")
+                                continue
+                            peak = max((abs(x) for x in show), default=0.0)
+                            for ch, val in zip(drawn, show):
+                                if peak <= 0 or val == 0:
+                                    exp = 0
+                                else:
+                                    rr = val / peak
+                                    exp = (2 if rr > 0.5 else 1 if rr > 0
+                                           else -1 if rr >= -0.5 else -2)
+                                if lvl[ch] != exp:
+                                    bad_sp.append(f"{tag} 레벨 {lvl[ch]}!={exp}")
+                                # 중앙선 위/아래가 부호와 같은가.
+                                if (val > 0) != (lvl[ch] > 0) and val != 0:
+                                    bad_sp.append(f"{tag} 부호 {val} {ch}")
+                    # 동시성 — 그려진 칸이 상관행렬과 같은가, 색 지시가 부호 위인가.
+                    if mo.window >= LV._MIN_CORR_N:
+                        keys, m = mo.corr_matrix()
+                        mean = mo.corr_means()
+                        x0 = 13 + 1 + 4 + 1
+                        ncol = max(0, min(len(keys), (width - x0) // 2))
+                        for i, a in enumerate(keys):
+                            ln = cm[cnh + i]
+                            got = span(ln, 14, 4)
+                            wnt = f"{mean[a] * 100:+.0f}" if mean[a] == mean[a] else "?"
+                            if got != wnt:
+                                bad_v.append(f"동시성 {tag} 평균 {got!r}!={wnt!r}")
+                            cur, buf = 0, []
+                            for ch in ln:
+                                if cur >= x0:
+                                    buf.append(ch)
+                                cur += FV.cell_width(ch)
+                            s = "".join(buf)
+                            for j in range(ncol):
+                                wnt = (LV.heat_diag() if i == j
+                                       else LV.heat_cell(m[i][j]))
+                                if s[2 * j:2 * j + 2] != wnt:
+                                    bad_v.append(f"동시성 {tag} 칸 {i},{j}")
+                                    break
+                        for y, x, wd, lv in marks:
+                            t = span(cm[y], x, wd)
+                            if not t or t[0] not in "+-" or lv == 0:
+                                bad_v.append(f"동시성 {tag} 색 지시 {y},{x} {t!r}")
+    chk("G", "모든 줄의 표시 폭 = 요청한 폭", not bad_w,
+        f"{len(bad_w)}건  " + "; ".join(bad_w[:2]))
+    chk("G", f"그려진 글자 = 열 정의 (폭 {len(LEDGER_WIDTHS)}종 × 시장×구간×주체)",
+        not bad_v, f"{len(bad_v)}건  " + "; ".join(bad_v[:2]))
+    chk("G", "스파크라인: 레벨·부호·점 개수·끝점이 구간 끝", not bad_sp,
+        f"{len(bad_sp)}건  " + "; ".join(bad_sp[:2]))
+    chk("G", "눈금[억] ≥ |누적[억]| (두 열이 서로를 부정하지 않는가)", not bad_sc,
+        f"{len(bad_sc)}건  " + "; ".join(bad_sc[:2]))
+    chk("G", "검사한 (폭,시장,구간,주체) 조합", seen >= 200, f"{seen}개")
+
+    # ── ③ 원장 ↔ kq-flow: 같은 것을 같은 수로 말하는가 ──
+    npair, nbad, fbad, fworst = 0, [], [], 0.0
+    for key, B in D["blocks"].items():
+        win, mk = key.split("|")
+        if not win.isdigit() or int(win) not in LV.WINDOWS or mk not in mo.markets:
+            continue
+        mo.mi, mo.wi = mo.markets.index(mk), LV.WINDOWS.index(int(win))
+        rows = {r["sector"]: r for r in mo.rows()}
+        for r in B["rows"]:
+            g = rows.get(r["sector"])
+            if g is None:
+                continue
+            npair += 1
+            if g["n"] != r.get("n_all"):
+                nbad.append(f"{key}/{r['sector']} 원장 {g['n']} vs flow {r.get('n_all')}")
+            for k in AK:
+                fworst = max(fworst, abs(g[k] - r[k]))
+                if abs(g[k] - r[k]) > TOL_FLOW:
+                    fbad.append(f"{key}/{r['sector']}/{k} {g[k]} vs {r[k]}")
+    chk("G", "원장·flow 의 순매수가 같은가 (시장×구간×섹터×주체)", not fbad,
+        f"{npair * len(AK)}칸 · 최대오차 {fworst:.3e}  " + "; ".join(fbad[:2]))
+    chk("G", "원장·flow 의 종목[수] 가 같은가", not nbad,
+        f"{npair}칸 · {len(nbad)}건  " + "; ".join(nbad[:2]))
+
+    # ── ④ 화면이 인용하는 실측 주장이 오늘 데이터 안에 있는가 ──
+    #
+    # ``kq-flow`` 가 밟은 자리다 — "4개 구간 전부 Spearman 1.0000" 이 시장=전체
+    # 에서만 잰 값이었다. 원장의 도움말·한계도 범위를 적어 두고 있으므로,
+    # 그 범위를 **오늘 데이터로 다시 재서** 벗어나면 말한다.
+    obs = {}
+    for mi in range(len(mo.markets)):
+        for wi, W in enumerate(LV.WINDOWS):
+            if W < LV._MIN_CORR_N:
+                continue
+            for ai, (k, ko) in enumerate(LV.ACTORS):
+                mo.mi, mo.wi, mo.ai, mo.detrend = mi, wi, ai, False
+                o, nul = mo.obs_neg_frac(), mo.null_neg_frac()
+                obs.setdefault(ko, []).append((o * 100, nul * 100, mo.market, W))
+    three = [v for ko in ("개인", "외국인", "기관") for v, *_ in obs[ko]]
+    etc = [v for v, *_ in obs["기타법인"]]
+    lo3, hi3 = min(three), max(three)
+    txt = "\n".join(LV.LIMITS) + "\n".join(d for _n, d in LV.LEDGER_HELP)
+    chk("G", "도움말·한계의 동시성 범위가 오늘 실측을 덮는가(β제거 끈 상태)",
+        f"{lo3:.0f}~{hi3:.0f}%" in txt,
+        f"실측 개인·외국인·기관 {lo3:.0f}~{hi3:.0f}% · "
+        f"기타법인 {min(etc):.0f}~{max(etc):.0f}%")
+    # 그리고 판정 자체("셋은 널보다 드물다")가 12조합 전부에서 유지되는가.
+    bad = [f"{ko}/{m}/{W} 관측 {v:.0f}% ≥ 널 {n:.0f}%"
+           for ko in ("개인", "외국인", "기관") for v, n, m, W in obs[ko]
+           if v >= n - 3]
+    chk("G", "개인·외국인·기관은 어느 조합에서도 널보다 음수쌍이 드문가(β제거 끈 상태)",
+        not bad,
+        f"{len(three)}조합  " + "; ".join(bad[:2]))
+
+    # 잔여의 "최악의 한 칸" — 한계 §5 는 gross 하한을 밝히고 적는다.
+    worst_lo, worst_hi = (0.0, None), (0.0, None)
+    for i in range(len(dates)):
+        for m in P["markets"]:
+            for s in secs:
+                c = P["flows"][m][s]
+                cr = sum(c[k][i] for k in AK)
+                cg = sum(abs(c[k][i]) for k in AK)
+                if cg <= 0:
+                    continue
+                hit = (abs(cr) / cg * 100, f"{m}/{s}/{dates[i]} "
+                       f"잔여 {-cr:+,.0f}억 / gross {cg:,.0f}억")
+                worst_lo = max(worst_lo, hit)
+                if cg >= 100:
+                    worst_hi = max(worst_hi, hit)
+    chk("G", "한계 §5 의 '최악의 한 칸' 이 하한과 함께 적혀 있는가",
+        f"{worst_hi[0]:.1f}%" in txt and "gross 100억" in txt,
+        f"gross≥100억 {worst_hi[0]:.1f}% ({worst_hi[1]}) · "
+        f"하한 없으면 {worst_lo[0]:.1f}%")
+
+
 def layer_c(D: dict, html: str) -> None:
     print("\nC. 계산 — 표의 구조와 값이 정합한가")
     # ⚠️ 표가 둘 이상이므로 `rows.forEach` 로 찾으면 안 된다 — 종합 표(ctbl)가
@@ -920,6 +1224,74 @@ def layer_f(P: dict, db: str | None) -> None:
     chk("F", "유니버스 밖(마스터에 없는) 종목 비중 < 20%",
         outside < 0.2 * max(inside, 1),
         f"밖 {outside}종목 / 안 {inside}종목 = {outside/max(inside,1)*100:.1f}%")
+
+    # ── ⑦ 원장 화면의 구간 합계 — **SQL 로 다시 집계**해 대조 ──
+    #
+    # G 층은 페이로드 안에서만 정합을 본다(화면 ↔ 페이로드). 페이로드 자체가
+    # 틀리면 둘 다 같은 값으로 초록이다. 그래서 원장이 실제로 보여주는 수 —
+    # (시장, 섹터, 구간, 주체)의 **구간 누적 순매수** — 를 DB 에서 처음부터
+    # 다시 만든다. ①이 일별을 보고 여기는 화면이 쓰는 **구간 합**을 본다.
+    # 시장 '전체' 도 화면과 같은 방식(두 시장의 합)으로 만들어 대조한다.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src"))
+    from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+    mo = LV.Model(P)
+    for W in LV.WINDOWS:
+        if W > n:
+            continue
+        start = dates[n - W]
+        sel = ", ".join(f"sum(s.{c} * 1.0 * abs(s.close))" for _k, c in ACT)
+        cur.execute(f"SELECT st.market, {SEC}, {sel} FROM supply_demand s "  # noqa: S608
+                    f"JOIN stocks st ON st.code=s.code "
+                    f"WHERE s.source={ph} AND s.date BETWEEN {ph} AND {ph} "
+                    f"GROUP BY 1,2", ("kiwoom", start, d1))
+        got = {}
+        for row in cur.fetchall():
+            for j, (k, _c) in enumerate(ACT):
+                got[(row[0], row[1], k)] = float(row[2 + j]) / 1e8
+        mo.wi = LV.WINDOWS.index(W)
+        pairs = []
+        for mi, mk in enumerate(mo.markets):
+            mo.mi = mi
+            mkts = P["markets"] if mk == "전체" else [mk]
+            for r in mo.rows():
+                for k, _c in ACT:
+                    pairs.append((f"{mk}/{r['sector']}/{k}", r[k],
+                                  sum(got.get((m, r["sector"], k), 0.0)
+                                      for m in mkts)))
+        # 페이로드가 일별로 0.01억까지 반올림하므로 W 일을 더하면 그만큼 쌓인다.
+        cmp_abs(f"원장 {W}일 구간 합계 (시장×섹터×주체)", pairs, TOL_FLOW * W)
+
+    # ── ⑧ 한계 §7(생존편향)이 주장하는 **모양**이 오늘도 참인가 ──
+    #
+    # §7 은 세 가지를 말한다: 빠진 폭이 작다 · **거래소가 코스닥보다 크다** ·
+    # 종목 수는 코스닥이 많다. 퍼센트 자체는 날마다 바뀌므로 검사하지 않고
+    # (그러면 매일 빨개진다) **뒤집히면 안 되는 것**만 본다. 값은 detail 로 남긴다.
+    # 시장은 `stocks` 에 없는 종목이라 `delisted_stocks` 에서 가져온다.
+    cur.execute(f"""SELECT d.market, count(DISTINCT s.code),
+          sum(s.acc_trde_qty*1.0*abs(s.close)), sum(abs(s.institution*1.0*abs(s.close)))
+        FROM supply_demand s LEFT JOIN delisted_stocks d ON d.code=s.code
+        WHERE s.date BETWEEN {ph} AND {ph}
+          AND s.code NOT IN (SELECT code FROM stocks) GROUP BY 1""", (d0, d1))
+    out = {("거래소" if r[0] == "유가증권" else r[0]):
+           (int(r[1]), float(r[2] or 0), float(r[3] or 0)) for r in cur.fetchall()}
+    cur.execute(f"SELECT st.market, sum(s.acc_trde_qty*1.0*abs(s.close)), "  # noqa: S608
+                f"sum(abs(s.institution*1.0*abs(s.close))) "
+                f"FROM supply_demand s JOIN stocks st ON st.code=s.code "
+                f"WHERE s.source={ph} AND s.date BETWEEN {ph} AND {ph} GROUP BY 1", args)
+    ins = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall()}
+    share = {m: out[m][1] / ins[m][0] * 100 for m in out if m in ins}
+    tot_tv = sum(v[1] for v in out.values()) / sum(v[0] for v in ins.values()) * 100
+    tot_inst = sum(v[2] for v in out.values()) / sum(v[1] for v in ins.values()) * 100
+    detail = (f"빠진 거래대금 {tot_tv:.3f}% · 기관 gross {tot_inst:.3f}% · "
+              + " · ".join(f"{m} {share[m]:.3f}%({out[m][0]}종목)" for m in sorted(share)))
+    chk("F", "한계 §7: 빠진 거래대금 비중이 1% 미만인가", tot_tv < 1.0, detail)
+    chk("F", "한계 §7: 빠진 금액은 코스닥이 아니라 거래소에서 큰가",
+        share.get("거래소", 0) > share.get("코스닥", 0),
+        f"거래소 {share.get('거래소', 0):.3f}% vs 코스닥 {share.get('코스닥', 0):.3f}%")
+    chk("F", "한계 §7: 빠진 **종목 수**는 코스닥이 많은가",
+        out.get("코스닥", (0,))[0] > out.get("거래소", (0,))[0],
+        f"코스닥 {out.get('코스닥', (0,))[0]}종목 vs 거래소 {out.get('거래소', (0,))[0]}종목")
     con.close()
 
 
@@ -943,6 +1315,7 @@ def main() -> int:
     layer_c(D, html)
     layer_d(D, payload, html)
     layer_e(D)
+    layer_g(payload, D)
     if a.db_check:
         layer_f(payload, a.db)
 

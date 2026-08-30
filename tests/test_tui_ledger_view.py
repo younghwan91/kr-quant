@@ -1126,9 +1126,10 @@ def test_spark_puts_zero_at_the_same_height_in_every_row():
 def test_timeline_scale_column_matches_the_points_actually_drawn(data):
     """``눈금[억]`` 은 **그려지는 점들**로 재야 한다.
 
-    예전 ``진폭[억]`` 은 원본 260점의 최고−최저였는데 그림은 다운샘플된 점으로
-    정규화된다. 폭 80·260일에서 최대 21.5% 어긋났다(실측: 일반서비스 29,112억
-    vs 그림 22,839억). "숫자가 그림의 눈금을 알려준다"는 계약이 거짓이었다.
+    예전 ``진폭[억]`` 은 원본 점들의 최고−최저였는데 그림은 다운샘플된 점으로
+    정규화된다. 폭 80·260일에서 최대 59.3% 어긋난다(실측 2026-08-28, 시장 3 ×
+    주체 4 전수: 코스닥·개인 일반서비스 28,588억 vs 그림 11,630억).
+    "숫자가 그림의 눈금을 알려준다"는 계약이 거짓이었다.
 
     기대값을 ``spark_scale`` 에서 안 가져온다 — ``downsample`` 로 직접 만든다.
 
@@ -1642,7 +1643,7 @@ def test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there(data):
     said = " ".join(f"{n} {d}" for n, d in LEDGER_HELP)
     assert "옛 문장" not in said, "도움말이 사실이 아닌 상태 보고를 남겼다"
     limits = " ".join(LIMITS)
-    for num in ("0.195%", "0.046%", "0.152%"):
+    for num in ("0.195%", "0.041%", "0.151%", "0.203%"):
         assert num in limits and num in said, f"{num} 이 두 화면 중 하나에 없다"
 
 
@@ -1688,7 +1689,7 @@ def test_the_evidence_script_measures_the_same_way_the_screen_does():
 
     `nan < 0` 은 False 라 그냥 두면 잴 수 없는 쌍이 "음수가 아닌 쌍" 으로 세어져
     음수쌍 비율이 조용히 낮아진다 — 화면이 이미 고친 그 함정이다. 근거와 주장이
-    다른 자로 재면, 화면이 인용하는 실측치(널 50% vs 관측 17~34%)가 화면에서
+    다른 자로 재면, 화면이 인용하는 실측치(널 50% vs 관측 2~38%)가 화면에서
     나오는 값과 다른 수가 된다.
 
     주입: 스크립트가 자기 `_corr` 을 다시 정의하면 첫 단언이, 비율에서 nan 을
@@ -1706,3 +1707,159 @@ def test_the_evidence_script_measures_the_same_way_the_screen_does():
     # 그리고 분산 0 에서 `nan` 을 내는 쪽이 스크립트에도 들어가야 한다.
     assert _corr([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]) != _corr([1.0, 1.0, 1.0],
                                                             [1.0, 2.0, 3.0])
+
+
+# ------------------------------------- 다운샘플 · 종목 수 · 비율 분모
+
+def test_downsampling_never_drops_the_last_day_of_the_window():
+    """그림의 **오른쪽 끝은 구간의 마지막 날**이어야 한다.
+
+    묶음 경계를 ``int((i + 1) * len/n) - 1`` 로 내면 부동소수 반올림이 마지막
+    묶음의 끝을 한 칸 앞으로 민다 — ``n=11, len=60`` 에서 ``11 * (60/11)`` 이
+    ``59.99999999999999`` 이라 **60일 중 마지막 날이 안 그려졌다.** 폭 48~400 ×
+    5구간 중 20개 조합이 그랬다(실측).
+
+    주입: ``downsample`` 을 ``int((i + 1) * len(values) / n) - 1`` 로 되돌리면
+    (11, 60) 에서 58 이 나와 실패한다.
+    """
+    for n in range(1, 60):
+        for k in range(1, 400):
+            got = downsample(list(range(k)), n)
+            assert got[-1] == k - 1, (n, k, got[-1])
+            assert len(got) == min(n, k)
+            assert got == sorted(got), (n, k)       # 묶음 끝점은 단조다
+    assert downsample(list(range(60)), 11)[-1] == 59
+
+
+def test_the_scale_column_is_never_smaller_than_the_cumulative_beside_it():
+    """같은 줄의 ``누적[억]`` 과 ``눈금[억]`` 이 서로를 부정하면 안 된다.
+
+    ``눈금`` 은 그려진 점의 ``max|·|`` 이고 ``누적`` 은 구간 끝의 값이다. 끝점이
+    그려지면 ``눈금 ≥ |누적|`` 이 **항상** 참이다. 마지막 점을 떨어뜨리던 시절엔
+    거짓이었다 — 실측(폭 51·60일, 전체·외국인·전기/전자): 누적 −533,125억 옆에
+    눈금 516,107억 이 앉아 있었다.
+
+    주입: ``downsample`` 의 정수 산술을 부동소수로 되돌리면 폭 51 에서 실패한다.
+    """
+    from kr_quant.tui.ledger_view import timeline_cols
+
+    n = 60
+    cell = {k: ([100.0] * (n - 1) + [9000.0] if k == "indiv" else [0.0] * n)
+            for k in ACTOR_KEYS}
+    cell["tv"] = [1e5] * n
+    payload = {
+        "dates": [f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(n)],
+        "sectors": ["전기/전자"], "markets": ["거래소"],
+        # 마지막 날에 크게 움직인다 — 끝점을 버리면 그 사실이 그림에서 사라진다.
+        "flows": {"거래소": {"전기/전자": cell}},
+        "cap": {"거래소": {"전기/전자": 1e6}},
+        "n_by_sector": {"거래소": {"전기/전자": 300}}, "finalized": True,
+    }
+    mo = Model(payload)
+    mo.wi = WINDOWS.index(60)
+    seen = 0
+    for width in range(TIMELINE_MIN_W, 140):
+        lines, _t, nh = timeline_lines(mo, width)
+        cols = _fit(timeline_cols(), width)
+        if len(cols) < 4:
+            continue
+        widths = [c[1] for c in cols]
+        a2, w2 = span_at(widths, 2)
+        a3, w3 = span_at(widths, 3)
+        cells = _cells(lines[nh])
+        cum = float("".join(cells[a2:a2 + w2]).strip().replace(",", ""))
+        scale = float("".join(cells[a3:a3 + w3]).strip().replace(",", ""))
+        assert scale + 1 >= abs(cum), (width, cum, scale)
+        seen += 1
+    assert seen > 40, "폭을 충분히 안 돌았다 — 이 검사가 헛돈다"
+
+
+def _named_payload(win_of_last: bool) -> dict:
+    """``names`` 가 있는 페이로드. 마지막 종목만 20일 창 집계가 없다(=거래 끊김)."""
+    n = 20
+    codes = [f"{i:06d}" for i in range(10)]
+    names = {}
+    for i, c in enumerate(codes):
+        alive = win_of_last or i < len(codes) - 1
+        names[c] = {"market": "코스닥", "sector": "종이/목재",
+                    "win": ({"20": {"inst": 1.0}} if alive else {})}
+    cell = {k: [10.0] * n for k in ACTOR_KEYS}
+    cell["tv"] = [1e4] * n
+    return {
+        "dates": [f"2026-02-{i + 1:02d}" for i in range(n)],
+        "sectors": ["종이/목재"], "markets": ["코스닥"],
+        "flows": {"코스닥": {"종이/목재": cell}},
+        "cap": {"코스닥": {"종이/목재": 1e5}},
+        # 벤더 마스터에는 10개가 그대로 남아 있다 — 그게 예전 정의였다.
+        "n_by_sector": {"코스닥": {"종이/목재": 10}},
+        "names": names, "finalized": True,
+    }
+
+
+def test_stock_count_is_what_the_window_traded_not_the_vendor_master():
+    """``종목[수]`` 는 **이 구간에 거래된** 종목 수다 — kq-flow 와 같은 집합.
+
+    옛 정의(``n_by_sector``)는 벤더 마스터에 남은 죽은 이름까지 세어서, 같은
+    (시장,섹터)를 두 앱이 다른 수로 말했다(실측 324칸 중 49칸). 나쁜 쪽은 세는
+    것으로 끝나지 않는다 — ``~``(얇은 섹터) 판정이 이 수로 이뤄지므로 **죽은
+    이름 하나가 경고를 지웠다**(코스닥/종이/목재 5·20일: 10 이라 경고 없음, 실제 9).
+
+    주입: ``n_stocks`` 를 ``n_by_sector`` 합으로 되돌리면 10 이 나와 두 단언이
+    모두 실패한다.
+    """
+    dead = Model(_named_payload(win_of_last=False))
+    dead.wi = WINDOWS.index(20)
+    assert dead.n_stocks("종이/목재") == 9, "죽은 이름을 세고 있다"
+    assert dead.rows()[0]["n"] == 9
+    # 그리고 그 하나 때문에 얇은 섹터 경고가 살아나야 한다.
+    lines, thin, _nh = ledger_lines(dead, 100)
+    assert "~" in lines[1], "종목이 9개인데 얇은 섹터 표시가 없다"
+    assert thin[1] is True
+
+    alive = Model(_named_payload(win_of_last=True))
+    alive.wi = WINDOWS.index(20)
+    assert alive.n_stocks("종이/목재") == 10
+    assert "~" not in ledger_lines(alive, 100)[0][1]
+
+    # ``names`` 가 없는 페이로드는 옛 정의로 떨어진다 — 조용히 0 이 되면 안 된다.
+    old = _named_payload(True)
+    del old["names"]
+    assert Model(old).n_stocks("종이/목재") == 10
+
+
+def test_ratio_columns_are_blank_when_the_denominator_is_below_the_display_unit():
+    """분모가 1억 미만이면 ``잔여몫``·``최대일몫`` 은 ``—`` 다.
+
+    몫은 분모가 작으면 뜻을 잃고, 그 자리에서 오히려 **커 보인다**. 표의 금액
+    열은 억 단위 정수라 분모가 1억 미만이면 그 비율을 이루는 금액이 화면에
+    하나도 안 보인다 — 독자는 ``33.3!`` 만 보고 검산할 방법이 없다.
+    실측(2026-08-28): 코스닥/출판·매체복제 20일 기관은 구간 gross 가 0.09억인데
+    ``최대일몫 33.3!`` 이라 적혀 있었다(균등의 3배를 넘었다는 `!` 까지 달고서).
+
+    주입: ``_MIN_RATIO_GROSS`` 문턱을 ``gross > 0`` 으로 되돌리면 ``33.3`` 이
+    나와 실패한다.
+    """
+    n = 20
+    tiny = [0.0] * (n - 1) + [0.03]        # 구간 gross 0.03억
+    small = {k: list(tiny) for k in ACTOR_KEYS}
+    small["tv"] = [1.0] * n
+    big = {k: [500.0] * n for k in ACTOR_KEYS}
+    big["tv"] = [1e5] * n
+    payload = {
+        "dates": [f"2026-02-{i + 1:02d}" for i in range(n)],
+        "sectors": ["출판/매체복제", "전기/전자"], "markets": ["코스닥"],
+        "flows": {"코스닥": {"출판/매체복제": small, "전기/전자": big}},
+        "cap": {"코스닥": {"출판/매체복제": 10.0, "전기/전자": 1e6}},
+        "n_by_sector": {"코스닥": {"출판/매체복제": 2, "전기/전자": 300}},
+        "finalized": True,
+    }
+    mo = Model(payload)
+    mo.wi = WINDOWS.index(20)
+    rows = {r["sector"]: r for r in mo.rows()}
+    assert rows["출판/매체복제"]["spike"] is None, "분모 0.03억짜리 몫을 내고 있다"
+    assert rows["출판/매체복제"]["resid_pct"] is None
+    # 분모가 충분한 행은 그대로 값을 낸다 — 게이트가 열을 통째로 죽이면 안 된다.
+    assert rows["전기/전자"]["spike"] is not None
+    lines, _t, nh = ledger_lines(mo, 100)
+    tiny_line = next(ln for ln in lines[nh:] if "출판" in ln)
+    assert "—" in tiny_line and "33.3" not in tiny_line and "!" not in tiny_line
