@@ -299,8 +299,14 @@ def _key(mo: Model, ch: int, page: int) -> bool:
         setattr(mo, scroll, getattr(mo, scroll) + page)
     elif ch == curses.KEY_PPAGE:
         setattr(mo, scroll, max(0, getattr(mo, scroll) - page))
-    elif ch == curses.KEY_HOME:
+    elif ch in (ord("g"), curses.KEY_HOME):
         setattr(mo, scroll, 0)
+    elif ch in (ord("G"), curses.KEY_END):
+        # 끝으로. 행 수는 **그리는 쪽만** 안다(폭·높이에 따라 다르다) — 큰 값을
+        # 넣고 `ledger_view.screen` 이 잘라 되돌려 적게 한다. 예전엔 이 키가
+        # 통째로 없어서 ``kq-flow`` 에서는 G 로 가던 목록 끝이 원장에서는 갈
+        # 길이 없었다. 두 앱이 다른 손버릇을 가르치면 안 된다.
+        setattr(mo, scroll, 10 ** 6)
     elif ch == ord("v"):
         mo.cycle("v")
     elif ch == ord("V"):
