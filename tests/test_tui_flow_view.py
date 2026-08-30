@@ -663,7 +663,7 @@ def test_data_cells_sit_under_their_headers(data):
                     "가속[%p]": fmt_pct(r.get("accel")),
                     "수익률[%]": fmt_pct(r.get("ret")),
                     "1년[%ile]": "—" if pct is None else f"{pct:.0f}",
-                    "G[0~1]": ("—" if r.get("G") is None else f"{r['G']:.2f}"),
+                    "선정": ("—" if r.get("G") is None else f"{r['G']:.2f}"),
                 }
                 for hdr, val in want.items():
                     span = col_span(cols, hdr)
@@ -997,7 +997,7 @@ def test_conclusion_columns_come_after_their_inputs(data):
     for i, h in enumerate(order):
         pos.setdefault(h, i)          # 중복이면 col_span 이 가리키는 **앞의 것**
     for inp in ("가속[%p]", "미실현[%p]", "풀림[%p/일²]"):
-        assert pos[inp] < pos["G[0~1]"], f"{inp} 가 G 보다 오른쪽이다: {order}"
+        assert pos[inp] < pos["선정"], f"{inp} 가 G 보다 오른쪽이다: {order}"
     # 종목수는 판단 변수가 아니라 데이터 품질 주석이다 — 앞자리를 차지하면 안 된다.
     assert pos["종목[수]"] > pos["수익률[%]"], order
 
@@ -1612,25 +1612,23 @@ def test_stock_list_has_three_axes_not_one_number_rescaled(data):
         assert h in heads, f"'{h}' 열이 없다: {heads}"
 
 
-def test_the_new_axes_survive_at_eighty_columns(data):
-    """폭 80(기본 SSH)에서 세 축이 **다 보여야** 한다.
+def test_the_new_axes_survive_at_eighty_columns():
+    """폭 80 에서 **결론과 자금**이 남는다 — 선정 · 순매수 · 누적 · 투신.
 
-    `_fit` 은 앞에서부터 자르므로 순서가 곧 우선순위다. 새 축을 오른쪽 끝에
-    붙이면 이 화면을 실제로 보는 폭에서 통째로 사라진다 — 그러면 만든 적이
-    없는 것과 같다.
-
-    ⚠️ **80 이 아니라 `view_width(80)` 로 묻는다.** curses 가 마지막 칸을 못 쓰므로
-    80칸 터미널은 뷰에게 79칸이다. 80 으로 물으면 합계가 정확히 80 인 배치가
-    통과하는데 실제 화면에서는 마지막 열이 안 보인다 — 실측으로 그렇게 한 번
-    어긋났다(`상대수익[%p]` 이 80칸 캡처에서 사라졌다).
+    예전에는 여기서 `상대수익` 까지 지켰는데, `선정` 이 왼쪽으로 오면서 네 칸을
+    가져갔다(87 부터 보인다). 그 교환을 의식적으로 한다 — 80칸 화면에서 한 열만
+    남길 수 있다면 네 축을 겹쳐 놓은 점수가 그중 하나보다 낫다. 이 검사가
+    바뀌는 것 자체가 그 판단을 기록으로 남기는 일이다.
     """
-    from kr_quant.tui.flow_view import (
-        COL_INVTRT, COL_PENFND, _fit, names_cols, view_width)
+    from kr_quant.tui.flow_view import COL_INVTRT, fit_names, view_width
 
-    heads = [c.header for c in _fit(names_cols(), view_width(80))]
-    for h in (COL_INVTRT, COL_PENFND, "상대수익[%p]"):
+    heads = [c.header for c in fit_names(view_width(80))]
+    for h in ("선정", "순매수[억]", "누적[%]", COL_INVTRT):
         assert h in heads, f"폭 80 에서 '{h}' 가 잘려 나갔다: {heads}"
-
+    # 네 축은 더 넓은 화면에서 전부 살아난다 — 사라진 것이 아니라 밀린 것이다.
+    wide = [c.header for c in fit_names(view_width(130))]
+    for h in (COL_INVTRT, "연기금[억]", "상대수익[%p]", "최근집중[%]", "참여율[%]"):
+        assert h in wide, f"폭 130 에서도 '{h}' 가 없다: {wide}"
 
 def test_recent_concentration_is_the_short_window_over_this_one(data):
     """최근집중 = 5일 순매수 ÷ 이 창의 순매수 × 100.
@@ -2037,7 +2035,7 @@ def test_the_table_counts_the_same_stocks_the_drilldown_lists():
         assert got["S00"] == (12, False), got["S00"]
 
 
-def _pick_payload(rows):
+def _pick_payload(rows, gsec=0.6):
     """선정점수 전용 합성 페이로드 — 한 섹터에 후보를 넉넉히 둔다.
 
     기본 픽스처의 건설에는 순매수 양수인 종목이 하나뿐이라 ``len(cand) < 2`` 로
@@ -2062,7 +2060,7 @@ def _pick_payload(rows):
                        "inst": sum(r[2] for r in rows), "forgn": 0.0,
                        "indiv": 0.0, "etc": 0.0, "cap": 100000.0,
                        "accel": 1.0, "ret": 0.0, "a_idx": 1.0, "cap_idx": 100000.0,
-                       "G": None, "G_pass": False,
+                       "G": gsec, "G_pass": gsec is not None,
                        "pct1y": {}, "spark": {}, "top": {}}]}
     return {"asof": "2026-08-28", "finalized": True,
             "dates": ["2026-08-01", "2026-08-28"], "names": names,
@@ -2191,19 +2189,18 @@ def test_pick_score_puts_the_name_that_has_not_moved_above_the_one_that_has():
     assert got["A"] > got["B"], f"이미 간 종목이 위다: {got}"
 
 
-def test_pick_score_sits_right_of_every_input_it_averages():
-    """결론 열은 **자기 입력보다 왼쪽에 오지 않는다.**
+def test_pick_score_leads_the_row_like_the_sector_markers_do():
+    """결론을 **맨 앞**에 둔다 — 섹터 표의 `*`·`~` 가 섹터 이름 옆에 서는 자리다.
 
-    섹터 표에서 G 가 가속·미실현·풀림보다 왼쪽에 있던 것을 오른쪽으로 옮긴 것과
-    같은 규칙이다 — 눈이 왼쪽에서 오른쪽으로 훑을 때 근거가 먼저여야 한다.
+    이 화면은 "고르는" 화면이라 눈이 먼저 후보를 좁히고 그 다음 오른쪽에서
+    근거를 확인한다. 오른쪽 끝에 두었더니 폭 123 부터 보여서 대부분의 터미널에서
+    없는 열이었다(실측).
     """
-    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, names_cols
+    from kr_quant.tui.flow_view import names_cols
 
     heads = [c.header for c in names_cols()]
-    pick = heads.index("선정")
-    for h in (COL_INVTRT, COL_PENFND, "상대수익[%p]", "최근집중[%]", "참여율[%]"):
-        assert heads.index(h) < pick, f"{h} 가 선정점수보다 오른쪽에 있다: {heads}"
-
+    assert heads.index("선정") == 2, heads       # 종목 · 코드 · 선정
+    assert heads.index("선정") < heads.index("순매수[억]"), heads
 
 def test_pick_score_does_not_change_when_you_sort_by_it():
     """선정점수는 **화면 정렬에 안 흔들린다** — 자기 정렬로 자기를 지우면 안 된다.
@@ -2225,3 +2222,39 @@ def test_pick_score_does_not_change_when_you_sort_by_it():
         got = {t["code"]: t.get("pick") for t in st.names()}
         assert got == by_flow, (
             f"'{st.name_sort}' 정렬에서 점수가 달라졌다: {got} vs {by_flow}")
+
+
+def test_the_cross_sector_list_multiplies_instead_of_averaging():
+    """층 **사이**는 곱이다 — 평균이면 죽은 섹터의 1등이 좋은 섹터의 3등을 이긴다.
+
+    각 점수 **안에서**는 축 하나가 낮아도 나머지가 메우는 것이 맞다(그래서
+    평균이다). 층 사이에서는 아니다. 사용자의 질문이 "섹터도 높고 종목도 높은
+    것" 이므로 AND 를 뜻하는 연산이어야 한다.
+    """
+    from kr_quant.tui.flow_view import State
+
+    st = State(_pick_payload(_PICK_ROWS))
+    rows = st.all_picks()
+    assert rows, "곱 목록이 비었다 — 픽스처가 관문을 못 넘는다"
+    for t in rows:
+        assert abs(t["both"] - t["gsec"] * t["pick"]) < 1e-12, t
+    # 내림차순 고정
+    assert [t["both"] for t in rows] == sorted((t["both"] for t in rows), reverse=True)
+    # 양쪽 다 있어야 한다 — 한쪽이라도 없으면 목록에 안 나온다
+    assert all(t.get("gsec") is not None and t.get("pick") is not None for t in rows)
+
+
+def test_the_cross_sector_list_drops_a_stock_whose_sector_failed_its_gate():
+    """섹터가 관문에 걸리면 그 안의 종목은 아무리 좋아도 안 나온다."""
+    import copy
+
+    from kr_quant.tui.flow_view import State
+
+    d = _pick_payload(_PICK_ROWS)
+    base = {t["code"] for t in State(d).all_picks()}
+    assert base, base
+    killed = copy.deepcopy(d)
+    for key, B in killed["blocks"].items():
+        for r in B["rows"]:
+            r["G"] = None          # 섹터 점수 없음 = 관문 탈락
+    assert State(killed).all_picks() == [], "섹터가 탈락했는데 종목이 남았다"

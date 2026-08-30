@@ -387,37 +387,61 @@ def build(P: dict) -> dict:
                 else:
                     r["xdot"] = r["xddot"] = None
                 r["top"] = drivers(P, markets, r["sector"], i0, i1, win)
-            # ── 성장 점수 G ──────────────────────────────────────────────
-            # 물리로: 아직 눌려 있고(x>0), 계속 밀리고 있고(a>0), 막 풀리기
-            # 시작한(ẍ>0) 상태. 세 조건은 **부호 검정**으로 걸러 통과 여부를 내고,
-            # 순서는 세 양의 **횡단면 순위 평균**으로 매긴다.
+            # ── 선정점수 ────────────────────────────────────────────────
+            # **관문이 탈락을, 점수가 순서를 정한다.** 종목 목록의 `선정` 과 같은
+            # 설계다(`flow_view.State._attach_pick`) — 두 화면이 같은 이름으로
+            # 다른 규칙을 쓰면 그 이름이 거짓말이 된다.
             #
-            # 순위를 쓰는 이유: a 는 %p(0~5), x 는 %p(±50), ẍ 는 1e-2 스케일이라
-            # 그대로 더하면 x 가 전부 지배한다. 곱으로 묶으면 하나가 0 근처일 때
-            # 전체가 죽어 불안정하다. 순위는 스케일에 불변이다.
+            # 관문: 얇은 섹터가 아니고(`thin`), 세 부호가 다 양수여야 한다 —
+            # 아직 눌려 있고(x>0), 계속 밀리고 있고(a>0), 막 풀리기 시작한(ẍ>0)
+            # 상태. 예전에는 이 부호검정을 `G_pass`(`*` 마커)로 따로 내고 점수는
+            # 통과 여부와 무관하게 전 섹터에 줬다. 그러면 "점수가 높은데 통과는
+            # 못 한" 줄이 생겨, 무엇을 먼저 보라는 것인지 화면이 두 말을 한다.
+            #
+            # 얇은 섹터를 빼는 이유는 그대로다 — 3종목짜리가 24개 섹터의 분위를
+            # 밀어내면 나머지 순위까지 왜곡된다. 값은 계산해 두되 점수는 안 준다.
+            #
+            # 점수: 세 양의 **횡단면 순위 평균**. 순위를 쓰는 이유는 a 가 %p(0~5),
+            # x 가 %p(±50), ẍ 가 1e-2 스케일이라 그대로 더하면 x 가 전부
+            # 지배하기 때문이다. 곱으로 묶으면 하나가 0 근처일 때 전체가 죽어
+            # 불안정하다. 순위는 스케일에 불변이다.
             #
             # ⚠️ x 는 −Δv 와 강하게 얽혀 있다(이 저장소 실측 ρ 0.94~1.00). 따라서
-            # G 는 순수 수급 신호가 아니라 **"많이 빠졌고 + 돈은 들어오고 + 반등이
-            # 시작된"** 평균회귀형 화면이다. 그렇게 읽어야 한다.
-            # 얇은 섹터는 순위 산정에서 뺀다 — 3종목짜리가 24개 섹터의 분위를
-            # 밀어내면 나머지 순위까지 왜곡된다. 값은 계산해 두되 G 는 안 준다.
-            scored = [r for r in rows if r.get("xddot") is not None
-                      and r.get("a_idx") is not None and not r["thin"]]
+            # 이 점수는 순수 수급 신호가 아니라 **"많이 빠졌고 + 돈은 들어오고 +
+            # 반등이 시작된"** 평균회귀형 화면이다. 그렇게 읽어야 한다.
+            scored = [r for r in rows
+                      if r.get("xddot") is not None and r.get("a_idx") is not None
+                      and not r["thin"]
+                      and r["a_idx"] > 0 and r["x"] > 0 and r["xddot"] > 0]
             if len(scored) > 1:
                 def _rank(key):
+                    """[0,1] 정규화 순위. **동률은 중간순위** — `1년[%ile]` 과 같다.
+
+                    동률을 안 다루면 순서가 입력 순서에 따라 임의로 갈리고, 두 축이
+                    같은 두 섹터가 그 축들에서 0 과 1 을 나눠 가져 나머지 축의
+                    차이가 묻힌다.
+                    """
                     vals = [r[key] for r in scored]
                     order = sorted(range(len(vals)), key=lambda i: vals[i])
                     out_ = [0.0] * len(vals)
-                    for pos, i in enumerate(order):
-                        out_[i] = pos / (len(vals) - 1)
+                    i = 0
+                    while i < len(order):
+                        j = i
+                        while j + 1 < len(order) and vals[order[j + 1]] == vals[order[i]]:
+                            j += 1
+                        mid = (i + j) / 2.0 / (len(vals) - 1)
+                        for k in range(i, j + 1):
+                            out_[order[k]] = mid
+                        i = j + 1
                     return out_
                 ra, rx, rd = _rank("a_idx"), _rank("x"), _rank("xddot")
                 for r, A, X, Dd in zip(scored, ra, rx, rd):
                     r["G"] = (A + X + Dd) / 3.0
-                    r["G_pass"] = bool(r["a_idx"] > 0 and r["x"] > 0 and r["xddot"] > 0)
             for r in rows:
                 r.setdefault("G", None)
-                r.setdefault("G_pass", False)
+                # 점수가 있다는 것이 곧 관문을 통과했다는 뜻이다 — 두 값이 갈릴
+                # 수 없게 **점수에서 파생**시킨다. 예전엔 따로 계산해 두 벌이었다.
+                r["G_pass"] = r["G"] is not None
 
             out["blocks"][f"{win}|{mkey}"] = {
                 "from": P["dates"][i0], "to": P["dates"][i1],

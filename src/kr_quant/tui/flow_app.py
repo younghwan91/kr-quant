@@ -25,7 +25,7 @@ import re
 from collections import namedtuple
 
 from kr_quant.tui.flow_view import (
-    NAME_SORT_COL, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
+    NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS, State, color_spans,
     detail_lines, detail_title_span, footer_line, header_lines, help_lines,
     hint_desc, hint_line,
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for,
@@ -348,6 +348,24 @@ def _draw(scr, st: State) -> None:
         _put(scr, i, line, base, col and i > 0)
     top = head
 
+    if st.allv and not st.drill:
+        lines, nhead = all_lines(st, w)
+        body = lines[nhead:]
+        first = max(0, min(st.arow - rows_avail // 2, len(body) - rows_avail))
+        first = max(first, 0)
+        view = lines[:nhead] + body[first:first + rows_avail]
+        for i, line in enumerate(view):
+            if top + i >= (hint_y if hint_y >= 0 else foot_y):
+                break
+            sel = i >= nhead and (first + i - nhead) == st.arow
+            if i < nhead:
+                base = curses.color_pair(C_HEAD) | curses.A_BOLD if col else curses.A_REVERSE
+                _put(scr, top + i, line, base, False)
+            else:
+                base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
+                _put(scr, top + i, line, base, col, sel)
+        _draw_hint_and_footer(scr, st, w, hint_y, foot_y, col)
+        return
     if st.drill:
         lines, nhead = names_lines(st, w)
         nspan = name_sort_span(st) if col else None
@@ -621,8 +639,33 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
             _keep_selection(st, lambda: st.cycle("a", 1 if k == ord("a") else -1))
         return True
 
+    if st.allv:
+        # 전 종목 화면 — 커서와 토글만 듣는다. 구간·시장·주체는 위 공통 분기가
+        # 이미 처리했고, 정렬은 이 화면에 없다(곱 내림차순 고정).
+        m = max(len(st.all_picks()), 1)
+        if k in (ord("t"), 27, curses.KEY_LEFT, ord("h")):
+            st.allv = False
+        elif k in (curses.KEY_DOWN, ord("j")):
+            st.arow = min(st.arow + 1, m - 1)
+        elif k in (curses.KEY_UP, ord("k")):
+            st.arow = max(st.arow - 1, 0)
+        elif k == curses.KEY_NPAGE:
+            st.arow = min(st.arow + page, m - 1)
+        elif k == curses.KEY_PPAGE:
+            st.arow = max(st.arow - page, 0)
+        elif k in (ord("g"), curses.KEY_HOME):
+            st.arow = 0
+        elif k in (ord("G"), curses.KEY_END):
+            st.arow = m - 1
+        return True
+
     n = max(len(st.rows()), 1)
-    if k in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord("l")):
+    if k == ord("t"):
+        # 전 종목(곱) 화면 토글. 섹터 표 ↔ 이 화면만 오간다 — 드릴다운에서는
+        # 위 분기가 먼저 처리한다.
+        st.allv = not st.allv
+        st.arow = 0
+    elif k in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord("l")):
         st.drill = True
         st.drow = 0
     elif k in (curses.KEY_DOWN, ord("j")):

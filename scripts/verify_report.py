@@ -599,7 +599,10 @@ def layer_e(D: dict) -> None:
                         if FV.cell_len(ln) != width:
                             bad_w.append(f"종목 {term}/{FV.WINDOWS[wi]}/{st.market} "
                                          f"{FV.cell_len(ln)} != {width}")
-                    ncols = FV._fit(FV.names_cols(), width)
+                    # 실제 렌더 경로를 쓴다 — `_fit` 만으로는 `COL_PAIRS`
+                    # (참여율·거래대금은 통째로 남거나 통째로 빠진다)를 모른다.
+                    # 검사와 화면이 갈리면 화면이 맞는데 검사가 빨개진다.
+                    ncols = FV.fit_names(width)
                     nwid = [c.width for c in ncols]
                     for ln, t in zip(nl[2:], st.names()):
                         for i, c in enumerate(ncols):
