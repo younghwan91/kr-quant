@@ -2035,3 +2035,193 @@ def test_the_table_counts_the_same_stocks_the_drilldown_lists():
         assert got["S03"] == (7, True), got["S03"]
         assert got["S07"] == (9, True), got["S07"]
         assert got["S00"] == (12, False), got["S00"]
+
+
+def _pick_payload(rows):
+    """선정점수 전용 합성 페이로드 — 한 섹터에 후보를 넉넉히 둔다.
+
+    기본 픽스처의 건설에는 순매수 양수인 종목이 하나뿐이라 ``len(cand) < 2`` 로
+    순위가 아예 안 매겨진다. 그러면 관문을 지워도 점수가 계속 ``None`` 이라
+    **검사가 변이에 안 죽는다.** 원하는 상황을 직접 만든다.
+
+    ``rows`` 는 ``(code, name, inst, invtrt, penfnd, ret5, ret20, tv)``.
+    최근집중은 5일÷20일이므로 창별 ``inst`` 로 그 비율을 만든다.
+    """
+    names = {}
+    for code, name, inst, iv, pf, i5, tv in rows:
+        names[code] = {
+            "name": name, "sector": "S", "market": "거래소", "cap": 100000.0,
+            "win": {"5": {"inst": i5, "forgn": 0.0, "indiv": 0.0, "etc": 0.0,
+                          "tv": tv * 0.25, "invtrt": iv * 0.25,
+                          "penfnd_etc": pf * 0.25, "ret": 0.0},
+                    "20": {"inst": inst, "forgn": 0.0, "indiv": 0.0, "etc": 0.0,
+                           "tv": tv, "invtrt": iv, "penfnd_etc": pf,
+                           "ret": 0.0}}}
+    block = {"from": "2026-08-01", "to": "2026-08-28", "k": 1.0, "b": 0.0, "t": 2.0,
+             "rows": [{"sector": "S", "n_all": len(rows), "thin": False,
+                       "inst": sum(r[2] for r in rows), "forgn": 0.0,
+                       "indiv": 0.0, "etc": 0.0, "cap": 100000.0,
+                       "accel": 1.0, "ret": 0.0, "a_idx": 1.0, "cap_idx": 100000.0,
+                       "G": None, "G_pass": False,
+                       "pct1y": {}, "spark": {}, "top": {}}]}
+    return {"asof": "2026-08-28", "finalized": True,
+            "dates": ["2026-08-01", "2026-08-28"], "names": names,
+            "blocks": {f"{w}|{m}": block for w in (5, 20, 60, 120)
+                       for m in ("전체", "거래소", "코스닥")},
+            "combined": {}}
+
+
+#: (코드, 이름, 20일 기관, 투신, 연기금, 5일 기관, 거래대금)
+#: 네 축이 서로 다른 순서를 갖도록 짰다 — 한 축만 보면 1위가 달라진다.
+_PICK_ROWS = [
+    ("A", "가", 1000.0, 600.0, 300.0, 700.0, 5000.0),   # 믿는돈 크고 최근집중 높음
+    ("B", "나", 900.0, 100.0, 50.0, 90.0, 4000.0),      # 집중 낮음
+    ("C", "다", 800.0, 400.0, 300.0, 200.0, 3000.0),
+    ("D", "라", 700.0, 300.0, 200.0, 500.0, 2000.0),
+]
+
+
+def _pick_rows(data, sector="건설"):
+    from kr_quant.tui.flow_view import State
+
+    st = State(data)
+    st.row = next(i for i, r in enumerate(st.rows()) if r["sector"] == sector)
+    return st.names()
+
+
+def _pick_rows(data, sector="건설"):
+    st = State(data)
+    st.row = next(i for i, r in enumerate(st.rows()) if r["sector"] == sector)
+    return st.names()
+
+
+def _scores(rows=None):
+    from kr_quant.tui.flow_view import State
+
+    st = State(_pick_payload(rows or _PICK_ROWS))
+    st.row = 0
+    return {t["code"]: t.get("pick") for t in st.names()}
+
+
+def test_pick_score_is_withheld_when_a_gate_is_broken():
+    """관문 셋 중 하나라도 어기면 점수가 **없다** — 순위가 아니라 탈락이다.
+
+    관문은 탈락을, 점수는 순서를 정한다. 둘을 한 수로 섞으면 "왜 빠졌는지" 와
+    "왜 앞인지" 가 같은 숫자에 뭉개진다.
+    """
+    base = _scores()
+    assert all(v is not None for v in base.values()), base
+
+    def broken(idx, **kw):
+        rows = [list(r) for r in _PICK_ROWS]
+        for k, v in kw.items():
+            rows[idx][{"inst": 2, "invtrt": 3, "penfnd": 4, "tv": 6}[k]] = v
+        return _scores([tuple(r) for r in rows])
+
+    # |순매수| 는 크게 두어 목록 상단에 남긴다 — 작게 만들면 누적 모집단에서
+    # 먼저 빠져 나가, 부호 관문을 지워도 검사가 통과한다(실측으로 밟았다).
+    assert broken(0, inst=-1200.0)["A"] is None, "순매수 ≤ 0 인데 점수가 붙었다"
+    assert broken(0, invtrt=-1.0)["A"] is None, "투신 < 0 인데 점수가 붙었다"
+    assert broken(0, penfnd=-1.0)["A"] is None, "연기금 < 0 인데 점수가 붙었다"
+    assert broken(0, tv=50.0)["A"] is None, "거래대금 < 100억인데 점수가 붙었다"
+    # 남은 셋은 그대로 매겨진다 — 한 줄이 빠져도 화면이 죽지 않는다.
+    assert all(broken(0, invtrt=-1.0)[c] is not None for c in ("B", "C", "D"))
+
+
+def test_pick_score_stops_at_the_eighty_percent_marker():
+    """`-` 마커 **아래** 행에는 점수가 없다 — 모집단이 거기서 끝난다.
+
+    그 아래는 순매수가 사실상 0 이라 순위에 넣으면 노이즈가 분위를 밀어낸다.
+    마커가 붙은 행은 **포함**한다 — 도움말이 그 줄까지를 "이 섹터를 움직인
+    종목" 이라 부르므로, 화면의 가로줄과 점수의 경계가 같아야 한다.
+    """
+    from kr_quant.tui.flow_view import State
+
+    # 앞 하나가 압도적이라 두 번째 줄에서 80% 를 넘긴다 → 3·4번째는 마커 아래.
+    rows = [("A", "가", 5000.0, 500.0, 300.0, 2000.0, 9000.0),
+            ("B", "나", 3000.0, 400.0, 200.0, 1000.0, 8000.0),
+            ("C", "다", 200.0, 100.0, 50.0, 80.0, 3000.0),
+            ("D", "라", 100.0, 60.0, 30.0, 40.0, 2000.0)]
+    st = State(_pick_payload(rows))
+    st.row = 0
+    got = {t["code"]: (t.get("cut"), t.get("pick")) for t in st.names()}
+    marked = [c for c, (cut, _) in got.items() if cut]
+    assert len(marked) == 1, f"마커는 한 줄에만: {got}"
+    seen_marker = False
+    for code, (cut, pick) in got.items():
+        if seen_marker:
+            assert pick is None, f"{code} 는 마커 아래인데 점수가 있다: {got}"
+        seen_marker = seen_marker or cut
+    assert got[marked[0]][1] is not None, f"마커가 붙은 줄에 점수가 없다: {got}"
+
+
+def test_pick_score_gives_ties_the_same_rank():
+    """동률은 **같은 순위**를 받는다 — `1년[%ile]` 과 같은 규약.
+
+    안 그러면 순서가 입력 순서에 따라 임의로 갈리고, 세 축이 같은 두 종목이
+    그 축들에서 0 과 1 을 나눠 가져 네 번째 축의 차이가 묻힌다.
+    """
+    from kr_quant.tui.flow_view import State
+
+    rows = [("A", "가", 1000.0, 500.0, 300.0, 400.0, 5000.0),
+            ("B", "나", 1000.0, 500.0, 300.0, 400.0, 5000.0)]
+    st = State(_pick_payload(rows))   # 네 축이 완전히 같다
+    st.row = 0
+    got = {t["code"]: t["pick"] for t in st.names()}
+    assert got["A"] == got["B"], f"같은 값인데 순위가 갈렸다: {got}"
+
+
+def test_pick_score_puts_the_name_that_has_not_moved_above_the_one_that_has():
+    """상대수익만 **부호를 뒤집는다** — 섹터만큼 안 간 쪽이 위여야 한다.
+
+    다른 세 축을 똑같이 두고 상대수익만 갈라 놓으면, 뒤집기를 빼먹었을 때
+    순서가 정확히 반대가 된다.
+    """
+    from kr_quant.tui.flow_view import State
+
+    rows = [("A", "가", 1000.0, 500.0, 300.0, 400.0, 5000.0),
+            ("B", "나", 1000.0, 500.0, 300.0, 400.0, 5000.0)]
+    d = _pick_payload(rows)
+    # 섹터 수익률 0 이므로 종목 수익률이 그대로 상대수익이 된다.
+    d["names"]["A"]["win"]["20"]["ret"] = -5.0    # 덜 갔다 → 위여야 한다
+    d["names"]["B"]["win"]["20"]["ret"] = +30.0   # 이미 갔다
+    st = State(d)
+    st.row = 0
+    got = {t["code"]: t["pick"] for t in st.names()}
+    assert got["A"] > got["B"], f"이미 간 종목이 위다: {got}"
+
+
+def test_pick_score_sits_right_of_every_input_it_averages():
+    """결론 열은 **자기 입력보다 왼쪽에 오지 않는다.**
+
+    섹터 표에서 G 가 가속·미실현·풀림보다 왼쪽에 있던 것을 오른쪽으로 옮긴 것과
+    같은 규칙이다 — 눈이 왼쪽에서 오른쪽으로 훑을 때 근거가 먼저여야 한다.
+    """
+    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, names_cols
+
+    heads = [c.header for c in names_cols()]
+    pick = heads.index("선정")
+    for h in (COL_INVTRT, COL_PENFND, "상대수익[%p]", "최근집중[%]", "참여율[%]"):
+        assert heads.index(h) < pick, f"{h} 가 선정점수보다 오른쪽에 있다: {heads}"
+
+
+def test_pick_score_does_not_change_when_you_sort_by_it():
+    """선정점수는 **화면 정렬에 안 흔들린다** — 자기 정렬로 자기를 지우면 안 된다.
+
+    모집단을 `cum`/`cut` 에서 읽으면, 그 둘이 순매수 정렬에서만 채워지므로
+    `선정점수` 로 정렬하는 순간 전 행이 `—` 가 된다. 점수는 그 종목이 섹터 안에서
+    갖는 성질이지 지금 무엇으로 줄세웠나가 아니다.
+    """
+    from kr_quant.tui.flow_view import State
+
+    st = State(_pick_payload(_PICK_ROWS))
+    st.row = 0
+    by_flow = {t["code"]: t.get("pick") for t in st.names()}
+    assert any(v is not None for v in by_flow.values()), by_flow
+    from kr_quant.tui.flow_view import NAME_SORTS
+
+    for _ in range(len(NAME_SORTS)):
+        st.cycle("ns", 1)
+        got = {t["code"]: t.get("pick") for t in st.names()}
+        assert got == by_flow, (
+            f"'{st.name_sort}' 정렬에서 점수가 달라졌다: {got} vs {by_flow}")
