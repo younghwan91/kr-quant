@@ -109,6 +109,23 @@ def _sel_attr():
     return curses.color_pair(C_SEL) | curses.A_BOLD
 
 
+def _row_attr(col: bool, sel: bool, thin: bool = False):
+    """표 **본문 한 줄의 바탕** — 선택인가 · 비활성인가 · 그냥 본문인가.
+
+    세 갈래(섹터 표·드릴다운·전 종목)가 이 세 줄짜리 판단을 각자 적고 있었고,
+    나중에 붙은 전 종목이 **선택 짝을 빠뜨렸다**. `_put` 은 선택행에 부호색을
+    덧칠하지 않으므로(`chgat` 이 색쌍을 통째로 갈아 바탕에 구멍이 뚫린다), 바탕을
+    안 깔면 그 줄은 강조를 얻는 게 아니라 **색을 잃기만 한다** — 실측에서 전 종목
+    첫 줄만 숫자가 무색이었다. 판단을 한 곳에 두면 갈래가 하나 더 붙어도 같은 짝이
+    따라온다(`ledger_view.has_cursor`·`scroll_attr` 과 같은 규율).
+    """
+    if sel:
+        return _sel_attr() if col else curses.A_REVERSE
+    if thin:
+        return _dim_attr() if col else curses.A_DIM
+    return curses.color_pair(C_BODY) if col else curses.A_NORMAL
+
+
 def _init_colors(scr=None) -> bool:
     global _COLORED, _RICH
     _COLORED = _RICH = False
@@ -378,8 +395,7 @@ def _draw(scr, st: State) -> None:
                 base = curses.color_pair(C_HEAD) | curses.A_BOLD if col else curses.A_REVERSE
                 _put(scr, top + i, line, base, False)
             else:
-                base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
-                _put(scr, top + i, line, base, col, sel)
+                _put(scr, top + i, line, _row_attr(col, sel), col, sel)
         _draw_hint_and_footer(scr, st, w, hint_y, foot_y, col)
         # 다른 세 갈래는 전부 여기서 refresh 한다. 이 갈래만 빠져 있었다 —
         # `get_wch` 가 암묵적으로 refresh 해 줘서 **우연히** 보였을 뿐이다.
@@ -400,10 +416,8 @@ def _draw(scr, st: State) -> None:
                 base = curses.color_pair(C_AMBER) | curses.A_BOLD if col else curses.A_BOLD
             elif i == 1:
                 base = curses.color_pair(C_HEAD) if col else curses.A_REVERSE
-            elif sel:
-                base = _sel_attr() if col else curses.A_REVERSE
             else:
-                base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
+                base = _row_attr(col, sel)
             _put(scr, top + i, line, base, col and i > 1, sel)
             if i == 1:
                 _hl_sort(scr, top + i, nspan, col)
@@ -426,12 +440,7 @@ def _draw(scr, st: State) -> None:
         if idx >= total:
             break
         sel = idx == st.row
-        if sel:
-            base = _sel_attr() if col else curses.A_REVERSE
-        elif thin[idx + nhead]:
-            base = _dim_attr() if col else curses.A_DIM
-        else:
-            base = curses.color_pair(C_BODY) if col else curses.A_NORMAL
+        base = _row_attr(col, sel, thin[idx + nhead])
         # 정렬 표시는 **헤더만** — 본문에 배경을 깔면 부호색이 묻혀 읽기 어렵다.
         _put(scr, top + 1 + j, lines[idx + nhead], base,
              col and not thin[idx + nhead], sel)

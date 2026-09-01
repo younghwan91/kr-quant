@@ -2330,3 +2330,73 @@ def test_the_html_report_calls_the_score_the_same_name_as_the_tui():
     assert f'"{SORT_COL["G"]}"' in html, (
         f"HTML 표의 열 이름이 TUI 의 '{SORT_COL['G']}' 와 다르다")
     assert "성장 G" not in html, "옛 이름이 남아 있다"
+
+
+def test_the_selected_row_is_marked_on_every_screen_that_has_a_cursor(data):
+    """커서가 있는 화면은 **선택행에 바탕을 깐다** — 전 종목(`t`)만 안 깔았다.
+
+    `_put` 은 선택행에 숫자 부호색을 **덧칠하지 않는다**(`chgat` 이 색쌍을 통째로
+    갈아 선택 바탕에 구멍이 뚫리기 때문이다). 그 규약은 선택행이 바탕으로 이미
+    구별된다는 전제 위에 서 있다. 전 종목 갈래는 `sel` 을 `_put` 에 넘기면서
+    바탕은 `C_BODY` 그대로 뒀다 — 그래서 **첫 줄만 색이 없는 줄**로 보였다.
+    강조를 얻은 게 아니라 부호색을 잃기만 한 것이다(실측: 삼성에스디에스 행의
+    `+768`·`+245` 가 무색, 아래 행들은 빨강).
+
+    세 갈래가 "선택이면 선택 바탕, 아니면 본문색"을 각자 적고 있었고 나중에 붙은
+    갈래가 한 짝을 빠뜨렸다. 그 부류를 막으려면 판단이 한 곳이어야 한다 —
+    :func:`flow_app._row_attr`.
+
+    주입: 전 종목 갈래에서 선택 바탕을 도로 빼면(=`_row_attr` 을 안 부르면) 실패한다.
+    """
+    import curses
+
+    from kr_quant.tui import flow_app
+
+    class Scr:
+        def __init__(self, h, w):
+            self.h, self.w, self.at = h, w, {}
+
+        def erase(self): pass
+
+        def getmaxyx(self): return (self.h, self.w)
+
+        def addstr(self, y, x, s, attr=0):
+            if not (0 <= y < self.h):
+                raise curses.error("bad y")
+            self.at[y] = attr
+            self.__dict__.setdefault("txt", {})[y] = s
+
+        def chgat(self, y, x, n, attr): pass
+
+        def refresh(self): pass
+
+    # 무색 경로로 돈다 — 색쌍은 initscr() 뒤에만 잡힌다. 무색에서도 선택은
+    # 반전으로 **반드시** 보여야 한다(그 터미널에는 다른 수단이 없다).
+    flow_app._COLORED = flow_app._RICH = False
+    st = flow_app.State(data)
+
+    def drawn(**kw):
+        for k, v in kw.items():
+            setattr(st, k, v)
+        scr = Scr(30, 140)
+        flow_app._draw(scr, st)
+        return scr
+
+    # 세 갈래 전부 — 섹터 표 · 드릴다운 · 전 종목. 커서를 한 칸 옮기면 화면의
+    # **속성**이 달라져야 한다. 무엇이 선택인지 화면이 말하지 않으면 ↑↓ 를 눌러도
+    # 아무 일도 안 일어나는 것처럼 보인다(스크롤이 없는 짧은 목록에서는 글자도
+    # 그대로다 — 전 종목이 정확히 그 경우였다).
+    cases = (
+        ("섹터 표", dict(drill=False, allv=False), "row"),
+        ("드릴다운", dict(drill=True, allv=False), "drow"),
+        ("전 종목", dict(drill=False, allv=True), "arow"),
+    )
+    for name, kw, cur in cases:
+        a = drawn(**kw, **{cur: 0})
+        b = drawn(**kw, **{cur: 1})
+        assert a.at != b.at, f"{name}: 커서를 옮겨도 선택 표시가 안 움직인다"
+        # 그리고 그 표시는 **본문 한 줄**이다 — 선택행의 속성이 이웃 본문행과 다르다.
+        diff = [y for y in a.at if a.at.get(y) != b.at.get(y)]
+        assert 1 <= len(diff) <= 2, f"{name}: 선택 표시가 {len(diff)}줄에 퍼졌다"
+        for y in diff:
+            assert a.__dict__["txt"].get(y, "").strip(), f"{name}: 빈 줄을 칠했다"
