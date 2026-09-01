@@ -1863,3 +1863,62 @@ def test_ratio_columns_are_blank_when_the_denominator_is_below_the_display_unit(
     lines, _t, nh = ledger_lines(mo, 100)
     tiny_line = next(ln for ln in lines[nh:] if "출판" in ln)
     assert "—" in tiny_line and "33.3" not in tiny_line and "!" not in tiny_line
+
+
+def test_each_screen_keeps_its_own_place_so_v_does_not_lose_the_selection(data):
+    """``v`` 로 화면을 바꿔도 **고른 섹터를 잃지 않는다.**
+
+    ``row`` 는 두 가지를 겸하고 있었다 — 원장·전개에서는 커서, 동시성에서는
+    스크롤 위치다. 그래서 ``cycle("v")`` 는 화면을 바꿀 때마다 ``row = 0`` 으로
+    지웠다. 안 지우면 원장에서 5번째 행을 보다 동시성으로 가면 5줄 내려간 채로
+    뜨기 때문이다. 지운 대가는 **원장에서 전개로 가는 손버릇**이 매번 첫 행으로
+    떨어지는 것이었다. 두 화면은 ``rows()`` 가 같은 순서라(정렬도 같다) 커서를
+    이어갈 수 있는데도 그랬다. "이 섹터의 회계 → 이 섹터의 타이밍"이 이 앱의
+    기본 동선인데 그 자리에서 선택이 죽었다.
+
+    고치는 자리는 ``v`` 가 아니라 **겸직**이다. 화면마다 제 자리를 따로 들면
+    (:attr:`Model.scroll_attr`) ``v`` 는 아무것도 지울 필요가 없고, 동시성에서
+    내린 스크롤이 원장의 커서를 옮기지도 않는다.
+
+    주입: ``cycle("v")`` 에 ``self.row = 0`` 을 도로 넣으면 첫 단언이,
+    ``scroll_attr`` 이 동시성에서도 ``"row"`` 를 내면 셋째가 실패한다.
+    """
+    import curses
+
+    from kr_quant.tui.ledger_app import _key
+
+    names = [v for v, _ in VIEWS]
+    mo = Model(data)
+    mo.row = 3
+    picked = mo.selected()["sector"]
+
+    # 1. 원장 → 전개: 같은 섹터를 보고 있다.
+    mo.cycle("v")
+    assert mo.view == "timeline"
+    assert mo.selected()["sector"] == picked, "전개로 가며 선택이 첫 행으로 떨어졌다"
+    # 되돌아와도 같다(V 는 역방향).
+    mo.cycle("v", -1)
+    assert mo.view == "ledger" and mo.selected()["sector"] == picked
+
+    # 2. 커서 없는 화면을 지나 돌아와도 선택이 남는다.
+    while mo.view != "ledger" or mo.vi == 0:
+        mo.cycle("v")
+        if mo.view == "ledger":
+            break
+    assert mo.selected()["sector"] == picked, "한 바퀴 돌자 선택이 사라졌다"
+
+    # 3. 동시성의 스크롤은 **제 것**이다 — 원장의 커서를 옮기지 않는다.
+    mo.vi = names.index("comove")
+    assert mo.scroll_attr == "crow", f"동시성이 남의 자리를 쓴다: {mo.scroll_attr}"
+    for _ in range(4):
+        _key(mo, curses.KEY_DOWN, 10)
+    assert mo.crow == 4
+    mo.vi = names.index("ledger")
+    assert mo.row == 3, f"동시성 스크롤이 원장 커서를 옮겼다: {mo.row}"
+    assert mo.selected()["sector"] == picked
+
+    # 4. 한계도 제 것을 쓴다(예전부터 `hrow` 였다 — 그 규율을 셋으로 넓힌 것이다).
+    mo.vi = names.index("limits")
+    assert mo.scroll_attr == "hrow"
+    _key(mo, curses.KEY_DOWN, 10)
+    assert mo.hrow == 1 and mo.row == 3 and mo.crow == 4

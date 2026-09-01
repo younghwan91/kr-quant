@@ -290,7 +290,10 @@ def _key(mo: Model, ch: int, page: int) -> bool:
         return True
     if ch == ord("q"):
         return False
-    scroll = "hrow" if mo.view == "limits" else "row"
+    # 어느 자리를 움직이는가는 **뷰가 정한다**(`Model.scroll_attr`) — 원장·전개는
+    # 커서(`row`), 동시성·한계는 각자의 스크롤이다. 여기서 따로 판단하면
+    # 그리는 쪽과 어긋나 ↑↓ 가 화면과 다른 값을 움직인다.
+    scroll = mo.scroll_attr
     if ch in (curses.KEY_DOWN, ord("j")):
         setattr(mo, scroll, getattr(mo, scroll) + 1)
     elif ch in (curses.KEY_UP, ord("k")):

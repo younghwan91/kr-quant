@@ -1549,7 +1549,8 @@ def layer_h(D: dict, P: dict) -> None:
     KEYS = _key_ints()
     FF = ("wi", "mi", "ai", "si", "nsi", "row", "drow", "arow", "hrow",
           "drill", "allv", "help", "rev", "nrev")
-    LF = ("wi", "mi", "ai", "si", "vi", "row", "hrow", "help_row", "help", "detrend")
+    LF = ("wi", "mi", "ai", "si", "vi", "row", "crow", "hrow", "help_row", "help",
+          "detrend")
 
     def fst(**kw):
         def mk():
@@ -1564,7 +1565,7 @@ def layer_h(D: dict, P: dict) -> None:
         def mk():
             mo = LV.Model(P)
             mo.vi = [v for v, _ in LV.VIEWS].index(view)
-            mo.row = mo.hrow = mo.help_row = 3
+            mo.row = mo.crow = mo.hrow = mo.help_row = 3
             mo.help = help_
             return mo
         return mk
@@ -1747,10 +1748,13 @@ def layer_h(D: dict, P: dict) -> None:
     # g/G — 커서가 있는 화면이면 처음/끝이다.
     bad = []
     for app, name, mk, ap, f, _t in SCREENS:
-        cur = {"flow": {"섹터 표": "row", "종합": "row", "드릴다운": "drow",
-                        "전 종목(t)": "arow", "도움말": "hrow"},
-               "ledger": {"원장": "row", "전개": "row", "동시성": "row",
-                          "한계": "hrow", "도움말": "help_row"}}[app][name]
+        # 원장 쪽은 **모델에게 묻는다**(`Model.scroll_attr`). 여기 표를 따로 들면
+        # 화면이 제 자리를 옮겼을 때 검사만 옛 자리를 보고 "키가 안 듣는다"고
+        # 한다 — 동시성이 `row` 를 떠나 `crow` 로 갈 때 실제로 그랬다.
+        # 도움말은 화면이 아니라 모달이라 표에 남는다.
+        cur = ({"섹터 표": "row", "종합": "row", "드릴다운": "drow",
+                "전 종목(t)": "arow", "도움말": "hrow"}[name] if app == "flow"
+               else "help_row" if name == "도움말" else mk().scroll_attr)
         for k, want_zero in ((ord("g"), True), (curses.KEY_HOME, True),
                              (ord("G"), False), (curses.KEY_END, False)):
             o = mk()
@@ -1896,9 +1900,9 @@ def layer_h(D: dict, P: dict) -> None:
     # 커서가 없는 화면은 그리는 쪽이 잘라 쓰기만 하고 상태를 안 고쳐서, PgDn 을
     # 끝에서 더 누르면 그만큼 쌓였다. 그러면 ↑ 가 **죽은 것처럼** 보인다.
     bad = []
-    for view, attr in (("limits", "hrow"), ("ledger", "row"),
-                       ("timeline", "row"), ("comove", "row")):
+    for view in ("limits", "ledger", "timeline", "comove"):
         mo = lmo(view)()
+        attr = mo.scroll_attr
         seen2 = []
         for i in range(60):
             LA._key(mo, curses.KEY_NPAGE, 24)
