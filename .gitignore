@@ -7,6 +7,9 @@ data/
 *.csv
 *.png
 collect.log
+
+# 일일 리포트 산출물 (scripts/daily_report.sh) — 생성물이지 소스가 아니다
+/reports/
 # README 커버 이미지는 추적 (재현: scripts/make_figures.py)
 !docs/images/*.png
 

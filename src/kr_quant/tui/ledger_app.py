@@ -14,7 +14,7 @@
 기존 TUI 는 8색만 썼다. 여기는 상관 히트맵 때문에 **256색 발산 팔레트**를 쓰되,
 색이 없어도 그림이 남도록 부호를 글자에 박아 뒀다(``ledger_view.heat_cell``).
 
-Run:  kq-ledger                     # ~/Documents/kr-quant-reports/latest
+Run:  kq-ledger                     # <repo>/reports/latest
       kq-ledger --dir <리포트 폴더>
       kq-ledger --dump              # 색 없는 평문, 파이프·리다이렉트용
 """
@@ -27,13 +27,15 @@ import locale
 import os
 
 from kr_quant.tui.flow_app import (
-    JAMO_TO_ASCII, RICH_AMBER, RICH_BG, RICH_BODY, RICH_DIM, RICH_DOWN,
-    RICH_SEL_BG, RICH_SEL_FG, RICH_UP, normalize_key)
+    DEFAULT_DIR, JAMO_TO_ASCII, RICH_AMBER, RICH_BG, RICH_BODY, RICH_DIM,
+    RICH_DOWN, RICH_SEL_BG, RICH_SEL_FG, RICH_UP, normalize_key)
 from kr_quant.tui.flow_view import color_spans, is_section
 from kr_quant.tui.ledger_view import (
     Model, help_total, load, render_text, screen, status_title_span)
 
-DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
+# 기본 리포트 경로 판정은 `flow_app` **한 곳**에 둔다 — 두 앱이 각자 저장소 루트를
+# 계산하면(예전엔 둘 다 홈 경로를 박아 뒀다) 저장소를 옮겼을 때 한쪽만 고칠 위험이
+# 생긴다. `kq-flow` 와 나란히 사는 앱이니 나란히 어긋나지 않아야 한다.
 
 # --- 색 -------------------------------------------------------------------
 #

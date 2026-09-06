@@ -5,11 +5,12 @@
 # 휴장일에 돌면 전 거래일 폴더가 이미 있으므로 건너뛴다 — 같은 데이터로 폴더가
 # 여러 개 생기는 걸 막는다.
 #
-# 리포트는 저장소 밖에 쌓는다(생성물이지 소스가 아니다).
+# 리포트는 생성물이지 소스가 아니다 — git 추적 대상은 아니지만(.gitignore 의
+# reports/), 접근 편의를 위해 저장소 **안**(`$REPO/reports`)에 둔다.
 set -euo pipefail
 
 REPO="/home/young/Documents/git/kr-quant"
-OUT_ROOT="${KR_QUANT_REPORTS:-$HOME/Documents/kr-quant-reports}"
+OUT_ROOT="${KR_QUANT_REPORTS:-$REPO/reports}"
 DAYS="${KR_QUANT_REPORT_DAYS:-260}"
 UV="/home/young/.local/bin/uv"
 # ⚠️ extra 를 명시한다. `uv run` 은 기본 의존성만 맞추므로, 누가 `uv sync --extra dev`

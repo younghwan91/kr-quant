@@ -84,8 +84,9 @@ scripts/daily_report.sh
 
 폴더 이름에 붙는 것은 데이터 기준일(`supply_demand` 의 `MAX(date)`)이다. 실행한 날짜와는
 상관없다. 휴장일에 돌면 이미 있는 폴더를 보고 건너뛴다. 기본 출력 위치는
-`~/Documents/kr-quant-reports/<기준일>` 이고 `latest` 심볼릭 링크가 따라 움직인다
-(`KR_QUANT_REPORTS` 로 바꾼다). cron 에 그대로 건다.
+`<저장소>/reports/<기준일>` 이고 `latest` 심볼릭 링크가 따라 움직인다(`KR_QUANT_REPORTS`
+로 바꾼다). 생성물이지 소스가 아니므로 `.gitignore` 로 git 추적 대상에서는 뺐다. cron 에
+그대로 건다.
 
 **리포트 형식이 바뀌면 그 건너뛰기가 발목을 잡는다.** 폴더가 이미 있으면 배치는 조용히
 넘어가므로 열이 새로 생겨도 다음 거래일까지 옛 리포트가 그대로 뜬다. 화면에서는 새 열
@@ -112,7 +113,7 @@ uv run python scripts/verify_report.py  --dir <리포트폴더> --db-check
 ### 2.2 화면 띄우기 (DB 불요)
 
 ```bash
-kq-flow                          # ~/Documents/kr-quant-reports/latest 를 연다
+kq-flow                          # <저장소>/reports/latest 를 연다
 kq-flow --dir <리포트 폴더>       # 특정 날짜의 리포트
 kq-ledger                        # 자금 원장 (§4)
 kq-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉트용
@@ -133,7 +134,7 @@ kq-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉
 
 ```bash
 # 보내는 쪽 — 폴더째 압축 (2026-09-01 기준 약 1.9 MB)
-tar czf kr-quant-2026-09-01.tar.gz -C ~/Documents/kr-quant-reports 2026-09-01
+tar czf kr-quant-2026-09-01.tar.gz -C <저장소>/reports 2026-09-01
 
 # 받는 쪽 — 풀고 --dir 로 연다. 설치는 clone + uv pip install -e . 까지만 하면 된다
 tar xzf kr-quant-2026-09-01.tar.gz -C ~/reports
@@ -156,7 +157,7 @@ kq-ledger --dir ~/reports/2026-09-01
 받는 쪽을 `latest` 손버릇에 맞추려면 심볼릭 링크를 하나 걸거나 환경변수를 쓴다.
 
 ```bash
-ln -sfn ~/reports/2026-09-01 ~/Documents/kr-quant-reports/latest   # 이제 kq-flow 만 쳐도 된다
+ln -sfn ~/reports/2026-09-01 <저장소>/reports/latest                # 이제 kq-flow 만 쳐도 된다
 export KR_QUANT_REPORTS=~/reports                                   # 만드는 쪽의 출력 위치도 이것으로 바꾼다
 ```
 

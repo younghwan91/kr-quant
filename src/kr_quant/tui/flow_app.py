@@ -10,7 +10,7 @@ DB 에 접속하지 않으므로 즉시 뜨고, 화면과 표가 **같은 숫자
 pty 검사만으로는 "통과했는데 아무것도 안 한" 검사가 반복해서 나왔다 — 키 하나가
 무엇을 했는지는 상태를 직접 보고 판정하는 게 정직하다.
 
-Run:  kq-flow                       # ~/Documents/kr-quant-reports/latest
+Run:  kq-flow                       # <repo>/reports/latest
       kq-flow --dir <리포트 폴더>
 """
 
@@ -23,6 +23,7 @@ import locale
 import os
 import re
 from collections import namedtuple
+from pathlib import Path
 
 from kr_quant.tui.flow_view import (
     HELP_FOOT_TIERS, NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS,
@@ -32,7 +33,12 @@ from kr_quant.tui.flow_view import (
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for,
     view_width)
 
-DEFAULT_DIR = "~/Documents/kr-quant-reports/latest"
+# `scripts/daily_report.sh` 가 `<repo>/reports/<기준일>` 에 쓰고 `latest` 를 그리로
+# 심볼릭링크한다(생성물이지만 접근 편의상 저장소 **안**, `.gitignore` 로 git 추적
+# 제외). 이 파일은 `src/kr_quant/tui/flow_app.py` 이므로 3단계 위가 저장소 루트다 —
+# 사용자 홈 경로를 박아두면 저장소를 옮기거나 다른 사용자가 설치했을 때 어긋난다.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DIR = str(_REPO_ROOT / "reports" / "latest")
 
 
 def load(report_dir: str) -> dict:
