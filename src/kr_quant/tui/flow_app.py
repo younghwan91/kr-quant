@@ -27,7 +27,7 @@ from pathlib import Path
 
 from kr_quant.tui.flow_view import (
     HELP_FOOT_TIERS, NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS,
-    State, cell_len as view_cell_len, color_spans,
+    State, banner_lines, cell_len as view_cell_len, color_spans,
     detail_lines, detail_title_span, footer_line, header_lines, help_lines,
     hint_desc, hint_line,
     is_section, name_sort_span, names_lines, sort_span, table_lines, tier_for,
@@ -772,6 +772,24 @@ def handle_key(st: State, k: int, page: int = 10, help_page: int = 10) -> bool:
     return True
 
 
+def _draw_banner(scr, st: State) -> None:
+    """시작 배너 — 표를 그리기 전에 뜨는 1회성 요약. 아무 키로 넘어간다.
+
+    내용은 `flow_view.banner_lines` 순수 함수가 다 정한다 — 여기는 색만
+    고른다(표 본문과 같은 규율: 첫 줄은 헤더 띠, 숫자 구간은 부호색).
+    """
+    scr.erase()
+    h, w = scr.getmaxyx()
+    w = view_width(w)
+    col = _COLORED
+    lines = banner_lines(st, w)
+    for i, line in enumerate(lines[:h]):
+        base = (curses.color_pair(C_HEAD) | curses.A_BOLD if col and i == 0
+                else (curses.color_pair(C_BODY) if col else curses.A_NORMAL))
+        _put(scr, i, line, base, col and i > 0)
+    scr.refresh()
+
+
 def _loop(scr, data: dict) -> None:
     try:
         curses.curs_set(0)
@@ -779,6 +797,13 @@ def _loop(scr, data: dict) -> None:
         pass
     _init_colors(scr)
     st = State(data)
+    _draw_banner(scr, st)
+    try:
+        k = _read_key(scr)
+    except KeyboardInterrupt:
+        return
+    if k == -1:      # 터미널이 이미 사라졌다(SSH 끊김) — 본 루프와 같은 판정
+        return
     while True:
         _draw(scr, st)
         try:

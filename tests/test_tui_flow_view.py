@@ -11,8 +11,8 @@ import pytest
 
 from kr_quant.tui.flow_view import (
     NAME_SORTS,
-    ACTORS, SORTS, WINDOWS, State, detail_lines, fmt_amt, fmt_pct,
-    header_lines, pad, table_lines,
+    ACTORS, SORTS, WINDOWS, State, banner_lines, detail_lines, fmt_amt, fmt_pct,
+    header_lines, pad, reversal_flags, table_lines,
 )
 
 
@@ -2400,3 +2400,106 @@ def test_the_selected_row_is_marked_on_every_screen_that_has_a_cursor(data):
         assert 1 <= len(diff) <= 2, f"{name}: 선택 표시가 {len(diff)}줄에 퍼졌다"
         for y in diff:
             assert a.__dict__["txt"].get(y, "").strip(), f"{name}: 빈 줄을 칠했다"
+
+
+# --- 시작 배너 ---------------------------------------------------------------
+#
+# G 통과 섹터·곱순위 상위·5일 반전은 전부 **이미 계산돼 있는 값을 옮길 뿐**이다.
+# 배너가 새 판단을 만들어내지 않는지(예: G 를 못 받은 섹터를 끼워 넣는다거나,
+# 관문 통과 종목이 없는데 무언가를 보여준다거나)를 이 절이 검사한다.
+
+def test_banner_lists_gpass_sectors_and_top_picks(data):
+    st = State(data)
+    lines = banner_lines(st, 120)
+    text = "\n".join(lines)
+    assert "건설" in text and "IT 서비스" in text          # 픽스처에서 G_pass 인 섹터
+    assert "전기/전자" not in lines[2]                       # G 를 못 받은 섹터는 목록 줄에 없다
+    assert "검증 안 된 탐색 점수" in text                    # 경고 문구가 지워지지 않는다
+
+
+def test_banner_lines_share_one_display_width(data):
+    st = State(data)
+    for line in banner_lines(st, 90):
+        assert _w(line) == 90
+
+
+def test_banner_says_none_rather_than_hiding_an_empty_list():
+    """G_pass 가 전 섹터 False 인 페이로드 — "없음" 을 말해야지 줄을 그냥 빼면 안 된다."""
+    def row():
+        return {"sector": "전기/전자", "n_all": 5, "thin": False, "G": None,
+                "G_pass": False, "inst": 10.0, "forgn": 0.0, "indiv": 0.0,
+                "etc": 0.0, "cap": 1000.0}
+    data = {"asof": "2026-08-28", "finalized": True,
+            "blocks": {f"{w}|전체": {"rows": [row()]} for w in ("5", "20", "60", "120")},
+            "combined": {"전체": {"windows": [], "rows": []}}, "names": {}}
+    st = State(data)
+    text = "\n".join(banner_lines(st, 80))
+    assert "섹터 없음" in text
+    assert "없음(양쪽 관문을 다 통과한 종목이 없다)" in text
+
+
+def test_reversal_flags_catches_institutional_sign_flip():
+    """G 는 20일 누적으로 통과했는데 5일 창은 기관이 순매도로 돌아선 경우."""
+    def row(inst):
+        return {"sector": "건설", "n_all": 56, "thin": False, "G": 0.8, "G_pass": True,
+                "inst": inst, "forgn": 0.0, "indiv": 0.0, "etc": 0.0, "cap": 100000.0,
+                "U": 10.0}
+    data = {"asof": "2026-09-04", "finalized": True,
+            "blocks": {"5|전체": {"rows": [dict(row(-500.0), G_pass=False, G=None)]},
+                       "20|전체": {"rows": [row(3000.0)]},
+                       "60|전체": {"rows": [row(3000.0)]},
+                       "120|전체": {"rows": [row(3000.0)]}},
+            "combined": {"전체": {"windows": [], "rows": []}}, "names": {}}
+    st = State(data)   # 기본 창은 20일
+    assert reversal_flags(st) == [("건설", 3000.0, -500.0)]
+
+
+def test_reversal_flags_ignores_sectors_that_never_passed_the_gate():
+    def row(inst, pass_):
+        return {"sector": "화학", "n_all": 30, "thin": False,
+                "G": 0.5 if pass_ else None, "G_pass": pass_,
+                "inst": inst, "forgn": 0.0, "indiv": 0.0, "etc": 0.0, "cap": 100000.0,
+                "U": 10.0}
+    data = {"asof": "2026-09-04", "finalized": True,
+            "blocks": {"5|전체": {"rows": [row(-500.0, False)]},
+                       "20|전체": {"rows": [row(3000.0, False)]},
+                       "60|전체": {"rows": [row(3000.0, False)]},
+                       "120|전체": {"rows": [row(3000.0, False)]}},
+            "combined": {"전체": {"windows": [], "rows": []}}, "names": {}}
+    assert reversal_flags(State(data)) == []
+
+
+def test_reversal_flags_is_empty_at_the_5day_window_itself():
+    data = {"asof": "x", "blocks": {"5|전체": {"rows": []}},
+            "combined": {"전체": {"windows": [], "rows": []}}, "names": {}}
+    st = State(data)
+    st.wi = WINDOWS.index("5")
+    assert reversal_flags(st) == []
+
+
+def test_flow_app_draws_the_banner_before_the_table():
+    from kr_quant.tui import flow_app
+
+    class Scr:
+        def __init__(self, h, w):
+            self.h, self.w, self.txt = h, w, {}
+
+        def erase(self): pass
+
+        def getmaxyx(self): return (self.h, self.w)
+
+        def addstr(self, y, x, s, attr=0):
+            self.txt[y] = s
+
+        def chgat(self, y, x, n, attr): pass
+
+        def refresh(self): pass
+
+    flow_app._COLORED = flow_app._RICH = False
+    empty = {"asof": "2026-09-04", "finalized": True,
+             "blocks": {f"{w}|전체": {"rows": []} for w in ("5", "20", "60", "120")},
+             "combined": {"전체": {"windows": [], "rows": []}}, "names": {}}
+    st = flow_app.State(empty)
+    scr = Scr(24, 100)
+    flow_app._draw_banner(scr, st)
+    assert any("오늘의 요약" in t for t in scr.txt.values())

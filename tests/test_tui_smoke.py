@@ -110,6 +110,41 @@ def test_app_starts_and_quits_in_a_pty():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
+def test_startup_banner_shows_first_and_any_key_moves_to_the_table():
+    """시작 배너 — 표를 그리기 전에 뜨고, 아무 키로도 넘어간다.
+
+    표 렌더 경로만 지나는 다른 스모크들과 달리 여기는 **첫 화면**이 배너인지를
+    확인한다. `_run_tui` 처럼 키를 한 번에 다 흘리면 배너가 첫 키에 먹혀
+    확인이 안 되므로, 여기만 두 단계로 나눠 보낸다.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "numbers.html"), "w", encoding="utf-8") as f:
+            f.write("<script>\nconst D = " + json.dumps(MINIMAL, ensure_ascii=False)
+                    + ";\n</script>")
+        primary, proc = _spawn(d, "flow_app", "24", "100")
+        screen: list[str] = []
+        t = threading.Thread(target=_drain(screen), args=(primary,), daemon=True)
+        t.start()
+        try:
+            time.sleep(0.4)                              # 배너만 그려진 상태를 잡는다
+            os.write(primary, b" ")                       # 아무 키로 넘긴다
+            time.sleep(0.4)
+            os.write(primary, b"q")
+            _out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            os.close(primary)
+            t.join(timeout=2)
+            pytest.fail("TUI 가 종료하지 않았다")
+        os.close(primary)
+        t.join(timeout=2)
+        assert proc.returncode == 0, err.decode("utf-8", "replace")[-1500:]
+        assert "오늘의 요약" in screen[0], "시작 배너가 안 떴다"
+        assert "전기/전자" in screen[0], "배너 다음에 표로 안 넘어갔다"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pty 는 POSIX 전용")
 def test_app_survives_a_long_key_sequence():
     """회귀 — 출력이 pty 버퍼를 넘겨도 살아남는가.
 
@@ -238,6 +273,8 @@ def test_resize_does_not_silently_close_the_help_screen():
         t = threading.Thread(target=_drain(screen), args=(primary,), daemon=True)
         t.start()
         try:
+            os.write(primary, b" ")                      # 시작 배너 넘기기
+            time.sleep(0.2)
             os.write(primary, b"?")                      # 도움말 열기
             time.sleep(0.4)
             fcntl.ioctl(primary, termios.TIOCSWINSZ,     # 창 크기 변경

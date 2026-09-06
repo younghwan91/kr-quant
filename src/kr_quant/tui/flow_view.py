@@ -758,6 +758,80 @@ class State:
             cut_done = cut_done or t["cut"]
 
 
+def reversal_flags(st: State) -> list[tuple[str, float, float]]:
+    """G 통과 섹터 중 5일 창에서 순매수 부호가 뒤집힌 것 — (섹터, 현재 창 값, 5일 값).
+
+    G 는 **현재 창**(보통 20일) 누적만으로 통과 여부가 정해진다. 60일 누적
+    축적이 최근 며칠 새 이탈로 바뀌는 경계에 있어도 통과는 그대로 유지되므로
+    (실측 2026-09-04 건설: 20일 기관 +3,793억인데 5일은 −564억), "통과했다"만
+    보고 방향이 막 바뀐 줄 모르는 일이 생긴다. 시작 배너가 그 반전을 따로 짚는다.
+
+    5일 창 자신은 검사하지 않는다 — 자기 자신과 비교할 수 없다. 종합 화면도
+    뺀다 — 페이로드 순서일 뿐 "현재 창 누적" 이라는 전제가 없다.
+    """
+    if st.window in ("5", "종합"):
+        return []
+    gpass = {r["sector"]: r for r in st.rows() if r.get("G_pass")}
+    if not gpass:
+        return []
+    short = State(st.d)
+    short.wi, short.mi, short.ai = WINDOWS.index("5"), st.mi, st.ai
+    srows = {r["sector"]: r for r in short.rows()}
+    out = []
+    for sec, r in gpass.items():
+        s = srows.get(sec)
+        cur, five = r.get("flow"), (s or {}).get("flow")
+        if cur is None or five is None:
+            continue
+        if cur > 0 and five < 0:
+            out.append((sec, cur, five))
+    return out
+
+
+def banner_lines(st: State, width: int) -> list[str]:
+    """시작 배너 — 표를 그리기 전에 아무 키로 넘길 수 있는 1회성 요약.
+
+    셋 다 **이미 계산돼 있는 값을 그대로 옮길 뿐**이다 — 새 판단을 여기서
+    내리지 않는다. G 도 곱순위(선정×선정)도 화면이 이미 "검증 안 된 탐색
+    점수"라 적어 두고 있고(``SORTS`` 주석·도움말 '선정' 항목), 이 배너는 그
+    경고를 지우지 않고 그대로 옮긴다 — 자동매수 신호가 아니라 표를 열기 전에
+    먼저 보는 사실 요약이다.
+    """
+    d = st.d
+    chip = "확정" if d.get("finalized") else "장중·미확정"
+    lines = [pad(f" 오늘의 요약 · {d.get('asof', '')} {chip} — 아무 키나 눌러 표로", width),
+             pad("", width)]
+
+    rows = st.rows()
+    gpass = sorted((r for r in rows if r.get("G_pass")), key=lambda r: -(r["U"] or 0))
+    if gpass:
+        names = "·".join(r["sector"] for r in gpass)
+        lines.append(pad(f" G 통과 {st.window}일·{st.market} {len(gpass)}개 — {names}", width))
+    else:
+        lines.append(pad(f" G 통과 {st.window}일·{st.market} 섹터 없음", width))
+    lines.append(pad(" (G 는 검증 안 된 탐색 점수 — ? 도움말의 '선정' 항목 참고)", width))
+    lines.append(pad("", width))
+
+    picks = st.all_picks()[:5]
+    lines.append(pad(" 곱순위(섹터선정×종목선정) 상위:", width))
+    if picks:
+        for i, p in enumerate(picks, 1):
+            lines.append(pad(f"   {i} {p.get('name', '—')}({p.get('sector', '—')})"
+                              f"  곱 {p.get('both', 0):.2f}  순매수 {fmt_amt(p.get('flow'))}억",
+                              width))
+    else:
+        lines.append(pad("   없음(양쪽 관문을 다 통과한 종목이 없다)", width))
+    lines.append(pad("", width))
+
+    flags = reversal_flags(st)
+    if flags:
+        lines.append(pad(" ⚠ 5일 창에서 기관 순매수가 반대로 돌아선 G 통과 섹터:", width))
+        for sec, cur, five in flags:
+            lines.append(pad(f"   {sec}  {st.window}일 {fmt_amt(cur)}억 → 5일 {fmt_amt(five)}억",
+                              width))
+    return lines
+
+
 def header_lines(st: State, width: int) -> list[str]:
     d = st.d
     chip = "확정" if d.get("finalized") else "장중·미확정"
