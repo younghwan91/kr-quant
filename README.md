@@ -510,6 +510,37 @@ Deflated Sharpe(시행 원장 자동 집계) · purge/embargo · 유니버스 �
 
 ## 9. 저장소 구조와 개발
 
+이 저장소는 DB를 쓰지 않고 읽기만 한다. 실제 데이터 흐름은 다음과 같다.
+
+```mermaid
+flowchart TD
+    AF["quant-airflow (외부 저장소)\nDART·키움·KRX·네이버 수집"] -->|적재| DB[("PostgreSQL /\nTimescaleDB")]
+
+    DB -->|"SELECT 전용"| ST["storage.py\n유일한 DB 접근 정문"]
+
+    ST --> CRON["daily_report.sh (cron)"]
+    CRON --> SF["sector_flow.py\n--days 260 --json"]
+    SF --> PAYLOAD["payload.json"]
+    PAYLOAD --> SN["sector_numbers.py\n--payload"]
+    PAYLOAD -->|"--from-json"| VW["viewer.html"]
+    SN --> NH["numbers.html"]
+    PAYLOAD --> VR["verify_report.py\n--db-check"]
+    NH --> VR
+
+    NH --> REP[("reports/&lt;기준일&gt;/\npayload·numbers·viewer\n+ latest 심볼릭 링크")]
+    VW --> REP
+    VR --> REP
+
+    REP --> FLOW["kq-flow\n(tui/flow_app·flow_view)"]
+    REP --> LEDGER["kq-ledger\n(tui/ledger_app·ledger_view)"]
+
+    ST --> ALPHA["research/ +\nengine·validation·diagnostics·features"]
+    ALPHA --> PEAD["kq-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
+```
+
+`kq-flow`·`kq-ledger`는 리포트 JSON/HTML만 읽어 DB에 접속하지 않고, `kq-pead`만 `storage.py`를
+거쳐 DB를 읽기 전용으로 사용한다.
+
 ```
 src/kr_quant/
 ├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
