@@ -48,6 +48,88 @@ WINDOWS = ("5", "20", "60", "120", "종합")
 # 됐고, 그걸 막으려 유동성 하한을 넣었더니 작은 섹터가 통째로 비었다.)
 MARKET_ORDER = ("거래소", "코스닥")
 
+#: 중첩 누적창을 **겹치지 않는 구간**으로 자르는 표 — (라벨, 넓은창, 좁은창).
+#:
+#: 5⊂20⊂60⊂120 은 끝 날짜가 같고 시작만 다른 누적이다(리포트의 `from`/`to` 가
+#: 그렇게 찍힌다). 네 창을 그대로 나란히 놓으면 **최근 5일치가 네 줄에 네 번**
+#: 세어져, 네 숫자가 사실상 같은 것을 말한다. 빼면 겹치지 않는 기간이 된다.
+#:
+#: 이건 취향이 아니라 계량의 표준 처방이다 — 중첩 관측(overlapping observations)
+#: 은 관측 수가 더 많은데도 비중첩보다 편향이 크고, 중첩 보정은 t 통계량을 크게
+#: 부풀린다(Boudoukh·Richardson·Whitelaw, *The Myth of Long-Horizon
+#: Predictability*, RFS 2008; Valkanov, JFE 2003). docs/GUARDRAILS.md §3 참고.
+#:
+#: 마지막 칸(최근 5일)은 **따로 남긴다**. 수익률 쪽에서는 단기 반전이 표준 사실이라
+#: 모멘텀이 최근 한 달을 건너뛰지만(Jegadeesh 1990; Jegadeesh & Titman 1993),
+#: 그건 수익률 이야기지 **수급 이야기가 아니다** — 기관 수요는 오히려 지속된다는
+#: 쪽이 문헌이다(Sias, *Institutional Herding*, RFS 2004). 그래서 이 화면은
+#: 최근 구간을 **분리해서 보여주기만 하고 좋다/나쁘다 부호를 붙이지 않는다.**
+#: 눌림목이냐 추세전환이냐는 가격 구조를 봐야 갈리는데, 이 리포트에는 구간
+#: 수익률 네 개뿐이라 그 판정을 할 자료가 없다.
+TREND_SEGS = (("120-60", "120", "60"), ("60-20", "60", "20"),
+              ("20-5", "20", "5"), ("5", "5", None))
+
+#: 구간 사이 화살표. **ASCII 만 쓴다** — `→` 는 East Asian Width 가 'A' 라
+#: 한글 터미널에서 2칸으로 그려져 그 줄만 밀린다(이 파일 맨 위 주석 참고).
+TREND_ARROW = "->"
+
+#: 추이에서 보는 주체 — (페이로드 키, 화면 이름). **투신·연기금만** 본다.
+#: 기관 총액은 금투(증권사 자기매매 — 헤지·차익이 섞여 방향성이 약하다)를 안고
+#: 있어 "누가 샀나" 를 흐린다. 외국인·개인은 여기 안 넣는다 — 종목을 고르는 데
+#: 쓰는 자금 성격은 이 둘이다.
+TREND_ACTORS = (("invtrt", "투신"), ("penfnd_etc", "연기금"))
+
+
+def segment_flows(win: dict, key: str) -> list[tuple[str, float | None]]:
+    """중첩 누적창(`win`)을 겹치지 않는 구간으로 차분한다. 오래된 → 최근 순.
+
+    반환은 `[(라벨, 값), …]`. **결측은 0 이 아니라 결측으로 번진다** — 신규상장·
+    거래정지 종목은 긴 창이 비어 있는데, 0 으로 메우면 화면이 "그동안 아무도 안
+    샀다" 로 읽힌다. 사실은 "그 기간이 없다" 다.
+    """
+    win = win or {}
+    out: list[tuple[str, float | None]] = []
+    for label, wide, narrow in TREND_SEGS:
+        w = (win.get(wide) or {}).get(key)
+        if w is None:
+            out.append((label, None))
+            continue
+        if narrow is None:
+            out.append((label, w))
+            continue
+        n = (win.get(narrow) or {}).get(key)
+        out.append((label, None if n is None else w - n))
+    return out
+
+
+def sector_actor_win(d: dict, sector: str, markets, key: str) -> dict:
+    """섹터의 창별 `key` 합계 — 섹터 row 에 투신·연기금이 **없어서** 종목에서 더한다.
+
+    합산이 정당한지는 실측으로 확인했다(2026-09-04 전체 20일): 종목 합계가 섹터
+    `inst` 와 0.1억 이내로 일치한다 — `names` 가 전수라서다. 다만 종목 **수**는
+    `n_all` 과 몇 개 어긋나므로(유통 164 vs 166) 이 함수는 금액만 돌려준다.
+    """
+    mkts = set(markets or ())
+    out = {w: 0.0 for w in ("5", "20", "60", "120")}
+    for nm in (d.get("names") or {}).values():
+        if nm.get("sector") != sector or nm.get("market") not in mkts:
+            continue
+        for w in out:
+            v = ((nm.get("win") or {}).get(w) or {}).get(key)
+            if v is not None:
+                out[w] += v
+    return out
+
+
+def trend_cell(segs: list[tuple[str, float | None]], names: tuple[str, ...]) -> str:
+    """구간 목록에서 **이름이 지정된 구간들만** 화살표로 잇는다 — 배너용 압축 표기.
+
+    부호만 남기지 않고 **금액을 남긴다.** 보고 싶은 양이 수요의 크기라서다
+    (Sias 2004 의 herding 측정치는 연속값이지 부호가 아니다).
+    """
+    pick = dict(segs)
+    return TREND_ARROW.join(fmt_amt(pick.get(n)) for n in names)
+
 #: k·b 가 기관 유입에 회귀해 나온 값들. 다른 주체로는 재계산할 수 없다.
 INST_ONLY = ("exp", "x", "U", "P", "xdot", "xddot", "G", "G_pass")
 
@@ -614,6 +696,39 @@ class State:
         c = (self.d.get("combined") or {}).get(self.market) or {}
         return [str(w) for w in (c.get("windows") or [])]
 
+    def trusted_recent(self) -> dict:
+        """섹터 → **최근 5일 투신+연금 순매수[억]**. 섹터 row 에 없어서 종목에서 더한다.
+
+        표의 `임펄스` 는 현재 창(보통 20일) 누적이라 "아직도 들어오는가" 를 말하지
+        않는다. 곱순위가 G(섹터)×선정(종목) 이므로 섹터 다리가 살아 있는지는 종목
+        고르기에 그대로 걸린다 — 그래서 섹터 표에 둔다.
+
+        **5일은 최단창이라 차분이 필요 없다**(`TREND_SEGS` 의 마지막 칸이 곧 5일
+        창 자체다). 여기서 좋다/나쁘다 부호는 안 붙인다 — 최근 유출이 눌림목인지
+        추세전환인지는 가격 구조를 봐야 갈리는데 이 리포트에는 구간 수익률 넷뿐이다.
+
+        ⚠️ **캐시한다.** 27개 섹터를 각각 훑으면 2,600여 종목을 27번 보게 된다.
+        `names` 를 **한 번만** 지나며 전 섹터를 동시에 채운다. 캐시 키에는 값을
+        바꾸는 상태가 전부 들어가야 한다 — `all_picks` 가 `rev` 를 빠뜨려 한 번
+        밟은 자리다. 여기서는 시장(`mi`) 뿐이다(창·주체·정렬은 이 값을 안 바꾼다).
+        """
+        if getattr(self, "_trust_ck", None) == self.mi:
+            return self._trust_v
+        mkts = set([self.market] if self.market != "전체" else self.markets[1:])
+        out: dict = {}
+        for nm in (self.d.get("names") or {}).values():
+            if nm.get("market") not in mkts:
+                continue
+            w = (nm.get("win") or {}).get("5") or {}
+            tot = 0.0
+            for key, _ in TREND_ACTORS:
+                v = w.get(key)
+                if v is not None:
+                    tot += v
+            out[nm.get("sector")] = out.get(nm.get("sector"), 0.0) + tot
+        self._trust_ck, self._trust_v = self.mi, out
+        return out
+
     def all_picks(self) -> list[dict]:
         """**전 섹터의 종목을 한 화면에** — `섹터선정 × 종목선정` 내림차순.
 
@@ -788,6 +903,33 @@ def reversal_flags(st: State) -> list[tuple[str, float, float]]:
     return out
 
 
+def _first_fitting(width: int, cands: list[str]) -> str:
+    """폭에 들어가는 **첫 후보**. 다 넘치면 마지막(가장 짧은 것)을 준다.
+
+    폭 임계값을 상수로 박는 대신 재 본다 — 이 파일은 같은 임계값(>=100·>=132·
+    >=150)을 두 군데 적었다가 분기 모양까지 갈라진 적이 있다(`Col` 주석).
+    """
+    for c in cands:
+        if cell_len(c) <= width:
+            return c
+    return cands[-1]
+
+
+def _pick_trends(st: State, p: dict) -> list[str]:
+    """곱순위 한 줄에 붙일 투신·연기금 추이 — **긴 표기부터** 짧은 순으로.
+
+    호출부가 폭에 맞는 첫 후보를 고른다. 마지막에 빈 문자열은 넣지 않는다 —
+    호출부가 추이 없는 원본 줄을 이미 후보 끝에 두고 있다.
+    """
+    win = ((st.d.get("names") or {}).get(p.get("code")) or {}).get("win") or {}
+    segs = {k: segment_flows(win, k) for k, _ in TREND_ACTORS}
+    wide, tight = [], []
+    for key, label in TREND_ACTORS:
+        wide.append(f"  {label} {trend_cell(segs[key], ('20-5', '5'))}")
+        tight.append(f"  {label} {trend_cell(segs[key], ('5',))}")
+    return ["".join(wide), "".join(tight)]
+
+
 def banner_lines(st: State, width: int) -> list[str]:
     """시작 배너 — 표를 그리기 전에 아무 키로 넘길 수 있는 1회성 요약.
 
@@ -815,10 +957,27 @@ def banner_lines(st: State, width: int) -> list[str]:
     picks = st.all_picks()[:5]
     lines.append(pad(" 곱순위(섹터선정×종목선정) 상위:", width))
     if picks:
-        for i, p in enumerate(picks, 1):
-            lines.append(pad(f"   {i} {p.get('name', '—')}({p.get('sector', '—')})"
-                              f"  곱 {p.get('both', 0):.2f}  순매수 {fmt_amt(p.get('flow'))}억",
-                              width))
+        heads = [f"   {i} {p.get('name', '—')}({p.get('sector', '—')})"
+                 f"  곱 {p.get('both', 0):.2f}  순매수 {fmt_amt(p.get('flow'))}억"
+                 for i, p in enumerate(picks, 1)]
+        # 자금 성격의 **직전 구간 → 최근 구간**. 겹치지 않게 차분한 값이다
+        # (`TREND_SEGS`). 부호가 아니라 금액을 남긴다 — 보는 양이 수요의
+        # 크기라서다(Sias 2004).
+        #
+        # 폭 계층 상수를 또 만들지 않는다. 긴 표기부터 넣어 보고 안 맞으면 짧은
+        # 쪽으로 내려간다 — 이 파일은 같은 폭 임계값을 두 군데 적었다가 어긋난
+        # 적이 있어(`Col` 주석) 임계값을 늘리지 않는 편이 낫다.
+        #
+        # ⚠️ 형식은 **다섯 줄이 같이** 정해진다. 줄마다 따로 재면 이름이 짧은
+        # 종목만 긴 표기를 얻어, 같은 열에 다른 것이 놓인 표가 된다(실측: 폭 80
+        # 에서 1·4·5행만 최근값, 2·3행은 직전→최근이었다).
+        trends = [_pick_trends(st, p) for p in picks]
+        for variant in range(len(trends[0]) + 1):
+            cand = [h + (t[variant] if variant < len(t) else "")
+                    for h, t in zip(heads, trends)]
+            if all(cell_len(c) <= width for c in cand):
+                break
+        lines.extend(pad(c, width) for c in cand)
     else:
         lines.append(pad("   없음(양쪽 관문을 다 통과한 종목이 없다)", width))
     lines.append(pad("", width))
@@ -969,6 +1128,8 @@ _TABLE_COLS = (
     Col("포텐셜[½kx²]", 12, True,
         lambda r, st: f"{r['U']:.0f}" if r.get("U") is not None else "—"),
     Col("dW/dt[%p/일]", 12, True, _num("P", 3)),
+    Col("투신+연금[억]", 13, True,
+        lambda r, st: fmt_amt(st.trusted_recent().get(r.get("sector")))),
     Col("종목[수]", 8, True, lambda r, st: str(r.get("n_all", "—"))),
 )
 
@@ -1185,10 +1346,49 @@ def detail_title_span(st: State, width: int) -> tuple[int, int] | None:
     return (start, w) if w > 0 else None
 
 
+#: 구간 열 폭. 라벨(`120-60`)과 금액(`-1,662`) 중 긴 쪽이 기준이다.
+TREND_COL_W = 9
+
+
+def _stock_detail_lines(st: State, width: int) -> list[str]:
+    """종목 목록에서 고른 **그 종목**의 자금 성격 추이 — 겹치지 않는 구간별.
+
+    드릴다운에는 예전엔 패널이 아예 없었다(`layout` 이 `detail=0` 으로 죽였다).
+    그런데 종목을 고르는 자리에서 정작 묻는 것이 "이 돈이 언제 들어왔나" 다 —
+    표는 **현재 창 하나**만 보여주므로 창을 네 번 바꿔야 답이 나왔다.
+
+    표에 안 싣고 패널에 두는 이유: 구간 4개 × 주체 2 = 8칸이라 열로 만들면
+    종목 표가 통째로 밀린다. 패널은 **고른 한 종목**만 그리므로 그 값이 든다.
+    """
+    names = st.names()
+    if not names:
+        return [pad(f"{DETAIL_INDENT}(종목 없음)", width)]
+    t = names[min(st.drow, len(names) - 1)]
+    win = ((st.d.get("names") or {}).get(t.get("code")) or {}).get("win") or {}
+
+    label_w = max(cell_len(lab) for _, lab in TREND_ACTORS) + 2
+    def _row(label: str, cells: list[str]) -> str:
+        out = DETAIL_INDENT + pad(label, label_w)
+        for c in cells:
+            out += pad(c, TREND_COL_W, right=True)
+        return out
+
+    head = _row("", [lab for lab, _, _ in TREND_SEGS])
+    body = [_row(lab, [fmt_amt(v) for _, v in segment_flows(win, key)])
+            for key, lab in TREND_ACTORS]
+    # 제목 줄은 **중첩을 뺀 값**임을 적는다. 안 적으면 `120-60` 이 "120일 값"
+    # 으로 읽히고, 그러면 최근 5일치가 네 칸에 네 번 세어진 것처럼 보인다.
+    title = (f"{DETAIL_INDENT}{t.get('name', '—')}"
+             f" · 구간별 순매수[억] — 겹치지 않게 차분(오래된→최근)")
+    return [pad(title, width), pad(head, width)] + [pad(b, width) for b in body]
+
+
 def detail_lines(st: State, width: int) -> list[str]:
     rows = st.rows()
     if not rows:
         return [pad(" (데이터 없음)", width)]
+    if st.drill:
+        return _stock_detail_lines(st, width)
     r = rows[min(st.row, len(rows) - 1)]
     top = r.get("top") or {}
     def side(key, label):
@@ -1414,6 +1614,11 @@ HELP = [
     ("", ""),
     ("", "── 섹터 표 ──"),
     ("섹터", "벤더 분류(stocks.sector) 27개. KRX 업종 분류와 다르다."),
+    ("투신+연금[억]", "그 섹터의 **최근 5일** 투신+연기금 순매수 합. 표의 `임펄스` 는"),
+    ("", "        현재 구간 누적이라 \"아직도 들어오는가\" 를 말하지 않는다 — 이 열이"),
+    ("", "        그 답이다. 5일은 최단창이라 다른 구간과 겹치지 않는다."),
+    ("", "        ⚠️ 최근 유출이 눌림목인지 추세전환인지는 **여기서 안 갈린다**"),
+    ("", "        (그건 가격 구조를 봐야 하는데 이 리포트에는 구간 수익률뿐이다)."),
     ("종목[수]", "그 (시장,섹터)에서 **이 구간에 거래된** 종목 수 — Enter 로 여는 목록의"),
     ("", "        길이와 정확히 같다. '상장 종목 수' 가 아니다: 벤더 마스터에는"),
     ("", "        수급 보고가 두 달 전에 끊긴 이름이 남아 있어서, 그걸 세면 표가"),
@@ -1609,6 +1814,7 @@ HINT_DESC = {
     "선정": "관문 통과분의 순위 평균 [0~1]",
     "포텐셜[½kx²]": "½·k·x². k≤0 인 블록은 비운다",
     "dW/dt[%p/일]": "전·후반 W=가속×수익률 의 변화 [%p/일]",
+    "투신+연금[억]": "그 섹터 최근 5일 투신+연기금 합 — 지금도 들어오나",
     "종목[수]": "이 구간에 거래된 종목 수. ~ 는 10개 미만",
     # 종목 목록(드릴다운)
     "종목": "종목명 가나다순",

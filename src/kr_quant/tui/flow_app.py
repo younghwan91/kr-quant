@@ -268,8 +268,15 @@ def layout(h: int, drill: bool = False) -> Layout:
     # 한 줄이 더 필요해진 것은 **4주체 줄** 때문이다 — "기관이 팔았다" 다음에
     # 오는 질문이 "그럼 누가 받았지" 라, 그 답이 화면을 바꾸지 않고 여기 있다.
     # 자리가 모자라면 뒤에서부터 잘린다.
-    if drill or h < DETAIL_MIN_H:
+    # 드릴 모드에도 패널을 준다. 예전엔 여기서 통째로 죽였는데(`drill or …`),
+    # 종목을 고르는 자리에서 묻는 것이 "이 돈이 언제 들어왔나" 라 정작 그 답을
+    # 볼 데가 없었다 — 표는 **현재 창 하나**만 보여준다. 종목 패널은 제목·구간
+    # 머리·주체 2줄로 **정확히 4줄**이라 줄여 쓰지 않는다(3줄이면 연기금이
+    # 통째로 사라져 "투신만 봤다" 가 된다).
+    if h < DETAIL_MIN_H:
         detail, want_gap = 0, 0
+    elif drill:
+        detail, want_gap = 4, DETAIL_GAP
     else:
         detail = 4 if h >= DETAIL_MIN_H + 1 else 3
         want_gap = DETAIL_GAP

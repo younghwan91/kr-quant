@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 import pytest
 
 from kr_quant.tui.flow_view import (
@@ -16,6 +18,7 @@ from kr_quant.tui.flow_view import (
 )
 
 
+from kr_quant.tui.flow_view import TREND_ACTORS  # noqa: E402
 from kr_quant.tui.flow_view import (  # noqa: E402  대체안이 쓰는 이름
     SORT_COL, _fit, cell_width, sort_span, table_cols,
 )
@@ -280,7 +283,7 @@ def test_help_covers_every_rendered_column(data):
     missing = set()
     for wi in range(len(WINDOWS)):
         st.wi = wi
-        for width in (80, 120, 160):
+        for width in (80, 120, 160, 200):
             lines, _thin, _nh = table_lines(st, width, 20)
             for h in lines[0].split():
                 if not h or h in documented:
@@ -2503,3 +2506,212 @@ def test_flow_app_draws_the_banner_before_the_table():
     scr = Scr(24, 100)
     flow_app._draw_banner(scr, st)
     assert any("오늘의 요약" in t for t in scr.txt.values())
+
+
+# ── 주체 추이(투신·연기금) — 중첩 누적창을 겹치지 않는 구간으로 ────────────────
+#
+# 5⊂20⊂60⊂120 은 **끝 날짜가 같고 시작만 다른** 중첩 누적이다. 그대로 나란히
+# 놓으면 최근 5일치가 네 줄에 네 번 세어진다. 아래 검사들이 그 부류를 막는다.
+
+
+def test_segment_flows_sums_back_to_the_longest_window(data):
+    """차분한 구간의 합은 **최장창 누적과 같아야** 한다.
+
+    이 항등식이 깨지면 구간을 잘못 잘랐다는 뜻이다 — 돈이 새거나 두 번 세어진다.
+    """
+    from kr_quant.tui.flow_view import segment_flows
+
+    win = data["names"]["000720"]["win"]        # 현대건설
+    segs = segment_flows(win, "invtrt")
+    assert [lab for lab, _ in segs] == ["120-60", "60-20", "20-5", "5"]
+    total = sum(v for _, v in segs)
+    assert total == pytest.approx(win["120"]["invtrt"])
+
+
+def test_segment_flows_is_ordered_oldest_to_newest(data):
+    """왼쪽이 오래된 구간, 오른쪽이 최근 — 화면이 그 순서로 읽힌다."""
+    from kr_quant.tui.flow_view import TREND_SEGS, segment_flows
+
+    win = data["names"]["000720"]["win"]
+    labels = [lab for lab, _ in segment_flows(win, "invtrt")]
+    assert labels == [lab for lab, _, _ in TREND_SEGS]
+    assert labels[-1] == "5", "마지막 칸은 최근 5일이어야 한다"
+
+
+def test_segment_flows_keeps_missing_as_missing(data):
+    """창이 결측이면 그 구간도 **결측**이다 — 0 으로 채우면 '안 샀다'는 거짓말이 된다.
+
+    신규상장·거래정지 종목은 긴 창이 비어 있다. 0 으로 메우면 화면이 "120일 동안
+    아무도 안 샀다" 로 읽히는데, 사실은 "그 기간이 없다" 다.
+    """
+    from kr_quant.tui.flow_view import segment_flows
+
+    win = {w: dict(v) for w, v in data["names"]["000720"]["win"].items()}
+    win["60"]["invtrt"] = None
+    segs = dict(segment_flows(win, "invtrt"))
+    assert segs["120-60"] is None, "넓은쪽이 결측이면 구간도 결측"
+    assert segs["60-20"] is None, "좁은쪽이 결측이면 구간도 결측"
+    assert segs["20-5"] is not None, "결측은 **그 구간에만** 번진다"
+    assert segs["5"] is not None
+
+    del win["120"]
+    segs = dict(segment_flows(win, "invtrt"))
+    assert segs["120-60"] is None, "창 자체가 없어도 터지지 않고 결측"
+
+
+def test_sector_actor_win_sums_only_that_sector_and_market(data):
+    """섹터 합산은 그 섹터·그 시장의 종목만 더한다.
+
+    섹터 row 에는 투신·연기금이 없어 `names` 에서 합산해야 한다. 필터가 새면
+    다른 섹터의 돈이 섞여 들어오는데, 화면에는 그냥 큰 숫자로 보인다.
+    """
+    from kr_quant.tui.flow_view import sector_actor_win
+
+    got = sector_actor_win(data, "건설", ["거래소"], "invtrt")
+    for w, s in (("5", 0.4), ("20", 1.0), ("60", 2.5), ("120", 3.0)):
+        # 현대건설(inst 40) + GS건설(inst −20) → 합 20, invtrt 는 그 60%
+        assert got[w] == pytest.approx(20.0 * s * 0.6), f"{w}일"
+
+    # 시장이 안 맞으면 한 종목도 안 들어온다.
+    assert sector_actor_win(data, "건설", ["코스닥"], "invtrt")["20"] == pytest.approx(0.0)
+
+
+def test_banner_shows_prior_and_recent_segment_for_both_actors(data):
+    """배너는 곱순위 각 줄에 **투신·연기금의 직전→최근 구간**을 붙인다.
+
+    Sias(2004) 가 보는 양은 부호가 아니라 수요의 **크기**다 — 부호만 남기면
+    문헌이 쓰는 정보를 버린다. 그래서 숫자를 남긴다.
+    """
+    lines = banner_lines(State(data), 200)
+    body = "\n".join(lines)
+    assert "투신" in body and "연기금" in body
+    # 곱순위 줄이 있으면 그 아래(또는 옆)에 두 주체가 같이 나온다.
+    picks = [ln for ln in lines if "곱 " in ln]
+    if picks:
+        joined = "\n".join(lines)
+        assert joined.count("투신") >= 1
+
+
+def test_banner_lines_are_exact_width_with_trend(data):
+    """추이를 붙여도 배너의 모든 줄이 폭에 정확히 맞는가 — 밀림 방지."""
+    for width in (80, 100, 120, 160):
+        for ln in banner_lines(State(data), width):
+            assert _w(ln) == width, f"폭 {width}: {ln!r} → {_w(ln)}"
+
+
+def test_trend_arrow_is_one_display_cell():
+    """추이 표기에 쓰는 글자는 **어느 로케일에서도 1칸**이어야 한다.
+
+    `→` `▲` `·` 는 East Asian Width 가 'A'(Ambiguous) 라 한글 터미널이 2칸으로
+    그린다 — 그러면 그 줄만 오른쪽으로 밀린다. 이 저장소가 이미 세 번 밟았다.
+    """
+    from kr_quant.tui.flow_view import TREND_ARROW
+
+    for ch in TREND_ARROW:
+        assert unicodedata.east_asian_width(ch) in ("N", "Na"), \
+            f"{ch!r} 는 폭이 터미널마다 다르다"
+
+
+def test_banner_pick_rows_all_use_the_same_trend_form(data):
+    """곱순위 다섯 줄은 **같은 형식**이어야 한다 — 줄마다 따로 재면 안 된다.
+
+    폭을 줄마다 재면 이름이 짧은 종목만 긴 표기를 얻어, 같은 열에 다른 것이 놓인
+    표가 된다(실측 2026-09-04 폭 80: 1·4·5행은 최근값만, 2·3행은 직전→최근).
+    """
+    from kr_quant.tui.flow_view import TREND_ARROW
+
+    for width in range(60, 201):
+        picks = [ln for ln in banner_lines(State(data), width) if "곱 " in ln]
+        if len(picks) < 2:
+            continue
+        arrows = {ln.count(TREND_ARROW) for ln in picks}
+        assert len(arrows) == 1, \
+            f"폭 {width}: 줄마다 형식이 다르다 {sorted(arrows)}\n" + "\n".join(picks)
+
+
+def test_drill_detail_shows_the_selected_stock_not_the_sector(data):
+    """종목 목록에서는 상세 패널이 **그 종목**을 말해야 한다.
+
+    섹터 패널이 그대로 남아 있으면, 종목을 골라 움직여도 아래 줄이 안 바뀐다 —
+    화면이 "지금 무엇을 보고 있나" 를 거짓으로 말한다.
+    """
+    st = State(data)
+    st.row = 1                     # 건설
+    st.drill = True
+    st.drow = 0
+    first = detail_lines(st, 120)
+    assert any("현대건설" in ln for ln in first), first
+    st.drow = 1
+    second = detail_lines(st, 120)
+    assert any("GS건설" in ln for ln in second), second
+    assert first != second, "선택을 옮겨도 패널이 그대로다"
+
+
+def test_drill_detail_shows_both_actors_over_all_segments(data):
+    """패널은 투신·연기금을 **네 구간 전부** 보여준다."""
+    from kr_quant.tui.flow_view import TREND_SEGS
+
+    st = State(data)
+    st.row, st.drill, st.drow = 1, True, 0
+    body = "\n".join(detail_lines(st, 140))
+    assert "투신" in body and "연기금" in body
+    for label, _, _ in TREND_SEGS:
+        assert label in body, f"구간 {label} 이 패널에 없다"
+
+
+def test_drill_detail_is_exact_width(data):
+    st = State(data)
+    st.row, st.drill, st.drow = 1, True, 0
+    for width in (80, 120, 160):
+        for ln in detail_lines(st, width):
+            assert _w(ln) == width, f"폭 {width}: {ln!r} → {_w(ln)}"
+
+
+def test_drill_detail_survives_a_stock_with_missing_windows(data):
+    """긴 창이 없는 종목(신규상장)에서도 패널이 안 터지고 `—` 로 남는다."""
+    d = {**data, "names": {k: {**v} for k, v in data["names"].items()}}
+    d["names"]["000720"] = {**d["names"]["000720"],
+                            "win": {"5": d["names"]["000720"]["win"]["5"]}}
+    st = State(d)
+    st.row, st.drill, st.drow = 1, True, 0
+    lines = detail_lines(st, 120)
+    assert any("—" in ln for ln in lines), lines
+    for ln in lines:
+        assert _w(ln) == 120
+
+
+def test_sector_table_shows_recent_trusted_flow(data):
+    """섹터 표에 **최근 5일 투신+연금** 열이 있다.
+
+    섹터 표의 `임펄스` 는 현재 창(보통 20일) 누적이라 "아직도 들어오는가" 를
+    말하지 않는다. 곱순위가 G(섹터)×선정(종목) 이므로 섹터 다리가 아직 살아
+    있는지는 종목 고르기에 그대로 걸린다.
+    """
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    lines, _thin, _nh = table_lines(st, 200, 20)
+    assert "투신+연금[억]" in lines[0], lines[0]
+
+
+def test_sector_trusted_flow_is_summed_from_names_not_invented(data):
+    """그 열의 값은 `names` 합계와 같아야 한다 — 어림수를 지어내면 안 된다."""
+    from kr_quant.tui.flow_view import sector_actor_win
+
+    st = State(data)
+    st.wi = WINDOWS.index("20")
+    want = sum(sector_actor_win(data, "건설", st.markets[1:], k)["5"]
+               for k, _ in TREND_ACTORS)
+    assert st.trusted_recent()["건설"] == pytest.approx(want)
+
+
+def test_sector_trusted_flow_is_cached_per_market(data):
+    """시장을 바꾸면 값도 바뀐다 — 캐시가 시장을 안 보면 조용히 틀린다.
+
+    `all_picks` 가 캐시 키에 `rev` 를 빠뜨려 한 번 밟은 자리와 같은 부류다.
+    """
+    st = State(data)
+    a = dict(st.trusted_recent())
+    st.mi = st.markets.index("코스닥")
+    b = dict(st.trusted_recent())
+    assert a != b or all(v == 0 for v in b.values()), \
+        "시장을 바꿔도 같은 값이면 캐시가 시장을 안 본다"

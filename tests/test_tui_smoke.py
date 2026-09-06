@@ -661,8 +661,14 @@ def test_detail_panel_is_set_off_from_the_table_by_a_blank_line():
     """
     for h in (24, 30, 50):
         assert layout(h).gap == 1, f"h={h} 에서 표와 패널이 붙어 있다"
-    # 드릴다운에는 패널이 없다 — 띄울 것이 없으면 빈 줄도 없다.
-    assert layout(50, drill=True).gap == 0, "패널도 없는데 빈 줄만 남았다"
+    # 불변식은 "드릴에는 빈 줄이 없다" 가 아니라 **빈 줄은 패널이 있을 때만** 이다.
+    # 예전엔 드릴에 패널이 없어서 두 문장이 같은 것을 뜻했고, 그래서 이 자리에
+    # 옛 사실이 박혀 있었다 — 드릴에 종목 패널이 생기자 그 문장만 틀렸다.
+    for h in (5, 11, 24, 30, 50):
+        for drill in (False, True):
+            lay = layout(h, drill=drill)
+            assert bool(lay.gap) <= bool(lay.detail), \
+                f"h={h} drill={drill}: 패널도 없는데 빈 줄만 남았다"
 
 
 def test_the_blank_line_is_the_first_thing_given_up_when_the_screen_is_short():
@@ -914,3 +920,19 @@ def test_the_all_stocks_screen_still_listens_to_window_market_actor():
         handle_key(st, ord(key))
         assert getattr(st, attr) != before, f"'{key}' 가 전 종목 화면에서 안 듣는다"
         assert st.allv, f"'{key}' 가 화면을 닫아버렸다"
+
+
+def test_drill_mode_reserves_room_for_the_stock_panel():
+    """종목 목록에서도 상세 패널 자리가 있어야 한다.
+
+    예전엔 `layout` 이 드릴 모드에서 패널을 통째로 죽였다(`if drill or …`). 그래서
+    종목을 고르는 자리에서 정작 "이 돈이 언제 들어왔나" 를 볼 데가 없었다.
+    """
+    assert layout(24, drill=True).detail >= 3, "드릴 모드에 패널 자리가 없다"
+    assert layout(24, drill=True).rows > 0, "패널을 넣느라 표가 사라지면 안 된다"
+    # 낮은 화면에서는 표가 먼저다 — 패널은 없어도 되지만 표는 있어야 한다.
+    for h in range(5, 40):
+        lay = layout(h, drill=True)
+        assert lay.rows >= 0 and lay.detail >= 0
+        if lay.detail:
+            assert lay.rows >= 1, f"h={h}: 패널이 표를 다 먹었다"
