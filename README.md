@@ -108,6 +108,7 @@ KR_QUANT_FORCE=1 scripts/daily_report.sh     # 같은 기준일이어도 다시 
 
 ```bash
 uv run python scripts/sector_flow.py    --days 260 --json payload.json
+uv run python scripts/sector_flow.py    --from-json payload.json --html viewer.html
 uv run python scripts/sector_numbers.py --payload payload.json --html numbers.html
 uv run python scripts/verify_report.py  --dir <리포트폴더> --db-check
 ```
