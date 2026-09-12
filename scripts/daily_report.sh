@@ -9,7 +9,11 @@
 # reports/), 접근 편의를 위해 저장소 **안**(`$REPO/reports`)에 둔다.
 set -euo pipefail
 
-REPO="/home/young/Documents/git/kr-quant"
+# 레포 경로는 이 스크립트 위치에서 유도한다 — 2026-09-11 레포를
+# ~/Documents/git 에서 ~/git 으로 옮기면서 여기 하드코딩돼 있던 옛 경로가
+# 죽었다. set -euo pipefail 이라 `cd "$REPO"` 에서 즉사하는데, 이 배치는
+# 평일 18:10 크론이라 09-12(토)엔 안 돌았고 첫 실패는 월요일이 될 뻔했다.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ROOT="${KR_QUANT_REPORTS:-$REPO/reports}"
 DAYS="${KR_QUANT_REPORT_DAYS:-260}"
 UV="/home/young/.local/bin/uv"
