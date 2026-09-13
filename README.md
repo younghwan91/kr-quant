@@ -555,7 +555,7 @@ uv run python scripts/check_guardrails.py    # 경계·판정·정문·하버스
 | 한국 주식 | **[krx-news-client](https://github.com/younghwan91/krx-news-client)** | 한국 주식 뉴스·공시 수집 Python 클라이언트 라이브러리 |
 | 미국 주식 | **[portfolio-research](https://github.com/younghwan91/portfolio-research)** | 미국주식 팩터 엔진 — point-in-time·생존편향 보정 데이터 위에서 walk-forward 를 Deflated Sharpe·PBO 로 게이팅 |
 | 미국 주식 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp 의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
-| 암호화폐 | **[crypto-pair-trading](https://github.com/younghwan91/crypto-pair-trading)** | 이벤트 기반 암호화폐 페어 트레이딩 프레임워크 — 백테스트·실거래 통합 |
+| 암호화폐 | **[binance-quant-engine](https://github.com/younghwan91/binance-quant-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
 
 ## 라이선스
 
